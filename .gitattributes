@@ -1,0 +1,2 @@
+*.pt filter=lfs diff=lfs merge=lfs -text
+**/profile_trace.json filter=lfs diff=lfs merge=lfs -text
