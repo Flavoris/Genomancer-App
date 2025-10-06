@@ -6,7 +6,7 @@ A simple tool to simulate restriction enzyme cutting on linear DNA sequences.
 
 import argparse
 import sys
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 
 def load_enzyme_database() -> Dict[str, Dict[str, any]]:
@@ -116,33 +116,36 @@ def find_cut_sites(
     return cut_sites
 
 
-def calculate_fragment_lengths(
+def calculate_fragments(
     dna_sequence: str, cut_positions: List[int]
-) -> List[int]:
+) -> List[Tuple[str, int]]:
     """
-    Calculate fragment lengths for a linear DNA molecule after cutting.
+    Calculate fragments for a linear DNA molecule after cutting.
 
     Args:
         dna_sequence: The original DNA sequence
         cut_positions: List of cut positions (0-based indices)
 
     Returns:
-        List of fragment lengths
+        List of tuples containing (fragment_sequence, fragment_length)
     """
     if not cut_positions:
         # No cuts found, return the full sequence as one fragment
-        return [len(dna_sequence)]
+        return [(dna_sequence, len(dna_sequence))]
 
     # Add start and end positions for easier calculation
     positions = [0] + sorted(cut_positions) + [len(dna_sequence)]
 
-    # Calculate fragment lengths
-    fragment_lengths = []
+    # Calculate fragments
+    fragments = []
     for i in range(len(positions) - 1):
-        fragment_length = positions[i + 1] - positions[i]
-        fragment_lengths.append(fragment_length)
+        start_pos = positions[i]
+        end_pos = positions[i + 1]
+        fragment_sequence = dna_sequence[start_pos:end_pos]
+        fragment_length = end_pos - start_pos
+        fragments.append((fragment_sequence, fragment_length))
 
-    return fragment_lengths
+    return fragments
 
 
 def main():
@@ -200,21 +203,23 @@ Examples:
         if not cut_sites:
             print("No cut sites found!")
             print(f"Result: 1 fragment of {len(dna_sequence)} bp")
+            print(f"Fragment 1: {dna_sequence} ({len(dna_sequence)} bp)")
         else:
             print(f"Found {len(cut_sites)} cut site(s):")
             for i, site in enumerate(cut_sites, 1):
                 print(f"  Cut site {i}: position {site}")
             print()
 
-            # Calculate fragment lengths
-            fragment_lengths = calculate_fragment_lengths(dna_sequence, cut_sites)
+            # Calculate fragments
+            fragments = calculate_fragments(dna_sequence, cut_sites)
 
             print("Fragment analysis:")
-            print(f"  Number of fragments: {len(fragment_lengths)}")
-            for i, length in enumerate(fragment_lengths, 1):
-                print(f"  Fragment {i}: {length} bp")
+            print(f"  Number of fragments: {len(fragments)}")
+            for i, (sequence, length) in enumerate(fragments, 1):
+                print(f"  Fragment {i}: {sequence} ({length} bp)")
 
-            print(f"\nTotal length: {sum(fragment_lengths)} bp")
+            total_length = sum(length for _, length in fragments)
+            print(f"\nTotal length: {total_length} bp")
 
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
