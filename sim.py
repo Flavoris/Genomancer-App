@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Restriction Enzyme Simulator - Phase 1
+Restriction Enzyme Simulator - Phase 2
 A simple tool to simulate restriction enzyme cutting on linear DNA sequences.
+Now supports multiple enzymes for combined digest analysis.
 """
 
 import argparse
@@ -178,16 +179,138 @@ def calculate_fragments(
     return fragments
 
 
+def find_cut_positions_linear(seq: str, enzyme_name: str, db: Dict[str, Dict[str, any]]) -> List[int]:
+    """
+    Find all cut positions for a single enzyme in a linear DNA sequence.
+    
+    Args:
+        seq: DNA sequence to search
+        enzyme_name: Name of the enzyme
+        db: Enzyme database
+        
+    Returns:
+        List of cut positions (0-based indices)
+    """
+    if enzyme_name not in db:
+        return []
+    
+    enzyme_info = db[enzyme_name]
+    enzyme_sequence = enzyme_info["sequence"]
+    cut_index = enzyme_info["cut_index"]
+    
+    return find_cut_sites(seq, enzyme_sequence, cut_index)
+
+
+def merge_cut_positions(cuts_by_enzyme: Dict[str, List[int]], seq_len: int) -> List[int]:
+    """
+    Merge cut positions from multiple enzymes into a sorted, unique list.
+    
+    Args:
+        cuts_by_enzyme: Dictionary mapping enzyme names to their cut positions
+        seq_len: Length of the DNA sequence
+        
+    Returns:
+        Sorted list of unique cut positions
+    """
+    all_cuts = set()
+    
+    for enzyme_cuts in cuts_by_enzyme.values():
+        all_cuts.update(enzyme_cuts)
+    
+    # Filter out any cuts beyond sequence length and sort
+    valid_cuts = [cut for cut in all_cuts if 0 <= cut <= seq_len]
+    return sorted(valid_cuts)
+
+
+def fragments_linear(seq_len: int, cuts: List[int]) -> List[int]:
+    """
+    Calculate fragment lengths for linear DNA after cutting.
+    
+    Args:
+        seq_len: Length of the DNA sequence
+        cuts: List of cut positions (0-based indices)
+        
+    Returns:
+        List of fragment lengths
+    """
+    if not cuts:
+        return [seq_len]
+    
+    # Add start and end positions
+    positions = [0] + sorted(cuts) + [seq_len]
+    
+    # Calculate fragment lengths
+    fragment_lengths = []
+    for i in range(len(positions) - 1):
+        fragment_length = positions[i + 1] - positions[i]
+        fragment_lengths.append(fragment_length)
+    
+    return fragment_lengths
+
+
+def find_closest_enzyme_names(requested_name: str, available_names: List[str], max_distance: int = 2) -> List[str]:
+    """
+    Find enzyme names that are similar to the requested name.
+    
+    Args:
+        requested_name: The name that was requested
+        available_names: List of available enzyme names
+        max_distance: Maximum edit distance for similarity
+        
+    Returns:
+        List of similar enzyme names
+    """
+    def edit_distance(s1: str, s2: str) -> int:
+        """Calculate edit distance between two strings."""
+        m, n = len(s1), len(s2)
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        
+        for i in range(m + 1):
+            dp[i][0] = i
+        for j in range(n + 1):
+            dp[0][j] = j
+            
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                if s1[i-1] == s2[j-1]:
+                    dp[i][j] = dp[i-1][j-1]
+                else:
+                    dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
+        
+        return dp[m][n]
+    
+    similar_names = []
+    requested_lower = requested_name.lower()
+    
+    for name in available_names:
+        name_lower = name.lower()
+        distance = edit_distance(requested_lower, name_lower)
+        
+        # Check exact match (case-insensitive)
+        if name_lower == requested_lower:
+            return [name]
+        
+        # Check if it's a substring match
+        if requested_lower in name_lower or name_lower in requested_lower:
+            similar_names.append(name)
+        # Check edit distance
+        elif distance <= max_distance:
+            similar_names.append(name)
+    
+    return similar_names[:5]  # Return top 5 matches
+
+
 def main():
     """Main function to run the restriction enzyme simulator."""
     # Set up command-line argument parsing
     parser = argparse.ArgumentParser(
-        description="Restriction Enzyme Simulator - Phase 1",
+        description="Restriction Enzyme Simulator - Phase 2",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz EcoRI
-  python sim.py --seq my_dna.fasta --enz BamHI
+  python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz EcoRI BamHI
+  python sim.py --seq my_dna.fasta --enz BamHI HindIII
         """,
     )
 
@@ -195,62 +318,98 @@ Examples:
         "--seq", required=True, help="DNA sequence (string) or path to FASTA/text file"
     )
     parser.add_argument(
-        "--enz", required=True, help="Enzyme name (see available enzymes in output)"
+        "--enz", required=True, nargs='+', help="One or more enzyme names (see available enzymes in output)"
     )
 
     args = parser.parse_args()
 
     try:
+        # Handle empty enzyme list
+        if not args.enz:
+            print("Error: No enzymes specified.")
+            print("Usage: python sim.py --seq <sequence> --enz <enzyme1> [enzyme2] ...")
+            sys.exit(2)
+
         # Load enzyme database
         ENZYMES = load_enzyme_database()
+        
+        # Create case-insensitive lookup dictionary
+        enzyme_lookup = {name.lower(): name for name in ENZYMES.keys()}
+        available_names = list(ENZYMES.keys())
 
-        # Check if the requested enzyme exists
-        if args.enz not in ENZYMES:
-            print(f"Error: Enzyme '{args.enz}' not found in database.")
-            print(f"Available enzymes: {', '.join(ENZYMES.keys())}")
-            print(f"Total enzymes available: {len(ENZYMES)}")
-            sys.exit(1)
+        # Validate and normalize enzyme names
+        validated_enzymes = []
+        for enzyme_name in args.enz:
+            enzyme_lower = enzyme_name.lower()
+            if enzyme_lower in enzyme_lookup:
+                validated_enzymes.append(enzyme_lookup[enzyme_lower])
+            else:
+                # Find closest matches
+                closest = find_closest_enzyme_names(enzyme_name, available_names)
+                print(f"Error: Enzyme '{enzyme_name}' not found in database.")
+                if closest:
+                    print(f"Did you mean one of these? {', '.join(closest)}")
+                else:
+                    print("No similar enzyme names found.")
+                print(f"Available enzymes: {', '.join(sorted(available_names))}")
+                print(f"Total enzymes available: {len(available_names)}")
+                sys.exit(2)
 
         # Read DNA sequence
         print(f"Reading DNA sequence from: {args.seq}")
         dna_sequence = read_dna_sequence(args.seq)
+        
+        if not dna_sequence:
+            print("Error: Empty sequence after filtering.")
+            sys.exit(1)
+            
         print(f"DNA sequence length: {len(dna_sequence)} bp")
         print(f"DNA sequence: {dna_sequence}")
         print()
 
-        # Get enzyme information
-        enzyme_info = ENZYMES[args.enz]
-        recognition_seq = enzyme_info["sequence"]
-        cut_index = enzyme_info["cut_index"]
-
-        print(f"Enzyme: {args.enz}")
-        print(f"Recognition sequence: {recognition_seq}")
-        print(f"Cut position: after position {cut_index} in recognition sequence")
-        print()
-
-        # Find cut sites
-        cut_sites = find_cut_sites(dna_sequence, recognition_seq, cut_index)
-
-        if not cut_sites:
-            print("No cut sites found!")
-            print(f"Result: 1 fragment of {len(dna_sequence)} bp")
-            print(f"Fragment 1: {dna_sequence} ({len(dna_sequence)} bp)")
-        else:
-            print(f"Found {len(cut_sites)} cut site(s):")
-            for i, site in enumerate(cut_sites, 1):
-                print(f"  Cut site {i}: position {site}")
+        # Process each enzyme individually
+        cuts_by_enzyme = {}
+        
+        for enzyme_name in validated_enzymes:
+            enzyme_info = ENZYMES[enzyme_name]
+            recognition_seq = enzyme_info["sequence"]
+            cut_index = enzyme_info["cut_index"]
+            
+            print(f"Enzyme: {enzyme_name}")
+            print(f"Recognition sequence: {recognition_seq}")
+            print(f"Cut position: after position {cut_index} in recognition sequence")
+            
+            # Find cut positions for this enzyme
+            cut_positions = find_cut_positions_linear(dna_sequence, enzyme_name, ENZYMES)
+            cuts_by_enzyme[enzyme_name] = cut_positions
+            
+            if cut_positions:
+                print(f"Found cut positions: {cut_positions}")
+            else:
+                print("No cut sites found.")
             print()
 
-            # Calculate fragments
-            fragments = calculate_fragments(dna_sequence, cut_sites)
-
-            print("Fragment analysis:")
-            print(f"  Number of fragments: {len(fragments)}")
-            for i, (sequence, length) in enumerate(fragments, 1):
-                print(f"  Fragment {i}: {sequence} ({length} bp)")
-
-            total_length = sum(length for _, length in fragments)
-            print(f"\nTotal length: {total_length} bp")
+        # Calculate combined digest
+        print("COMBINED DIGEST SUMMARY")
+        print("=" * 40)
+        
+        # Merge all cut positions
+        all_cuts = merge_cut_positions(cuts_by_enzyme, len(dna_sequence))
+        
+        print(f"Total cuts (unique across enzymes): {len(all_cuts)}")
+        if all_cuts:
+            print(f"Cut positions: {all_cuts}")
+        
+        # Calculate fragment lengths for combined digest
+        fragment_lengths = fragments_linear(len(dna_sequence), all_cuts)
+        print(f"Fragment lengths: {fragment_lengths}")
+        
+        # Verify total length
+        total_length = sum(fragment_lengths)
+        print(f"Total length verification: {total_length} bp (expected: {len(dna_sequence)} bp)")
+        
+        if total_length != len(dna_sequence):
+            print("Warning: Fragment lengths don't sum to original sequence length!")
 
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
