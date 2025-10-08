@@ -4,7 +4,7 @@ A simple Python tool for simulating restriction enzyme cutting on linear DNA seq
 
 ## Features
 
-- **5 Built-in Enzymes**: EcoRI, BamHI, HindIII, PstI, and NotI with their recognition sequences and cut positions
+- **Extensive Enzyme Database**: Loads from `enzymes.json` file with 100+ enzymes, falls back to 5 built-in enzymes
 - **Flexible Input**: Accept DNA sequences as direct strings or from FASTA/text files
 - **Case-Insensitive**: Automatically handles both uppercase and lowercase DNA sequences
 - **Linear DNA Support**: Calculates fragment lengths for linear DNA molecules
@@ -15,8 +15,39 @@ A simple Python tool for simulating restriction enzyme cutting on linear DNA seq
 
 No additional dependencies required! This simulator uses only Python standard library modules:
 - `argparse` for command-line arguments
+- `json` for loading enzyme database
 - `sys` for system operations
 - `typing` for type hints
+
+## Enzyme Database
+
+The simulator automatically loads enzymes from `enzymes.json` if present, otherwise uses a built-in database with 5 common enzymes.
+
+### enzymes.json Format
+
+The `enzymes.json` file should contain a JSON array of enzyme objects with the following format:
+
+```json
+[
+  {
+    "name": "EcoRI",
+    "site": "GAATTC",
+    "cut_index": 1
+  },
+  {
+    "name": "BamHI",
+    "site": "GGATCC",
+    "cut_index": 1
+  }
+]
+```
+
+**Field descriptions:**
+- `name`: The enzyme name (string)
+- `site`: The recognition sequence (DNA bases: A, T, C, G)
+- `cut_index`: 0-based position where the enzyme cuts within the recognition sequence
+
+**Example:** EcoRI recognizes "GAATTC" and cuts after position 1 (between G and A), so `cut_index` is 1.
 
 ## Usage
 
@@ -41,9 +72,11 @@ python sim.py --seq sample_dna.fasta --enz BamHI
 ### Command-Line Arguments
 
 - `--seq`: DNA sequence as a string or path to a FASTA/text file
-- `--enz`: Enzyme name (case-sensitive, must be one of: EcoRI, BamHI, HindIII, PstI, NotI)
+- `--enz`: Enzyme name (case-sensitive, available enzymes shown in error message if not found)
 
 ## Supported Enzymes
+
+With the included `enzymes.json` file, over 100 restriction enzymes are available. Here are examples of the built-in enzymes (available even without `enzymes.json`):
 
 | Enzyme | Recognition Sequence | Cut Position | Example |
 |--------|---------------------|--------------|---------|
@@ -54,6 +87,11 @@ python sim.py --seq sample_dna.fasta --enz BamHI
 | NotI   | GCGGCCGC            | GC^GGCCGC    | GC^GGCCGC |
 
 *Note: ^ indicates the cut position*
+
+**Additional enzymes available in `enzymes.json`:**
+- AluI, ClaI, DraI, EcoRV, HaeIII, HpaI, KpnI, MboI, NcoI, PvuI, SacI, SalI, SmaI, SpeI, SphI, TaqI, XbaI, XhoI, and many more!
+
+To see all available enzymes, run the script with an invalid enzyme name - it will display the complete list.
 
 ## Input File Format
 
@@ -106,8 +144,10 @@ The simulator handles various error conditions:
 ```
 RES/
 ├── sim.py                 # Main simulator script
+├── enzymes.json          # Extended enzyme database (100+ enzymes)
 ├── sample_dna.fasta      # Sample DNA sequence for testing
 ├── prompt.txt            # Original requirements
+├── prompt 2.txt          # Enhancement requirements
 └── README.md             # This file
 ```
 
@@ -130,18 +170,19 @@ python sim.py --seq "ATCGATCGATCGATCG" --enz HindIII
 
 ### How It Works
 
-1. **Sequence Input**: Reads DNA sequence from string or file, converting to uppercase
-2. **Enzyme Lookup**: Retrieves recognition sequence and cut position from hardcoded database
-3. **Cut Site Detection**: Searches for all occurrences of the recognition sequence (case-insensitive)
-4. **Fragment Calculation**: Determines fragment lengths based on cut positions for linear DNA
-5. **Output Generation**: Displays detailed analysis including cut sites and fragment information
+1. **Database Loading**: Loads enzyme database from `enzymes.json` if present, otherwise uses built-in database
+2. **Sequence Input**: Reads DNA sequence from string or file, converting to uppercase
+3. **Enzyme Lookup**: Retrieves recognition sequence and cut position from loaded database
+4. **Cut Site Detection**: Searches for all occurrences of the recognition sequence (case-insensitive)
+5. **Fragment Calculation**: Determines fragment lengths based on cut positions for linear DNA
+6. **Output Generation**: Displays detailed analysis including cut sites and fragment information
 
 ### Code Structure
 
-- `load_enzyme_database()`: Returns hardcoded enzyme information
+- `load_enzyme_database()`: Loads enzyme information from JSON file or returns built-in database
 - `read_dna_sequence()`: Handles input from string or file with validation
 - `find_cut_sites()`: Locates all recognition sequences in the DNA
-- `calculate_fragment_lengths()`: Computes fragment sizes for linear DNA
+- `calculate_fragments()`: Computes fragment sizes for linear DNA
 - `main()`: Orchestrates the entire process with command-line interface
 
 ## Future Enhancements (Not in Phase 1)

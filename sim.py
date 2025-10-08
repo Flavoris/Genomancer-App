@@ -5,18 +5,48 @@ A simple tool to simulate restriction enzyme cutting on linear DNA sequences.
 """
 
 import argparse
+import json
 import sys
 from typing import List, Dict, Tuple
 
 
 def load_enzyme_database() -> Dict[str, Dict[str, any]]:
     """
-    Load the hardcoded enzyme database with recognition sequences and cut indices.
+    Load enzyme database from enzymes.json if it exists, otherwise use built-in database.
 
     Returns:
-        Dictionary mapping enzyme names to their properties
+        Dictionary mapping enzyme names to their properties (sequence, cut_index)
     """
-    # Hardcoded enzyme database with recognition sequences and cut positions
+    try:
+        # Try to load from enzymes.json file
+        with open("enzymes.json", "r") as file:
+            enzyme_list = json.load(file)
+        
+        # Convert list format to dict format for compatibility
+        enzymes = {}
+        for enzyme in enzyme_list:
+            # Validate required fields
+            if not all(key in enzyme for key in ["name", "site", "cut_index"]):
+                print(f"Warning: Skipping invalid enzyme entry: {enzyme}")
+                continue
+            
+            # Convert JSON format to internal format
+            enzymes[enzyme["name"]] = {
+                "sequence": enzyme["site"],
+                "cut_index": enzyme["cut_index"]
+            }
+        
+        return enzymes
+        
+    except FileNotFoundError:
+        # If enzymes.json doesn't exist, use built-in small database
+        print("enzymes.json not found, using built-in enzyme database")
+        
+    except json.JSONDecodeError as e:
+        print(f"Error parsing enzymes.json: {e}")
+        print("Using built-in enzyme database instead")
+    
+    # Built-in enzyme database with recognition sequences and cut positions
     # Cut index indicates where the enzyme cuts (0-based position after the cut)
     # For example: EcoRI recognizes GAATTC and cuts between G^AATTC, so cut_index=1
     enzymes = {
@@ -165,19 +195,20 @@ Examples:
         "--seq", required=True, help="DNA sequence (string) or path to FASTA/text file"
     )
     parser.add_argument(
-        "--enz", required=True, help="Enzyme name (EcoRI, BamHI, HindIII, PstI, NotI)"
+        "--enz", required=True, help="Enzyme name (see available enzymes in output)"
     )
 
     args = parser.parse_args()
 
     try:
         # Load enzyme database
-        enzymes = load_enzyme_database()
+        ENZYMES = load_enzyme_database()
 
         # Check if the requested enzyme exists
-        if args.enz not in enzymes:
+        if args.enz not in ENZYMES:
             print(f"Error: Enzyme '{args.enz}' not found in database.")
-            print(f"Available enzymes: {', '.join(enzymes.keys())}")
+            print(f"Available enzymes: {', '.join(ENZYMES.keys())}")
+            print(f"Total enzymes available: {len(ENZYMES)}")
             sys.exit(1)
 
         # Read DNA sequence
@@ -188,7 +219,7 @@ Examples:
         print()
 
         # Get enzyme information
-        enzyme_info = enzymes[args.enz]
+        enzyme_info = ENZYMES[args.enz]
         recognition_seq = enzyme_info["sequence"]
         cut_index = enzyme_info["cut_index"]
 
