@@ -7,8 +7,40 @@ Now supports multiple enzymes for combined digest analysis.
 
 import argparse
 import json
+import re
 import sys
 from typing import List, Dict, Tuple
+
+# IUPAC degenerate base mapping
+IUPAC = {
+    "A": "A", "C": "C", "G": "G", "T": "T",
+    "R": "[AG]", "Y": "[CT]", "W": "[AT]", "S": "[GC]", 
+    "M": "[AC]", "K": "[GT]", "N": "[ACGT]"
+}
+
+
+def iupac_to_regex(site: str) -> str:
+    """
+    Convert IUPAC degenerate base notation to regex character classes.
+    
+    Args:
+        site: Recognition site string that may contain IUPAC letters
+        
+    Returns:
+        Regex pattern (no anchors) where IUPAC letters are expanded to character classes
+        
+    Raises:
+        ValueError: If site contains invalid characters
+    """
+    allowed_chars = set("ACGT") | set("RYWSMKN")
+    site_upper = site.upper()
+    
+    for char in site_upper:
+        if char not in allowed_chars:
+            raise ValueError(f"Invalid character '{char}' in recognition site '{site}'. "
+                           f"Allowed characters: A,C,G,T,R,Y,W,S,M,K,N")
+    
+    return "".join(IUPAC[ch] for ch in site_upper)
 
 
 def load_enzyme_database() -> Dict[str, Dict[str, any]]:
@@ -29,6 +61,19 @@ def load_enzyme_database() -> Dict[str, Dict[str, any]]:
             # Validate required fields
             if not all(key in enzyme for key in ["name", "site", "cut_index"]):
                 print(f"Warning: Skipping invalid enzyme entry: {enzyme}")
+                continue
+            
+            # Validate IUPAC characters in site
+            try:
+                iupac_to_regex(enzyme["site"])
+            except ValueError as e:
+                print(f"Warning: Skipping enzyme '{enzyme['name']}': {e}")
+                continue
+            
+            # Validate cut_index
+            if not (0 <= enzyme["cut_index"] <= len(enzyme["site"])):
+                print(f"Warning: Skipping enzyme '{enzyme['name']}': "
+                      f"cut_index {enzyme['cut_index']} must be between 0 and {len(enzyme['site'])}")
                 continue
             
             # Convert JSON format to internal format
@@ -125,24 +170,26 @@ def find_cut_sites(
     dna_sequence: str, enzyme_sequence: str, cut_index: int
 ) -> List[int]:
     """
-    Find all cut sites for a given enzyme in the DNA sequence.
+    Find all cut sites for a given enzyme in the DNA sequence using IUPAC pattern matching.
 
     Args:
         dna_sequence: The DNA sequence to search
-        enzyme_sequence: The recognition sequence of the enzyme
+        enzyme_sequence: The recognition sequence of the enzyme (may contain IUPAC letters)
         cut_index: 0-based index within the recognition site where the cut occurs
 
     Returns:
         List of positions where cuts occur (0-based indices)
     """
     cut_sites = []
-    enzyme_len = len(enzyme_sequence)
-
-    # Search for the enzyme recognition sequence (case-insensitive)
-    for i in range(len(dna_sequence) - enzyme_len + 1):
-        if dna_sequence[i : i + enzyme_len] == enzyme_sequence:
-            # Add the cut position relative to the start of the match
-            cut_sites.append(i + cut_index)
+    
+    # Convert IUPAC site to regex pattern and compile with lookahead for overlapping matches
+    regex_pattern = f"(?={iupac_to_regex(enzyme_sequence)})"
+    pattern = re.compile(regex_pattern, flags=re.IGNORECASE)
+    
+    # Find all overlapping matches
+    for match in pattern.finditer(dna_sequence):
+        # Add the cut position relative to the start of the match
+        cut_sites.append(match.start() + cut_index)
 
     return cut_sites
 
@@ -378,6 +425,11 @@ Examples:
             print(f"Enzyme: {enzyme_name}")
             print(f"Recognition sequence: {recognition_seq}")
             print(f"Cut position: after position {cut_index} in recognition sequence")
+            
+            # Check if site contains IUPAC degenerate bases
+            has_iupac = any(char in recognition_seq.upper() for char in "RYWSMKN")
+            if has_iupac:
+                print("IUPAC-expanded matching is used")
             
             # Find cut positions for this enzyme
             cut_positions = find_cut_positions_linear(dna_sequence, enzyme_name, ENZYMES)
