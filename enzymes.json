@@ -1,0 +1,802 @@
+[
+  {
+    "name": "AaaI",
+    "site": "CGGCCG",
+    "cut_index": 1
+  },
+  {
+    "name": "AagI",
+    "site": "ATCGAT",
+    "cut_index": 2
+  },
+  {
+    "name": "AanI",
+    "site": "TTATAA",
+    "cut_index": 3
+  },
+  {
+    "name": "AauI",
+    "site": "TGTACA",
+    "cut_index": 1
+  },
+  {
+    "name": "AbaI",
+    "site": "TGATCA",
+    "cut_index": 1
+  },
+  {
+    "name": "AbrI",
+    "site": "CTCGAG",
+    "cut_index": 1
+  },
+  {
+    "name": "AbsI",
+    "site": "CCTCGAGG",
+    "cut_index": 2
+  },
+  {
+    "name": "AccII",
+    "site": "CGCG",
+    "cut_index": 2
+  },
+  {
+    "name": "AccIII",
+    "site": "TCCGGA",
+    "cut_index": 1
+  },
+  {
+    "name": "Acc16I",
+    "site": "TGCGCA",
+    "cut_index": 3
+  },
+  {
+    "name": "Acc65I",
+    "site": "GGTACC",
+    "cut_index": 1
+  },
+  {
+    "name": "AclI",
+    "site": "AACGTT",
+    "cut_index": 2
+  },
+  {
+    "name": "AfaI",
+    "site": "GTAC",
+    "cut_index": 2
+  },
+  {
+    "name": "AfeI",
+    "site": "AGCGCT",
+    "cut_index": 3
+  },
+  {
+    "name": "AflII",
+    "site": "CTTAAG",
+    "cut_index": 1
+  },
+  {
+    "name": "AgeI",
+    "site": "ACCGGT",
+    "cut_index": 1
+  },
+  {
+    "name": "AhaIII",
+    "site": "TTTAAA",
+    "cut_index": 3
+  },
+  {
+    "name": "AluI",
+    "site": "AGCT",
+    "cut_index": 2
+  },
+  {
+    "name": "Alw44I",
+    "site": "GTGCAC",
+    "cut_index": 1
+  },
+  {
+    "name": "ApaI",
+    "site": "GGGCCC",
+    "cut_index": 3
+  },
+  {
+    "name": "ApaLI",
+    "site": "GTGCAC",
+    "cut_index": 1
+  },
+  {
+    "name": "AscI",
+    "site": "GGCGCGCC",
+    "cut_index": 2
+  },
+  {
+    "name": "AseI",
+    "site": "ATTAAT",
+    "cut_index": 2
+  },
+  {
+    "name": "AsnI",
+    "site": "ATTAAT",
+    "cut_index": 2
+  },
+  {
+    "name": "Asp718",
+    "site": "GGTACC",
+    "cut_index": 1
+  },
+  {
+    "name": "AsuII",
+    "site": "TTCGAA",
+    "cut_index": 2
+  },
+  {
+    "name": "AviII",
+    "site": "TGCGCA",
+    "cut_index": 3
+  },
+  {
+    "name": "AvrII",
+    "site": "CCTAGG",
+    "cut_index": 1
+  },
+  {
+    "name": "BalI",
+    "site": "TGGCCA",
+    "cut_index": 3
+  },
+  {
+    "name": "BclI",
+    "site": "TGATCA",
+    "cut_index": 1
+  },
+  {
+    "name": "BfaI",
+    "site": "CTAG",
+    "cut_index": 1
+  },
+  {
+    "name": "BglII",
+    "site": "AGATCT",
+    "cut_index": 1
+  },
+  {
+    "name": "BmgBI",
+    "site": "CACGTC",
+    "cut_index": 3
+  },
+  {
+    "name": "BsiWI",
+    "site": "CGTACG",
+    "cut_index": 1
+  },
+  {
+    "name": "BspDI",
+    "site": "ATCGAT",
+    "cut_index": 2
+  },
+  {
+    "name": "BspEI",
+    "site": "TCCGGA",
+    "cut_index": 1
+  },
+  {
+    "name": "BspHI",
+    "site": "TCATGA",
+    "cut_index": 1
+  },
+  {
+    "name": "BsrBI",
+    "site": "CCGCTC",
+    "cut_index": 3
+  },
+  {
+    "name": "BsrGI",
+    "site": "TGTACA",
+    "cut_index": 1
+  },
+  {
+    "name": "BssHII",
+    "site": "GCGCGC",
+    "cut_index": 1
+  },
+  {
+    "name": "BstBI",
+    "site": "TTCGAA",
+    "cut_index": 2
+  },
+  {
+    "name": "BstUI",
+    "site": "CGCG",
+    "cut_index": 2
+  },
+  {
+    "name": "BstZ17I",
+    "site": "GTATAC",
+    "cut_index": 3
+  },
+  {
+    "name": "ClaI",
+    "site": "ATCGAT",
+    "cut_index": 2
+  },
+  {
+    "name": "CviAII",
+    "site": "CATG",
+    "cut_index": 1
+  },
+  {
+    "name": "CviQI",
+    "site": "GTAC",
+    "cut_index": 1
+  },
+  {
+    "name": "DpnI",
+    "site": "GATC",
+    "cut_index": 2
+  },
+  {
+    "name": "DpnII",
+    "site": "GATC",
+    "cut_index": 0
+  },
+  {
+    "name": "DraI",
+    "site": "TTTAAA",
+    "cut_index": 3
+  },
+  {
+    "name": "EagI",
+    "site": "CGGCCG",
+    "cut_index": 1
+  },
+  {
+    "name": "Eco47III",
+    "site": "AGCGCT",
+    "cut_index": 3
+  },
+  {
+    "name": "Eco52I",
+    "site": "CGGCCG",
+    "cut_index": 1
+  },
+  {
+    "name": "EcoRI",
+    "site": "GAATTC",
+    "cut_index": 1
+  },
+  {
+    "name": "EcoRV",
+    "site": "GATATC",
+    "cut_index": 3
+  },
+  {
+    "name": "FseI",
+    "site": "GGCCGGCC",
+    "cut_index": 6
+  },
+  {
+    "name": "FspI",
+    "site": "TGCGCA",
+    "cut_index": 3
+  },
+  {
+    "name": "HaeIII",
+    "site": "GGCC",
+    "cut_index": 2
+  },
+  {
+    "name": "HhaI",
+    "site": "GCGC",
+    "cut_index": 3
+  },
+  {
+    "name": "HindIII",
+    "site": "AAGCTT",
+    "cut_index": 1
+  },
+  {
+    "name": "HinPI",
+    "site": "GCGC",
+    "cut_index": 1
+  },
+  {
+    "name": "HpaI",
+    "site": "GTTAAC",
+    "cut_index": 3
+  },
+  {
+    "name": "HpaII",
+    "site": "CCGG",
+    "cut_index": 1
+  },
+  {
+    "name": "HpyCH4IV",
+    "site": "ACGT",
+    "cut_index": 1
+  },
+  {
+    "name": "HpyCH4V",
+    "site": "TGCA",
+    "cut_index": 2
+  },
+  {
+    "name": "KasI",
+    "site": "GGCGCC",
+    "cut_index": 1
+  },
+  {
+    "name": "KpnI",
+    "site": "GGTACC",
+    "cut_index": 5
+  },
+  {
+    "name": "MboI",
+    "site": "GATC",
+    "cut_index": 0
+  },
+  {
+    "name": "MfeI",
+    "site": "CAATTG",
+    "cut_index": 1
+  },
+  {
+    "name": "MluI",
+    "site": "ACGCGT",
+    "cut_index": 1
+  },
+  {
+    "name": "MscI",
+    "site": "TGGCCA",
+    "cut_index": 3
+  },
+  {
+    "name": "MseI",
+    "site": "TTAA",
+    "cut_index": 1
+  },
+  {
+    "name": "MspI",
+    "site": "CCGG",
+    "cut_index": 1
+  },
+  {
+    "name": "NaeI",
+    "site": "GCCGGC",
+    "cut_index": 3
+  },
+  {
+    "name": "NarI",
+    "site": "GGCGCC",
+    "cut_index": 2
+  },
+  {
+    "name": "NcoI",
+    "site": "CCATGG",
+    "cut_index": 1
+  },
+  {
+    "name": "NdeI",
+    "site": "CATATG",
+    "cut_index": 2
+  },
+  {
+    "name": "NgoMIV",
+    "site": "GCCGGC",
+    "cut_index": 1
+  },
+  {
+    "name": "NheI",
+    "site": "GCTAGC",
+    "cut_index": 1
+  },
+  {
+    "name": "NlaIII",
+    "site": "CATG",
+    "cut_index": 4
+  },
+  {
+    "name": "NotI",
+    "site": "GCGGCCGC",
+    "cut_index": 2
+  },
+  {
+    "name": "NruI",
+    "site": "TCGCGA",
+    "cut_index": 3
+  },
+  {
+    "name": "NsiI",
+    "site": "ATGCAT",
+    "cut_index": 5
+  },
+  {
+    "name": "PacI",
+    "site": "TTAATTAA",
+    "cut_index": 5
+  },
+  {
+    "name": "PaeR7I",
+    "site": "CTCGAG",
+    "cut_index": 1
+  },
+  {
+    "name": "PciI",
+    "site": "ACATGT",
+    "cut_index": 1
+  },
+  {
+    "name": "PmeI",
+    "site": "GTTTAAAC",
+    "cut_index": 4
+  },
+  {
+    "name": "PmlI",
+    "site": "CACGTG",
+    "cut_index": 3
+  },
+  {
+    "name": "PsiI",
+    "site": "TTATAA",
+    "cut_index": 3
+  },
+  {
+    "name": "PspOMI",
+    "site": "GGGCCC",
+    "cut_index": 3
+  },
+  {
+    "name": "PstI",
+    "site": "CTGCAG",
+    "cut_index": 5
+  },
+  {
+    "name": "PvuI",
+    "site": "CGATCG",
+    "cut_index": 4
+  },
+  {
+    "name": "PvuII",
+    "site": "CAGCTG",
+    "cut_index": 3
+  },
+  {
+    "name": "RsaI",
+    "site": "GTAC",
+    "cut_index": 2
+  },
+  {
+    "name": "SacI",
+    "site": "GAGCTC",
+    "cut_index": 5
+  },
+  {
+    "name": "SacII",
+    "site": "CCGCGG",
+    "cut_index": 4
+  },
+  {
+    "name": "SalI",
+    "site": "GTCGAC",
+    "cut_index": 1
+  },
+  {
+    "name": "Sau3AI",
+    "site": "GATC",
+    "cut_index": 0
+  },
+  {
+    "name": "SbfI",
+    "site": "CCTGCAGG",
+    "cut_index": 6
+  },
+  {
+    "name": "ScaI",
+    "site": "AGTACT",
+    "cut_index": 3
+  },
+  {
+    "name": "SfoI",
+    "site": "GGCGCC",
+    "cut_index": 3
+  },
+  {
+    "name": "SmaI",
+    "site": "CCCGGG",
+    "cut_index": 3
+  },
+  {
+    "name": "SnaBI",
+    "site": "TACGTA",
+    "cut_index": 3
+  },
+  {
+    "name": "SpeI",
+    "site": "ACTAGT",
+    "cut_index": 1
+  },
+  {
+    "name": "SphI",
+    "site": "GCATGC",
+    "cut_index": 5
+  },
+  {
+    "name": "SplI",
+    "site": "CGTACG",
+    "cut_index": 1
+  },
+  {
+    "name": "SrfI",
+    "site": "GCCCGGGC",
+    "cut_index": 4
+  },
+  {
+    "name": "SspI",
+    "site": "AATATT",
+    "cut_index": 3
+  },
+  {
+    "name": "StuI",
+    "site": "AGGCCT",
+    "cut_index": 3
+  },
+  {
+    "name": "SwaI",
+    "site": "ATTTAAAT",
+    "cut_index": 4
+  },
+  {
+    "name": "TaqI",
+    "site": "TCGA",
+    "cut_index": 1
+  },
+  {
+    "name": "TliI",
+    "site": "CTCGAG",
+    "cut_index": 1
+  },
+  {
+    "name": "XbaI",
+    "site": "TCTAGA",
+    "cut_index": 1
+  },
+  {
+    "name": "XhoI",
+    "site": "CTCGAG",
+    "cut_index": 1
+  },
+  {
+    "name": "XmaI",
+    "site": "CCCGGG",
+    "cut_index": 1
+  },
+  {
+    "name": "ZraI",
+    "site": "GACGC",
+    "cut_index": 3
+  },
+  {
+    "name": "AciI",
+    "site": "CCGC",
+    "cut_index": 4
+  },
+  {
+    "name": "AatII",
+    "site": "GACGTC",
+    "cut_index": 5
+  },
+  {
+    "name": "NruI-HF\u00ae",
+    "site": "TCGCGA",
+    "cut_index": 3
+  },
+  {
+    "name": "PsiI-v2",
+    "site": "TTATAA",
+    "cut_index": 3
+  },
+  {
+    "name": "Acc113I",
+    "site": "AGTACT",
+    "cut_index": 3
+  },
+  {
+    "name": "AluBI",
+    "site": "AGCT",
+    "cut_index": 2
+  },
+  {
+    "name": "AssI",
+    "site": "AGTACT",
+    "cut_index": 3
+  },
+  {
+    "name": "AsuNHI",
+    "site": "GCTAGC",
+    "cut_index": 1
+  },
+  {
+    "name": "BamHI",
+    "site": "GGATCC",
+    "cut_index": 1
+  },
+  {
+    "name": "BmtI",
+    "site": "GCTAGC",
+    "cut_index": 1
+  },
+  {
+    "name": "BmcAI",
+    "site": "AGTACT",
+    "cut_index": 3
+  },
+  {
+    "name": "Bpa34I",
+    "site": "AGTACT",
+    "cut_index": 3
+  },
+  {
+    "name": "BshTI",
+    "site": "ACCGGT",
+    "cut_index": 1
+  },
+  {
+    "name": "BsiQI",
+    "site": "TGATCA",
+    "cut_index": 1
+  },
+  {
+    "name": "BspOI",
+    "site": "GCTAGC",
+    "cut_index": 1
+  },
+  {
+    "name": "BspXII",
+    "site": "TGATCA",
+    "cut_index": 1
+  },
+  {
+    "name": "BstT7I",
+    "site": "TGATCA",
+    "cut_index": 1
+  },
+  {
+    "name": "CauI",
+    "site": "CGATCG",
+    "cut_index": 4
+  },
+  {
+    "name": "Cfr42I",
+    "site": "CCGCGG",
+    "cut_index": 4
+  },
+  {
+    "name": "CspAI",
+    "site": "ACCGGT",
+    "cut_index": 1
+  },
+  {
+    "name": "Csp6I",
+    "site": "GTAC",
+    "cut_index": 1
+  },
+  {
+    "name": "CsiAI",
+    "site": "ACCGGT",
+    "cut_index": 1
+  },
+  {
+    "name": "CviRII",
+    "site": "GTAC",
+    "cut_index": 2
+  },
+  {
+    "name": "EcoICRI",
+    "site": "GAGCTC",
+    "cut_index": 3
+  },
+  {
+    "name": "Eco255I",
+    "site": "AGTACT",
+    "cut_index": 3
+  },
+  {
+    "name": "Ecl136II",
+    "site": "GAGCTC",
+    "cut_index": 3
+  },
+  {
+    "name": "FbaI",
+    "site": "TGATCA",
+    "cut_index": 1
+  },
+  {
+    "name": "FnuDII",
+    "site": "CGCG",
+    "cut_index": 2
+  },
+  {
+    "name": "GauT27I",
+    "site": "CGCG",
+    "cut_index": 2
+  },
+  {
+    "name": "GlaI",
+    "site": "GCGC",
+    "cut_index": 3
+  },
+  {
+    "name": "Hin1II",
+    "site": "CATG",
+    "cut_index": 4
+  },
+  {
+    "name": "HpyBI",
+    "site": "GTAC",
+    "cut_index": 2
+  },
+  {
+    "name": "Ksp22I",
+    "site": "TGATCA",
+    "cut_index": 1
+  },
+  {
+    "name": "KspAI",
+    "site": "GTTAAC",
+    "cut_index": 3
+  },
+  {
+    "name": "LlaG2I",
+    "site": "GCTAGC",
+    "cut_index": 1
+  },
+  {
+    "name": "PabI",
+    "site": "GTAC",
+    "cut_index": 2
+  },
+  {
+    "name": "ParI",
+    "site": "TGATCA",
+    "cut_index": 1
+  },
+  {
+    "name": "PinAI",
+    "site": "ACCGGT",
+    "cut_index": 1
+  },
+  {
+    "name": "PlaAII",
+    "site": "GTAC",
+    "cut_index": 2
+  },
+  {
+    "name": "Ppu10I",
+    "site": "ATGCAT",
+    "cut_index": 1
+  },
+  {
+    "name": "RflFII",
+    "site": "AGTACT",
+    "cut_index": 3
+  },
+  {
+    "name": "RsaNI",
+    "site": "GTAC",
+    "cut_index": 2
+  },
+  {
+    "name": "Tru1I",
+    "site": "TTAA",
+    "cut_index": 1
+  },
+  {
+    "name": "Tru9I",
+    "site": "TTAA",
+    "cut_index": 1
+  },
+  {
+    "name": "ZrmI",
+    "site": "AGTACT",
+    "cut_index": 3
+  }
+]
