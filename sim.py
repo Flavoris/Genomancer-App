@@ -9,13 +9,15 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from typing import List, Dict, Tuple
 
 # IUPAC degenerate base mapping
 IUPAC = {
     "A": "A", "C": "C", "G": "G", "T": "T",
     "R": "[AG]", "Y": "[CT]", "W": "[AT]", "S": "[GC]", 
-    "M": "[AC]", "K": "[GT]", "N": "[ACGT]"
+    "M": "[AC]", "K": "[GT]", "B": "[CGT]", "D": "[AGT]", 
+    "H": "[ACT]", "V": "[ACG]", "N": "[ACGT]"
 }
 
 
@@ -32,23 +34,45 @@ def iupac_to_regex(site: str) -> str:
     Raises:
         ValueError: If site contains invalid characters
     """
-    allowed_chars = set("ACGT") | set("RYWSMKN")
+    allowed_chars = set("ACGT") | set("RYWSMKNBDHV")
     site_upper = site.upper()
     
     for char in site_upper:
         if char not in allowed_chars:
             raise ValueError(f"Invalid character '{char}' in recognition site '{site}'. "
-                           f"Allowed characters: A,C,G,T,R,Y,W,S,M,K,N")
+                           f"Allowed characters: A,C,G,T,R,Y,W,S,M,K,B,D,H,V,N")
     
     return "".join(IUPAC[ch] for ch in site_upper)
+
+
+def normalize(name: str) -> str:
+    """
+    Normalize enzyme name by removing diacritics, converting to lowercase, 
+    and removing whitespace/hyphens.
+    
+    Args:
+        name: Original enzyme name
+        
+    Returns:
+        Normalized name for lookup purposes
+    """
+    # Remove diacritics (e.g., HF® -> HFR)
+    normalized = unicodedata.normalize('NFKD', name)
+    normalized = ''.join(c for c in normalized if not unicodedata.combining(c))
+    
+    # Convert to lowercase and remove whitespace/hyphens
+    normalized = normalized.lower().replace(' ', '').replace('-', '')
+    
+    return normalized
 
 
 def load_enzyme_database() -> Dict[str, Dict[str, any]]:
     """
     Load enzyme database from enzymes.json if it exists, otherwise use built-in database.
+    Supports the new format with overhang_type.
 
     Returns:
-        Dictionary mapping enzyme names to their properties (sequence, cut_index)
+        Dictionary mapping enzyme names to their properties (sequence, cut_index, overhang_type)
     """
     try:
         # Try to load from enzymes.json file
@@ -57,30 +81,64 @@ def load_enzyme_database() -> Dict[str, Dict[str, any]]:
         
         # Convert list format to dict format for compatibility
         enzymes = {}
+        normalized_names = {}  # Track normalized names for duplicate detection
+        
         for enzyme in enzyme_list:
             # Validate required fields
-            if not all(key in enzyme for key in ["name", "site", "cut_index"]):
+            if not all(key in enzyme for key in ["name", "site"]):
                 print(f"Warning: Skipping invalid enzyme entry: {enzyme}")
                 continue
             
-            # Validate IUPAC characters in site
+            # Check for cut specification
+            if "cut_index" not in enzyme:
+                print(f"Warning: Skipping enzyme '{enzyme['name']}': missing cut_index")
+                continue
+            
+            # Normalize and validate site
+            site = enzyme["site"].upper()
             try:
-                iupac_to_regex(enzyme["site"])
+                iupac_to_regex(site)
             except ValueError as e:
                 print(f"Warning: Skipping enzyme '{enzyme['name']}': {e}")
                 continue
             
-            # Validate cut_index
-            if not (0 <= enzyme["cut_index"] <= len(enzyme["site"])):
+            # Validate cut specification
+            site_len = len(site)
+            cut_index = enzyme["cut_index"]
+            if not (0 <= cut_index <= site_len):
                 print(f"Warning: Skipping enzyme '{enzyme['name']}': "
-                      f"cut_index {enzyme['cut_index']} must be between 0 and {len(enzyme['site'])}")
+                      f"cut_index {cut_index} must be between 0 and {site_len}")
                 continue
             
-            # Convert JSON format to internal format
-            enzymes[enzyme["name"]] = {
-                "sequence": enzyme["site"],
-                "cut_index": enzyme["cut_index"]
+            # Get overhang_type, default to "Unknown" if missing (legacy support)
+            overhang_type = enzyme.get("overhang_type", "Unknown")
+            if overhang_type not in ["5' overhang", "3' overhang", "Blunt", "Unknown"]:
+                print(f"Warning: Invalid overhang_type '{overhang_type}' for enzyme '{enzyme['name']}', setting to 'Unknown'")
+                overhang_type = "Unknown"
+            
+            # Handle duplicate names by adding suffixes
+            original_name = enzyme["name"]
+            normalized_name = normalize(original_name)
+            
+            if normalized_name in normalized_names:
+                # This is a duplicate - find the next available suffix
+                counter = 2
+                while f"{original_name}#{counter}" in enzymes:
+                    counter += 1
+                final_name = f"{original_name}#{counter}"
+                normalized_names[normalized_name].append(final_name)
+            else:
+                final_name = original_name
+                normalized_names[normalized_name] = [final_name]
+            
+            # Store enzyme with new schema
+            enzyme_data = {
+                "sequence": site,
+                "cut_index": cut_index,
+                "overhang_type": overhang_type
             }
+            
+            enzymes[final_name] = enzyme_data
         
         return enzymes
         
@@ -99,22 +157,27 @@ def load_enzyme_database() -> Dict[str, Dict[str, any]]:
         "EcoRI": {
             "sequence": "GAATTC",
             "cut_index": 1,  # Cuts between G and A
+            "overhang_type": "5' overhang"
         },
         "BamHI": {
             "sequence": "GGATCC",
             "cut_index": 1,  # Cuts between G and G
+            "overhang_type": "5' overhang"
         },
         "HindIII": {
             "sequence": "AAGCTT",
             "cut_index": 1,  # Cuts between A and A
+            "overhang_type": "5' overhang"
         },
         "PstI": {
             "sequence": "CTGCAG",
             "cut_index": 5,  # Cuts between A and G
+            "overhang_type": "3' overhang"
         },
         "NotI": {
             "sequence": "GCGGCCGC",
             "cut_index": 2,  # Cuts between C and G
+            "overhang_type": "5' overhang"
         },
     }
     return enzymes
@@ -157,8 +220,8 @@ def read_dna_sequence(seq_input: str) -> str:
     # Remove any whitespace and convert to uppercase
     sequence = "".join(content.split()).upper()
 
-    # Validate that sequence contains only valid DNA bases
-    valid_bases = set("ATCG")
+    # Validate that sequence contains only valid DNA bases or IUPAC characters
+    valid_bases = set("ATCG") | set("RYWSMKNBDHV")
     if not all(base in valid_bases for base in sequence):
         invalid_chars = set(sequence) - valid_bases
         raise ValueError(f"Invalid DNA characters found: {invalid_chars}")
@@ -175,12 +238,12 @@ def find_cut_sites(
     Args:
         dna_sequence: The DNA sequence to search
         enzyme_sequence: The recognition sequence of the enzyme (may contain IUPAC letters)
-        cut_index: 0-based index within the recognition site where the cut occurs
+        cut_index: 0-based index within the recognition site where the enzyme cuts
 
     Returns:
-        List of positions where cuts occur (0-based indices)
+        List of break positions (0-based indices)
     """
-    cut_sites = []
+    break_positions = []
     
     # Convert IUPAC site to regex pattern and compile with lookahead for overlapping matches
     regex_pattern = f"(?={iupac_to_regex(enzyme_sequence)})"
@@ -188,10 +251,11 @@ def find_cut_sites(
     
     # Find all overlapping matches
     for match in pattern.finditer(dna_sequence):
-        # Add the cut position relative to the start of the match
-        cut_sites.append(match.start() + cut_index)
+        # Calculate break position using cut_index
+        break_pos = match.start() + cut_index
+        break_positions.append(break_pos)
 
-    return cut_sites
+    return break_positions
 
 
 def calculate_fragments(
@@ -236,7 +300,7 @@ def find_cut_positions_linear(seq: str, enzyme_name: str, db: Dict[str, Dict[str
         db: Enzyme database
         
     Returns:
-        List of cut positions (0-based indices)
+        List of break positions (0-based indices)
     """
     if enzyme_name not in db:
         return []
@@ -380,16 +444,31 @@ Examples:
         # Load enzyme database
         ENZYMES = load_enzyme_database()
         
-        # Create case-insensitive lookup dictionary
-        enzyme_lookup = {name.lower(): name for name in ENZYMES.keys()}
+        # Create normalized lookup dictionary for case-insensitive matching
+        normalized_lookup = {}
+        for name in ENZYMES.keys():
+            norm_name = normalize(name)
+            if norm_name not in normalized_lookup:
+                normalized_lookup[norm_name] = []
+            normalized_lookup[norm_name].append(name)
+        
         available_names = list(ENZYMES.keys())
 
         # Validate and normalize enzyme names
         validated_enzymes = []
         for enzyme_name in args.enz:
-            enzyme_lower = enzyme_name.lower()
-            if enzyme_lower in enzyme_lookup:
-                validated_enzymes.append(enzyme_lookup[enzyme_lower])
+            norm_name = normalize(enzyme_name)
+            if norm_name in normalized_lookup:
+                variants = normalized_lookup[norm_name]
+                if len(variants) == 1:
+                    validated_enzymes.append(variants[0])
+                else:
+                    # Ambiguous base name - show variants and exit
+                    print(f"Error: Multiple enzyme variants found for '{enzyme_name}':")
+                    for variant in variants:
+                        print(f"  - {variant}")
+                    print("Please specify the exact enzyme name with suffix if needed.")
+                    sys.exit(2)
             else:
                 # Find closest matches
                 closest = find_closest_enzyme_names(enzyme_name, available_names)
@@ -421,47 +500,44 @@ Examples:
             enzyme_info = ENZYMES[enzyme_name]
             recognition_seq = enzyme_info["sequence"]
             cut_index = enzyme_info["cut_index"]
+            overhang_type = enzyme_info["overhang_type"]
             
             print(f"Enzyme: {enzyme_name}")
-            print(f"Recognition sequence: {recognition_seq}")
-            print(f"Cut position: after position {cut_index} in recognition sequence")
-            
-            # Check if site contains IUPAC degenerate bases
-            has_iupac = any(char in recognition_seq.upper() for char in "RYWSMKN")
-            if has_iupac:
-                print("IUPAC-expanded matching is used")
+            print(f"Site:   {recognition_seq}")
+            print(f"Cut @:  index {cut_index}")
+            print(f"Overhang: {overhang_type}")
             
             # Find cut positions for this enzyme
-            cut_positions = find_cut_positions_linear(dna_sequence, enzyme_name, ENZYMES)
-            cuts_by_enzyme[enzyme_name] = cut_positions
+            break_positions = find_cut_positions_linear(dna_sequence, enzyme_name, ENZYMES)
+            cuts_by_enzyme[enzyme_name] = break_positions
             
-            if cut_positions:
-                print(f"Found cut positions: {cut_positions}")
+            if break_positions:
+                print(f"Matches at positions: {', '.join(map(str, break_positions))}")
             else:
                 print("No cut sites found.")
             print()
 
         # Calculate combined digest
-        print("COMBINED DIGEST SUMMARY")
-        print("=" * 40)
+        print("Fragments:")
         
         # Merge all cut positions
         all_cuts = merge_cut_positions(cuts_by_enzyme, len(dna_sequence))
         
-        print(f"Total cuts (unique across enzymes): {len(all_cuts)}")
-        if all_cuts:
-            print(f"Cut positions: {all_cuts}")
-        
         # Calculate fragment lengths for combined digest
         fragment_lengths = fragments_linear(len(dna_sequence), all_cuts)
-        print(f"Fragment lengths: {fragment_lengths}")
+        
+        # Display fragments with start/end positions
+        positions = [0] + sorted(all_cuts) + [len(dna_sequence)]
+        for i in range(len(positions) - 1):
+            start_pos = positions[i]
+            end_pos = positions[i + 1]
+            fragment_length = end_pos - start_pos
+            print(f"  [{start_pos} - {end_pos}] = {fragment_length} bp")
         
         # Verify total length
         total_length = sum(fragment_lengths)
-        print(f"Total length verification: {total_length} bp (expected: {len(dna_sequence)} bp)")
-        
         if total_length != len(dna_sequence):
-            print("Warning: Fragment lengths don't sum to original sequence length!")
+            print(f"Warning: Fragment lengths don't sum to original sequence length! ({total_length} vs {len(dna_sequence)})")
 
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")

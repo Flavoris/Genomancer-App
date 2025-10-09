@@ -2,801 +2,2119 @@
   {
     "name": "AaaI",
     "site": "CGGCCG",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "AagI",
     "site": "ATCGAT",
-    "cut_index": 2
+    "cut_index": 2,
+    "overhang_type": "Blunt"
   },
   {
     "name": "AanI",
     "site": "TTATAA",
-    "cut_index": 3
-  },
-  {
-    "name": "AauI",
-    "site": "TGTACA",
-    "cut_index": 1
-  },
-  {
-    "name": "AbaI",
-    "site": "TGATCA",
-    "cut_index": 1
-  },
-  {
-    "name": "AbrI",
-    "site": "CTCGAG",
-    "cut_index": 1
-  },
-  {
-    "name": "AbsI",
-    "site": "CCTCGAGG",
-    "cut_index": 2
-  },
-  {
-    "name": "AccII",
-    "site": "CGCG",
-    "cut_index": 2
-  },
-  {
-    "name": "AccIII",
-    "site": "TCCGGA",
-    "cut_index": 1
-  },
-  {
-    "name": "Acc16I",
-    "site": "TGCGCA",
-    "cut_index": 3
-  },
-  {
-    "name": "Acc65I",
-    "site": "GGTACC",
-    "cut_index": 1
-  },
-  {
-    "name": "AclI",
-    "site": "AACGTT",
-    "cut_index": 2
-  },
-  {
-    "name": "AfaI",
-    "site": "GTAC",
-    "cut_index": 2
-  },
-  {
-    "name": "AfeI",
-    "site": "AGCGCT",
-    "cut_index": 3
-  },
-  {
-    "name": "AflII",
-    "site": "CTTAAG",
-    "cut_index": 1
-  },
-  {
-    "name": "AgeI",
-    "site": "ACCGGT",
-    "cut_index": 1
-  },
-  {
-    "name": "AhaIII",
-    "site": "TTTAAA",
-    "cut_index": 3
-  },
-  {
-    "name": "AluI",
-    "site": "AGCT",
-    "cut_index": 2
-  },
-  {
-    "name": "Alw44I",
-    "site": "GTGCAC",
-    "cut_index": 1
-  },
-  {
-    "name": "ApaI",
-    "site": "GGGCCC",
-    "cut_index": 3
-  },
-  {
-    "name": "ApaLI",
-    "site": "GTGCAC",
-    "cut_index": 1
-  },
-  {
-    "name": "AscI",
-    "site": "GGCGCGCC",
-    "cut_index": 2
-  },
-  {
-    "name": "AseI",
-    "site": "ATTAAT",
-    "cut_index": 2
-  },
-  {
-    "name": "AsnI",
-    "site": "ATTAAT",
-    "cut_index": 2
-  },
-  {
-    "name": "Asp718",
-    "site": "GGTACC",
-    "cut_index": 1
-  },
-  {
-    "name": "AsuII",
-    "site": "TTCGAA",
-    "cut_index": 2
-  },
-  {
-    "name": "AviII",
-    "site": "TGCGCA",
-    "cut_index": 3
-  },
-  {
-    "name": "AvrII",
-    "site": "CCTAGG",
-    "cut_index": 1
-  },
-  {
-    "name": "BalI",
-    "site": "TGGCCA",
-    "cut_index": 3
-  },
-  {
-    "name": "BclI",
-    "site": "TGATCA",
-    "cut_index": 1
-  },
-  {
-    "name": "BfaI",
-    "site": "CTAG",
-    "cut_index": 1
-  },
-  {
-    "name": "BglII",
-    "site": "AGATCT",
-    "cut_index": 1
-  },
-  {
-    "name": "BmgBI",
-    "site": "CACGTC",
-    "cut_index": 3
-  },
-  {
-    "name": "BsiWI",
-    "site": "CGTACG",
-    "cut_index": 1
-  },
-  {
-    "name": "BspDI",
-    "site": "ATCGAT",
-    "cut_index": 2
-  },
-  {
-    "name": "BspEI",
-    "site": "TCCGGA",
-    "cut_index": 1
-  },
-  {
-    "name": "BspHI",
-    "site": "TCATGA",
-    "cut_index": 1
-  },
-  {
-    "name": "BsrBI",
-    "site": "CCGCTC",
-    "cut_index": 3
-  },
-  {
-    "name": "BsrGI",
-    "site": "TGTACA",
-    "cut_index": 1
-  },
-  {
-    "name": "BssHII",
-    "site": "GCGCGC",
-    "cut_index": 1
-  },
-  {
-    "name": "BstBI",
-    "site": "TTCGAA",
-    "cut_index": 2
-  },
-  {
-    "name": "BstUI",
-    "site": "CGCG",
-    "cut_index": 2
-  },
-  {
-    "name": "BstZ17I",
-    "site": "GTATAC",
-    "cut_index": 3
-  },
-  {
-    "name": "ClaI",
-    "site": "ATCGAT",
-    "cut_index": 2
-  },
-  {
-    "name": "CviAII",
-    "site": "CATG",
-    "cut_index": 1
-  },
-  {
-    "name": "CviQI",
-    "site": "GTAC",
-    "cut_index": 1
-  },
-  {
-    "name": "DpnI",
-    "site": "GATC",
-    "cut_index": 2
-  },
-  {
-    "name": "DpnII",
-    "site": "GATC",
-    "cut_index": 0
-  },
-  {
-    "name": "DraI",
-    "site": "TTTAAA",
-    "cut_index": 3
-  },
-  {
-    "name": "EagI",
-    "site": "CGGCCG",
-    "cut_index": 1
-  },
-  {
-    "name": "Eco47III",
-    "site": "AGCGCT",
-    "cut_index": 3
-  },
-  {
-    "name": "Eco52I",
-    "site": "CGGCCG",
-    "cut_index": 1
-  },
-  {
-    "name": "EcoRI",
-    "site": "GAATTC",
-    "cut_index": 1
-  },
-  {
-    "name": "EcoRV",
-    "site": "GATATC",
-    "cut_index": 3
-  },
-  {
-    "name": "FseI",
-    "site": "GGCCGGCC",
-    "cut_index": 6
-  },
-  {
-    "name": "FspI",
-    "site": "TGCGCA",
-    "cut_index": 3
-  },
-  {
-    "name": "HaeIII",
-    "site": "GGCC",
-    "cut_index": 2
-  },
-  {
-    "name": "HhaI",
-    "site": "GCGC",
-    "cut_index": 3
-  },
-  {
-    "name": "HindIII",
-    "site": "AAGCTT",
-    "cut_index": 1
-  },
-  {
-    "name": "HinPI",
-    "site": "GCGC",
-    "cut_index": 1
-  },
-  {
-    "name": "HpaI",
-    "site": "GTTAAC",
-    "cut_index": 3
-  },
-  {
-    "name": "HpaII",
-    "site": "CCGG",
-    "cut_index": 1
-  },
-  {
-    "name": "HpyCH4IV",
-    "site": "ACGT",
-    "cut_index": 1
-  },
-  {
-    "name": "HpyCH4V",
-    "site": "TGCA",
-    "cut_index": 2
-  },
-  {
-    "name": "KasI",
-    "site": "GGCGCC",
-    "cut_index": 1
-  },
-  {
-    "name": "KpnI",
-    "site": "GGTACC",
-    "cut_index": 5
-  },
-  {
-    "name": "MboI",
-    "site": "GATC",
-    "cut_index": 0
-  },
-  {
-    "name": "MfeI",
-    "site": "CAATTG",
-    "cut_index": 1
-  },
-  {
-    "name": "MluI",
-    "site": "ACGCGT",
-    "cut_index": 1
-  },
-  {
-    "name": "MscI",
-    "site": "TGGCCA",
-    "cut_index": 3
-  },
-  {
-    "name": "MseI",
-    "site": "TTAA",
-    "cut_index": 1
-  },
-  {
-    "name": "MspI",
-    "site": "CCGG",
-    "cut_index": 1
-  },
-  {
-    "name": "NaeI",
-    "site": "GCCGGC",
-    "cut_index": 3
-  },
-  {
-    "name": "NarI",
-    "site": "GGCGCC",
-    "cut_index": 2
-  },
-  {
-    "name": "NcoI",
-    "site": "CCATGG",
-    "cut_index": 1
-  },
-  {
-    "name": "NdeI",
-    "site": "CATATG",
-    "cut_index": 2
-  },
-  {
-    "name": "NgoMIV",
-    "site": "GCCGGC",
-    "cut_index": 1
-  },
-  {
-    "name": "NheI",
-    "site": "GCTAGC",
-    "cut_index": 1
-  },
-  {
-    "name": "NlaIII",
-    "site": "CATG",
-    "cut_index": 4
-  },
-  {
-    "name": "NotI",
-    "site": "GCGGCCGC",
-    "cut_index": 2
-  },
-  {
-    "name": "NruI",
-    "site": "TCGCGA",
-    "cut_index": 3
-  },
-  {
-    "name": "NsiI",
-    "site": "ATGCAT",
-    "cut_index": 5
-  },
-  {
-    "name": "PacI",
-    "site": "TTAATTAA",
-    "cut_index": 5
-  },
-  {
-    "name": "PaeR7I",
-    "site": "CTCGAG",
-    "cut_index": 1
-  },
-  {
-    "name": "PciI",
-    "site": "ACATGT",
-    "cut_index": 1
-  },
-  {
-    "name": "PmeI",
-    "site": "GTTTAAAC",
-    "cut_index": 4
-  },
-  {
-    "name": "PmlI",
-    "site": "CACGTG",
-    "cut_index": 3
-  },
-  {
-    "name": "PsiI",
-    "site": "TTATAA",
-    "cut_index": 3
-  },
-  {
-    "name": "PspOMI",
-    "site": "GGGCCC",
-    "cut_index": 3
-  },
-  {
-    "name": "PstI",
-    "site": "CTGCAG",
-    "cut_index": 5
-  },
-  {
-    "name": "PvuI",
-    "site": "CGATCG",
-    "cut_index": 4
-  },
-  {
-    "name": "PvuII",
-    "site": "CAGCTG",
-    "cut_index": 3
-  },
-  {
-    "name": "RsaI",
-    "site": "GTAC",
-    "cut_index": 2
-  },
-  {
-    "name": "SacI",
-    "site": "GAGCTC",
-    "cut_index": 5
-  },
-  {
-    "name": "SacII",
-    "site": "CCGCGG",
-    "cut_index": 4
-  },
-  {
-    "name": "SalI",
-    "site": "GTCGAC",
-    "cut_index": 1
-  },
-  {
-    "name": "Sau3AI",
-    "site": "GATC",
-    "cut_index": 0
-  },
-  {
-    "name": "SbfI",
-    "site": "CCTGCAGG",
-    "cut_index": 6
-  },
-  {
-    "name": "ScaI",
-    "site": "AGTACT",
-    "cut_index": 3
-  },
-  {
-    "name": "SfoI",
-    "site": "GGCGCC",
-    "cut_index": 3
-  },
-  {
-    "name": "SmaI",
-    "site": "CCCGGG",
-    "cut_index": 3
-  },
-  {
-    "name": "SnaBI",
-    "site": "TACGTA",
-    "cut_index": 3
-  },
-  {
-    "name": "SpeI",
-    "site": "ACTAGT",
-    "cut_index": 1
-  },
-  {
-    "name": "SphI",
-    "site": "GCATGC",
-    "cut_index": 5
-  },
-  {
-    "name": "SplI",
-    "site": "CGTACG",
-    "cut_index": 1
-  },
-  {
-    "name": "SrfI",
-    "site": "GCCCGGGC",
-    "cut_index": 4
-  },
-  {
-    "name": "SspI",
-    "site": "AATATT",
-    "cut_index": 3
-  },
-  {
-    "name": "StuI",
-    "site": "AGGCCT",
-    "cut_index": 3
-  },
-  {
-    "name": "SwaI",
-    "site": "ATTTAAAT",
-    "cut_index": 4
-  },
-  {
-    "name": "TaqI",
-    "site": "TCGA",
-    "cut_index": 1
-  },
-  {
-    "name": "TliI",
-    "site": "CTCGAG",
-    "cut_index": 1
-  },
-  {
-    "name": "XbaI",
-    "site": "TCTAGA",
-    "cut_index": 1
-  },
-  {
-    "name": "XhoI",
-    "site": "CTCGAG",
-    "cut_index": 1
-  },
-  {
-    "name": "XmaI",
-    "site": "CCCGGG",
-    "cut_index": 1
-  },
-  {
-    "name": "ZraI",
-    "site": "GACGC",
-    "cut_index": 3
-  },
-  {
-    "name": "AciI",
-    "site": "CCGC",
-    "cut_index": 4
+    "cut_index": 3,
+    "overhang_type": "Blunt"
   },
   {
     "name": "AatII",
     "site": "GACGTC",
-    "cut_index": 5
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
   },
   {
-    "name": "NruI-HF\u00ae",
-    "site": "TCGCGA",
-    "cut_index": 3
+    "name": "AauI",
+    "site": "TGTACA",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
-    "name": "PsiI-v2",
-    "site": "TTATAA",
-    "cut_index": 3
+    "name": "AbaI",
+    "site": "TGATCA",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AbrI",
+    "site": "CTCGAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AbsI",
+    "site": "CCTCGAGG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
   },
   {
     "name": "Acc113I",
     "site": "AGTACT",
-    "cut_index": 3
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Acc16I",
+    "site": "TGCGCA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Acc65I",
+    "site": "GGTACC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AccB2I",
+    "site": "RGCGCY",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "AccBSI",
+    "site": "CCANNNNNTGG",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AccI",
+    "site": "GTMKAC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AccII",
+    "site": "CGCG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AccIII",
+    "site": "TCCGGA",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AciI",
+    "site": "CCGC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AclI",
+    "site": "AACGTT",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AclWI",
+    "site": "GGATCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AcsI",
+    "site": "RAATTY",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AcyI",
+    "site": "GRCGYC",
+    "cut_index": 2,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "AfaI",
+    "site": "GTAC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AfeI",
+    "site": "AGCGCT",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AflII",
+    "site": "CTTAAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AflIII",
+    "site": "ACRYGT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AgeI",
+    "site": "ACCGGT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AhaIII",
+    "site": "TTTAAA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AhdI",
+    "site": "GACNNNGTC",
+    "cut_index": 4,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AleI",
+    "site": "CACNNNGTG",
+    "cut_index": 6,
+    "overhang_type": "Blunt"
   },
   {
     "name": "AluBI",
     "site": "AGCT",
-    "cut_index": 2
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AluI",
+    "site": "AGCT",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Alw21I",
+    "site": "GWGCWC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "Alw26I",
+    "site": "GTCTCNNNN",
+    "cut_index": 6,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Alw44I",
+    "site": "GTGCAC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AlwI",
+    "site": "GGATCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AlwNI",
+    "site": "CAGNNNCTG",
+    "cut_index": 6,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "ApaI",
+    "site": "GGGCCC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "ApaLI",
+    "site": "GTGCAC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "ApoI",
+    "site": "RAATTY",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AscI",
+    "site": "GGCGCGCC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AseI",
+    "site": "ATTAAT",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AsnI",
+    "site": "ATTAAT",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Asp26HI",
+    "site": "GAATGCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Asp27HI",
+    "site": "GAATGCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Asp35HI",
+    "site": "GAATGCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Asp700I",
+    "site": "GAANNNNTTC",
+    "cut_index": 6,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Asp718",
+    "site": "GGTACC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AspI",
+    "site": "GACNNNGTC",
+    "cut_index": 4,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AspNI",
+    "site": "GGNNCC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
   },
   {
     "name": "AssI",
     "site": "AGTACT",
-    "cut_index": 3
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AsuC2I",
+    "site": "CCSGG",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AsuII",
+    "site": "TTCGAA",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
   },
   {
     "name": "AsuNHI",
     "site": "GCTAGC",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AvaI",
+    "site": "CYCGRG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AvaII",
+    "site": "GGWCC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "AviII",
+    "site": "TGCGCA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "AvrII",
+    "site": "CCTAGG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BalI",
+    "site": "TGGCCA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
   },
   {
     "name": "BamHI",
     "site": "GGATCC",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
-    "name": "BmtI",
-    "site": "GCTAGC",
-    "cut_index": 1
+    "name": "BanI",
+    "site": "GGYRCC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BanII",
+    "site": "GRGCYC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "BbsI",
+    "site": "GAAGACNN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BbvI",
+    "site": "GCAGCNNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BcgI",
+    "site": "CGANNNNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BclI",
+    "site": "TGATCA",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BcnI",
+    "site": "CCSGG",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BfaI",
+    "site": "CTAG",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BfoI",
+    "site": "RGCGCY",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "BglI",
+    "site": "GCCNNNNNGGC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BglII",
+    "site": "AGATCT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BinI",
+    "site": "GGATCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BmaHI",
+    "site": "GAATGCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "BmcAI",
     "site": "AGTACT",
-    "cut_index": 3
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Bme142I",
+    "site": "RGCGCY",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "BmeRI",
+    "site": "GACNNNNNNGTC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BmgBI",
+    "site": "CACGTC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BmrI",
+    "site": "ACTGGGNNNNN",
+    "cut_index": 11,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BmtI",
+    "site": "GCTAGC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "Bpa34I",
     "site": "AGTACT",
-    "cut_index": 3
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BpmI",
+    "site": "CTGGAGNNNNN",
+    "cut_index": 11,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Bpu10I",
+    "site": "CCTNAGCN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BpuFI",
+    "site": "GGATCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BpuMI",
+    "site": "CCSGG",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsaAI",
+    "site": "YACGTR",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BsaBI",
+    "site": "GATNNNNATC",
+    "cut_index": 6,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BsaHI",
+    "site": "GRCGYC",
+    "cut_index": 2,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "BsaI",
+    "site": "GGTCTCNNNN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsaJI",
+    "site": "CCNNGG",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BsaMI",
+    "site": "GAATGCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsaWI",
+    "site": "WCCGGW",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BsaXI",
+    "site": "ACNNNNNN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BscBI",
+    "site": "GGNNCC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BscCI",
+    "site": "GAATGCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BseRI",
+    "site": "GAGGAGNNNNN",
+    "cut_index": 11,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BseYI",
+    "site": "CCCAGCNN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsgI",
+    "site": "GTGCAGNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Bsh45I",
+    "site": "GWGCWC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
   },
   {
     "name": "BshTI",
     "site": "ACCGGT",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsiEI",
+    "site": "CGRYCG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BsiHKAI",
+    "site": "GWGCWC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
   },
   {
     "name": "BsiQI",
     "site": "TGATCA",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsiWI",
+    "site": "CGTACG",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BslI",
+    "site": "CCNNNNNNNNG",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Bsm6I",
+    "site": "GWGCWC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "BsmAI",
+    "site": "GTCTCNNNN",
+    "cut_index": 6,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsmBI",
+    "site": "CGTCTCNNNN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsmFI",
+    "site": "GGGACNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsmI",
+    "site": "GAATGCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsoBI",
+    "site": "CYCGRG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Bsp1286I",
+    "site": "GDGCHC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "Bsp143II",
+    "site": "RGCGCY",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "BspCNI",
+    "site": "CTCAGNNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BspDI",
+    "site": "ATCGAT",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BspEI",
+    "site": "TCCGGA",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BspHI",
+    "site": "TCATGA",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BspLI",
+    "site": "GGNNCC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BspMI",
+    "site": "ACCTGCNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "BspOI",
     "site": "GCTAGC",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BspOVI",
+    "site": "GACNNNNNNGTC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BspPI",
+    "site": "GGATCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "BspXII",
     "site": "TGATCA",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsrBI",
+    "site": "CCGCTC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BsrDI",
+    "site": "GCAATGNN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsrFI",
+    "site": "RCCGGY",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsrGI",
+    "site": "TGTACA",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BsrI",
+    "site": "ACTGGN",
+    "cut_index": 6,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BssHII",
+    "site": "GCGCGC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BssKI",
+    "site": "CCNGG",
+    "cut_index": 5,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BssSI",
+    "site": "CACGAGNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Bst31TI",
+    "site": "GGATCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BstAPI",
+    "site": "GCANNNNNTGC",
+    "cut_index": 6,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BstBI",
+    "site": "TTCGAA",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BstDEI",
+    "site": "CTNAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BstEII",
+    "site": "GGTNACC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BstH2I",
+    "site": "RGCGCY",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "BstH9I",
+    "site": "GGATCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BstNI",
+    "site": "CCWGG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
   },
   {
     "name": "BstT7I",
     "site": "TGATCA",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BstUI",
+    "site": "CGCG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BstXI",
+    "site": "CCANNNNNNTGG",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BstYI",
+    "site": "RGATCY",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BstZ17I",
+    "site": "GTATAC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Bsu36I",
+    "site": "CCTNAGG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "BtgI",
+    "site": "CCRYGG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BtgZI",
+    "site": "GCGATGNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Bth617I",
+    "site": "GGATCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BtsCI",
+    "site": "GGATGNN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BtsI",
+    "site": "GCAGTGNN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "BtsIMutI",
+    "site": "CAGTGNN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Cac8I",
+    "site": "GCNNGC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "CaiI",
+    "site": "CAGCAGNNNNNNNNNNNNNNNNNN",
+    "cut_index": 24,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "CauI",
     "site": "CGATCG",
-    "cut_index": 4
+    "cut_index": 4,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "CauII",
+    "site": "CCSGG",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "CelII",
+    "site": "GCTNAGC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Cfr10I",
+    "site": "RCCGGY",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Cfr13I",
+    "site": "GGNCC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "Cfr42I",
     "site": "CCGCGG",
-    "cut_index": 4
+    "cut_index": 4,
+    "overhang_type": "Blunt"
   },
   {
-    "name": "CspAI",
-    "site": "ACCGGT",
-    "cut_index": 1
+    "name": "CfrI",
+    "site": "YGGCCR",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
-    "name": "Csp6I",
-    "site": "GTAC",
-    "cut_index": 1
+    "name": "ClaI",
+    "site": "ATCGAT",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
   },
   {
     "name": "CsiAI",
     "site": "ACCGGT",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Csp6I",
+    "site": "GTAC",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "CspAI",
+    "site": "ACCGGT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "CspCI",
+    "site": "CAANNNNN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "CviAII",
+    "site": "CATG",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "CviKI-1",
+    "site": "RGCY",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "CviQI",
+    "site": "GTAC",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
   },
   {
     "name": "CviRII",
     "site": "GTAC",
-    "cut_index": 2
+    "cut_index": 2,
+    "overhang_type": "Blunt"
   },
   {
-    "name": "EcoICRI",
-    "site": "GAGCTC",
-    "cut_index": 3
+    "name": "DdeI",
+    "site": "CTNAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
-    "name": "Eco255I",
-    "site": "AGTACT",
-    "cut_index": 3
+    "name": "DpnI",
+    "site": "GATC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "DpnII",
+    "site": "GATC",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "DraI",
+    "site": "TTTAAA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "DraII",
+    "site": "RGGNCCY",
+    "cut_index": 2,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "DraIII",
+    "site": "CACNNNGTG",
+    "cut_index": 6,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "DrdI",
+    "site": "GACNNNNNNGTC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "DriI",
+    "site": "GACNNNNNNGTC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "DsaI",
+    "site": "CCRYGG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EaeI",
+    "site": "YGGCCR",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EagI",
+    "site": "CGGCCG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Eam1105I",
+    "site": "GACNNNNNNGTC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EarI",
+    "site": "CTCTTCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EciI",
+    "site": "TCCGCCNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "Ecl136II",
     "site": "GAGCTC",
-    "cut_index": 3
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "EclHKI",
+    "site": "GACNNNNNNGTC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Eco255I",
+    "site": "AGTACT",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Eco47III",
+    "site": "AGCGCT",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Eco52I",
+    "site": "CGGCCG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Eco57I",
+    "site": "CTGAAGNNNNN",
+    "cut_index": 11,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Eco57MI",
+    "site": "CTGRAGNNNNN",
+    "cut_index": 11,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EcoHI",
+    "site": "CCSGG",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EcoICRI",
+    "site": "GAGCTC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "EcoNI",
+    "site": "CCTNNNNNAGG",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EcoO109I",
+    "site": "RGGNCCY",
+    "cut_index": 2,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "EcoRI",
+    "site": "GAATTC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EcoRII",
+    "site": "CCWGG",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EcoRV",
+    "site": "GATATC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Esp3I",
+    "site": "CGTCTCNNNN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "EspI",
+    "site": "GCTNAGC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "FalI",
+    "site": "AAGNCTTN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "FaqI",
+    "site": "GGGACNNNNNN",
+    "cut_index": 11,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "FauI",
+    "site": "CCCGCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "FbaI",
     "site": "TGATCA",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Fnu4HI",
+    "site": "GCNGC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
   },
   {
     "name": "FnuDII",
     "site": "CGCG",
-    "cut_index": 2
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "FokI",
+    "site": "GGATGNNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "FseI",
+    "site": "GGCCGGCC",
+    "cut_index": 6,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "FspI",
+    "site": "TGCGCA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
   },
   {
     "name": "GauT27I",
     "site": "CGCG",
-    "cut_index": 2
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "GdiII",
+    "site": "YGGCCR",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "GlaI",
     "site": "GCGC",
-    "cut_index": 3
+    "cut_index": 3,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "GsaI",
+    "site": "CCCAGCNN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "GsuI",
+    "site": "CTGGAGNNNNN",
+    "cut_index": 11,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HaeII",
+    "site": "RGCGCY",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "HaeIII",
+    "site": "GGCC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "HgaI",
+    "site": "GACGCNNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HgiAI",
+    "site": "GWGCWC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "HgiS22I",
+    "site": "CCSGG",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HhaI",
+    "site": "GCGC",
+    "cut_index": 3,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "Hin1I",
+    "site": "GRCGYC",
+    "cut_index": 2,
+    "overhang_type": "3' overhang"
   },
   {
     "name": "Hin1II",
     "site": "CATG",
-    "cut_index": 4
+    "cut_index": 4,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Hin4I",
+    "site": "GAYNRTCN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HincII",
+    "site": "GTYRAC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "HindIII",
+    "site": "AAGCTT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HinfI",
+    "site": "GANTC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HinPI",
+    "site": "GCGC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HpaI",
+    "site": "GTTAAC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "HpaII",
+    "site": "CCGG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HphI",
+    "site": "GGTGANNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Hpy166II",
+    "site": "GTNNAC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Hpy178III",
+    "site": "TCNNGA",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Hpy188I",
+    "site": "TCNGA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Hpy188III",
+    "site": "TCNNGA",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Hpy8I",
+    "site": "GTNNAC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Hpy99I",
+    "site": "CGWCG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HpyAV",
+    "site": "CCTTCNNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "HpyBI",
     "site": "GTAC",
-    "cut_index": 2
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "HpyCH4III",
+    "site": "ACNGT",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "HpyCH4IV",
+    "site": "ACGT",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "HpyCH4V",
+    "site": "TGCA",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "HpyF10VI",
+    "site": "GCNNNNNNNGC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HpyF3I",
+    "site": "CTNAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "HpyF46II",
+    "site": "GWGCWC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "KasI",
+    "site": "GGCGCC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "KpnI",
+    "site": "GGTACC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
   },
   {
     "name": "Ksp22I",
     "site": "TGATCA",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Ksp632I",
+    "site": "CTCTTCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "KspAI",
     "site": "GTTAAC",
-    "cut_index": 3
+    "cut_index": 3,
+    "overhang_type": "Blunt"
   },
   {
     "name": "LlaG2I",
     "site": "GCTAGC",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "LpnI",
+    "site": "RGCGCY",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "MabI",
+    "site": "ACCWGGT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MboI",
+    "site": "GATC",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MboII",
+    "site": "GAAGANNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MfeI",
+    "site": "CAATTG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MluI",
+    "site": "ACGCGT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MlyI",
+    "site": "GAGTCNNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MmeI",
+    "site": "TCCRACNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MnlI",
+    "site": "CCTCNNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MscI",
+    "site": "TGGCCA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "MseI",
+    "site": "TTAA",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MslI",
+    "site": "CAYNNNNNRTG",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MspA1I",
+    "site": "CMGCKG",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "MspI",
+    "site": "CCGG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MspV281I",
+    "site": "GWGCWC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "Mva1269I",
+    "site": "GAATGCN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "MwoI",
+    "site": "GCNNNNNNNNNNNGC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "NaeI",
+    "site": "GCCGGC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "NarI",
+    "site": "GGCGCC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "NciI",
+    "site": "CCSGG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "NcoI",
+    "site": "CCATGG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "NdeI",
+    "site": "CATATG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "NgoMIV",
+    "site": "GCCGGC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "NheI",
+    "site": "GCTAGC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "NlaIII",
+    "site": "CATG",
+    "cut_index": 4,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "NlaIV",
+    "site": "GGNNCC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "NotI",
+    "site": "GCGGCCGC",
+    "cut_index": 2,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "NruGI",
+    "site": "GACNNNNNNGTC",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "NruI",
+    "site": "TCGCGA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "NruI-HF\u00ae",
+    "site": "TCGCGA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "NsiI",
+    "site": "ATGCAT",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "NspI",
+    "site": "RCATGY",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "OliI",
+    "site": "CACNNNNGTG",
+    "cut_index": 5,
+    "overhang_type": "Blunt"
   },
   {
     "name": "PabI",
     "site": "GTAC",
-    "cut_index": 2
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "PacI",
+    "site": "TTAATTAA",
+    "cut_index": 5,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "PaeR7I",
+    "site": "CTCGAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "ParI",
     "site": "TGATCA",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "PciI",
+    "site": "ACATGT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "PflFI",
+    "site": "GACNNNGTC",
+    "cut_index": 4,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "PflMI",
+    "site": "CCANNNNNTGG",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "PinAI",
     "site": "ACCGGT",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "PlaAII",
     "site": "GTAC",
-    "cut_index": 2
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "PleI",
+    "site": "GAGTCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "PmeI",
+    "site": "GTTTAAAC",
+    "cut_index": 4,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "PmlI",
+    "site": "CACGTG",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
   },
   {
     "name": "Ppu10I",
     "site": "ATGCAT",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "PpuMI",
+    "site": "RGGWCCY",
+    "cut_index": 2,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "PshAI",
+    "site": "GACNNNNGTC",
+    "cut_index": 5,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "PsiI",
+    "site": "TTATAA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "PsiI-v2",
+    "site": "TTATAA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "PspGI",
+    "site": "CCWGG",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "PspOMI",
+    "site": "GGGCCC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "PstI",
+    "site": "CTGCAG",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "PvuI",
+    "site": "CGATCG",
+    "cut_index": 4,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "PvuII",
+    "site": "CAGCTG",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "Ral8I",
+    "site": "GGATCNNNN",
+    "cut_index": 9,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "RflFII",
     "site": "AGTACT",
-    "cut_index": 3
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "RsaI",
+    "site": "GTAC",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
   },
   {
     "name": "RsaNI",
     "site": "GTAC",
-    "cut_index": 2
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "RsrII",
+    "site": "CGGWCCG",
+    "cut_index": 2,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SacI",
+    "site": "GAGCTC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "SacII",
+    "site": "CCGCGG",
+    "cut_index": 4,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "SalI",
+    "site": "GTCGAC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SapI",
+    "site": "GCTCTTCN",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Sau3AI",
+    "site": "GATC",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Sau96I",
+    "site": "GGNCC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SbfI",
+    "site": "CCTGCAGG",
+    "cut_index": 6,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "ScaI",
+    "site": "AGTACT",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "ScrFI",
+    "site": "CCNGG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "SduI",
+    "site": "GDGCHC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "SexAI",
+    "site": "ACCWGGT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SfaNI",
+    "site": "GCATCNNNNN",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SfcI",
+    "site": "CTRYAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SfiI",
+    "site": "GGCCNNNNNGGCC",
+    "cut_index": 8,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SfoI",
+    "site": "GGCGCC",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "SgrAI",
+    "site": "CRCCGGYG",
+    "cut_index": 2,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "SmaI",
+    "site": "CCCGGG",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "SmlI",
+    "site": "CTYRAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SnaBI",
+    "site": "TACGTA",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "SpeI",
+    "site": "ACTAGT",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SphI",
+    "site": "GCATGC",
+    "cut_index": 5,
+    "overhang_type": "3' overhang"
+  },
+  {
+    "name": "SplI",
+    "site": "CGTACG",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "SrfI",
+    "site": "GCCCGGGC",
+    "cut_index": 4,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "SspI",
+    "site": "AATATT",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "StuI",
+    "site": "AGGCCT",
+    "cut_index": 3,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "StyD4I",
+    "site": "CCNGG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "StyI",
+    "site": "CCWWGG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "SwaI",
+    "site": "ATTTAAAT",
+    "cut_index": 4,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "TaqI",
+    "site": "TCGA",
+    "cut_index": 1,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "TaqII",
+    "site": "GACCGANNNNN",
+    "cut_index": 11,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "TfiI",
+    "site": "GAWTC",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "TliI",
+    "site": "CTCGAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "Tru1I",
     "site": "TTAA",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
   },
   {
     "name": "Tru9I",
     "site": "TTAA",
-    "cut_index": 1
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Tsp45I",
+    "site": "GTSAC",
+    "cut_index": 0,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "TspRI",
+    "site": "CASTGNN",
+    "cut_index": 7,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "Tth111I",
+    "site": "GACNNNGTC",
+    "cut_index": 4,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "XapI",
+    "site": "RAATTY",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "XbaI",
+    "site": "TCTAGA",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "XcmI",
+    "site": "CCANNNNNNNNNTGG",
+    "cut_index": 10,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "XhoI",
+    "site": "CTCGAG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "XhoII",
+    "site": "RGATCY",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "XmaI",
+    "site": "CCCGGG",
+    "cut_index": 1,
+    "overhang_type": "5' overhang"
+  },
+  {
+    "name": "XmnI",
+    "site": "GAANNNNTTC",
+    "cut_index": 6,
+    "overhang_type": "Blunt"
+  },
+  {
+    "name": "ZraI",
+    "site": "GACGC",
+    "cut_index": 3,
+    "overhang_type": "3' overhang"
   },
   {
     "name": "ZrmI",
     "site": "AGTACT",
-    "cut_index": 3
+    "cut_index": 3,
+    "overhang_type": "Blunt"
   }
 ]
