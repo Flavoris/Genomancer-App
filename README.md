@@ -1,20 +1,21 @@
 # Restriction Enzyme Simulator
 
-A simple Python tool for simulating restriction enzyme cutting on linear DNA sequences. This is Phase 3 of the simulator, now supporting **advanced IUPAC expansion** and **overhang type classification**, while remaining beginner-friendly with clear explanations and comprehensive comments.
+A comprehensive Python tool for simulating restriction enzyme cutting on **linear and circular** DNA sequences. Now supporting **circular plasmid digestion**, **advanced IUPAC expansion**, and **overhang type classification**, while remaining beginner-friendly with clear explanations and comprehensive comments.
 
 ## Features
 
+- **Linear and Circular DNA Support**: Full support for both linear and circular DNA topology with wrap-around fragment calculation
 - **Multiple Enzyme Support**: Supports 1 to N enzymes for combined digest analysis
 - **Advanced IUPAC Expansion**: Full support for all IUPAC degenerate bases (A,C,G,T,R,Y,W,S,M,K,B,D,H,V,N)
-- **Overhang Type Classification**: Displays overhang type (5' overhang, 3' overhang, Blunt, Unknown) sourced from CSV data
+- **Overhang Type Classification**: Displays overhang type (5' overhang, 3' overhang, Blunt, Unknown) from enzyme metadata
+- **Boundary Annotations**: Tracks which enzymes create each fragment boundary with detailed metadata
 - **Overlapping Matches**: Uses lookahead regex to find all overlapping recognition sites
 - **Extensive Enzyme Database**: Loads from `enzymes.json` file with 350+ enzymes, falls back to 5 built-in enzymes
 - **Flexible Input**: Accept DNA sequences as direct strings or from FASTA/text files
 - **Case-Insensitive Matching**: Automatically handles both uppercase and lowercase enzyme names and DNA sequences
-- **Linear DNA Support**: Calculates fragment lengths for linear DNA molecules
 - **Combined Digest Analysis**: Merges cut positions from multiple enzymes and deduplicates overlapping cuts
 - **Smart Error Handling**: Helpful suggestions for unknown enzyme names with similarity matching
-- **Clear Output**: Detailed analysis showing individual enzyme results, overhang information, and combined digest summary
+- **Clear Output**: Detailed analysis showing fragment positions, wrapping status, boundary enzymes, and validation
 
 ## Installation
 
@@ -63,25 +64,51 @@ The `enzymes.json` file should contain a JSON array of enzyme objects with the f
 ### Basic Syntax
 
 ```bash
-python sim.py --seq <DNA_SEQUENCE_OR_FILE> --enz <ENZYME_NAME_1> [ENZYME_NAME_2] ... [ENZYME_NAME_N]
+# Linear DNA (default)
+python sim.py --seq <DNA_SEQUENCE_OR_FILE> --enz <ENZYME_NAME_1> [ENZYME_NAME_2] ...
+
+# Circular DNA
+python sim.py --seq <DNA_SEQUENCE_OR_FILE> --enz <ENZYME_NAME_1> [ENZYME_NAME_2] ... --circular
+
+# Circular DNA with single-cut linearization
+python sim.py --seq <DNA_SEQUENCE_OR_FILE> --enz <ENZYME_NAME_1> --circular --circular_single_cut_linearizes
 ```
 
 ### Examples
 
-#### Single enzyme (same as before):
+#### Linear DNA Digestion
+
+##### Single enzyme:
 ```bash
 python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz EcoRI
 ```
 
-#### Multiple enzymes (NEW!):
+##### Multiple enzymes:
 ```bash
 python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz EcoRI BamHI
 python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz ecori bamhi hindiii  # Case-insensitive!
 ```
 
-#### Using a FASTA file with multiple enzymes:
+##### Using a FASTA file with multiple enzymes:
 ```bash
 python sim.py --seq sample_dna.fasta --enz BamHI HindIII
+```
+
+#### Circular DNA Digestion (NEW!)
+
+##### Circular plasmid with two cuts:
+```bash
+python sim.py --seq plasmid.fasta --enz EcoRI BamHI --circular
+```
+
+##### Circular plasmid with single cut (default behavior - intact circle):
+```bash
+python sim.py --seq plasmid.fasta --enz EcoRI --circular
+```
+
+##### Circular plasmid with single cut (linearization):
+```bash
+python sim.py --seq plasmid.fasta --enz EcoRI --circular --circular_single_cut_linearizes
 ```
 
 #### Using IUPAC degenerate bases:
@@ -89,15 +116,12 @@ python sim.py --seq sample_dna.fasta --enz BamHI HindIII
 python sim.py --seq "ATCGCCACGTGGCCATCG" --enz BsrI
 ```
 
-#### Using enzymes with overhang information:
-```bash
-python sim.py --seq "ATCGGCCWGGATCG" --enz EcoRII
-```
-
 ### Command-Line Arguments
 
 - `--seq`: DNA sequence as a string or path to a FASTA/text file
 - `--enz`: One or more enzyme names (case-insensitive, with helpful suggestions for unknown enzymes)
+- `--circular`: Treat DNA as circular (default: linear)
+- `--circular_single_cut_linearizes`: In circular mode, one cut yields two fragments instead of one intact circle (default: False)
 
 ## Supported Enzymes
 
@@ -135,9 +159,10 @@ ATCGATCGATCGATCG
 
 ## Output Examples
 
-### Single Enzyme Example
+### Linear DNA - Single Enzyme Example
 ```
 Reading DNA sequence from: ATCGAATTCGGGATCCAAA
+Topology: linear
 DNA sequence length: 19 bp
 DNA sequence: ATCGAATTCGGGATCCAAA
 
@@ -147,14 +172,29 @@ Cut @:  index 1
 Overhang: 5' overhang
 Matches at positions: 4
 
-Fragments:
-  [0 - 4] = 4 bp
-  [4 - 19] = 15 bp
+================================================================================
+DIGESTION RESULTS
+================================================================================
+Mode: linear
+Sequence length: 19 bp
+Total cuts: 1
+Cut positions: 4
+Fragments generated: 2
+
+Fragment Details:
+--------------------------------------------------------------------------------
+Index    Start    End      Length     Wraps    Boundaries
+--------------------------------------------------------------------------------
+0        0        4        4          No       START -> 4(EcoRI)
+1        4        19       15         No       4(EcoRI) -> END
+--------------------------------------------------------------------------------
+✓ Fragment lengths sum correctly to 19 bp
 ```
 
-### Multiple Enzymes Example
+### Linear DNA - Multiple Enzymes Example
 ```
 Reading DNA sequence from: ATCGAATTCGGGATCCAAA
+Topology: linear
 DNA sequence length: 19 bp
 DNA sequence: ATCGAATTCGGGATCCAAA
 
@@ -170,10 +210,103 @@ Cut @:  index 1
 Overhang: 5' overhang
 Matches at positions: 11
 
-Fragments:
-  [0 - 4] = 4 bp
-  [4 - 11] = 7 bp
-  [11 - 19] = 8 bp
+================================================================================
+DIGESTION RESULTS
+================================================================================
+Mode: linear
+Sequence length: 19 bp
+Total cuts: 2
+Cut positions: 4, 11
+Fragments generated: 3
+
+Fragment Details:
+--------------------------------------------------------------------------------
+Index    Start    End      Length     Wraps    Boundaries
+--------------------------------------------------------------------------------
+0        0        4        4          No       START -> 4(EcoRI)
+1        4        11       7          No       4(EcoRI) -> 11(BamHI)
+2        11       19       8          No       11(BamHI) -> END
+--------------------------------------------------------------------------------
+✓ Fragment lengths sum correctly to 19 bp
+```
+
+### Circular DNA - Two Cuts with Wrap-Around Fragment
+```
+Reading DNA sequence from: ATCGAATTCGGGATCCAAA
+Topology: circular
+Single-cut behavior: intact circle (yields 1 fragment)
+DNA sequence length: 19 bp
+DNA sequence: ATCGAATTCGGGATCCAAA
+
+Enzyme: EcoRI
+Site:   GAATTC
+Cut @:  index 1
+Overhang: 5' overhang
+Matches at positions: 4
+
+Enzyme: BamHI
+Site:   GGATCC
+Cut @:  index 1
+Overhang: 5' overhang
+Matches at positions: 11
+
+================================================================================
+DIGESTION RESULTS
+================================================================================
+Mode: circular
+Sequence length: 19 bp
+Total cuts: 2
+Cut positions: 4, 11
+Fragments generated: 2
+
+Fragment Details:
+--------------------------------------------------------------------------------
+Index    Start    End      Length     Wraps    Boundaries
+--------------------------------------------------------------------------------
+0        4        11       7          No       4(EcoRI) -> 11(BamHI)
+1        11       4        12         Yes      11(BamHI) -> 4(EcoRI)
+--------------------------------------------------------------------------------
+✓ Fragment lengths sum correctly to 19 bp
+
+Cut Site Details:
+--------------------------------------------------------------------------------
+  Position 4: EcoRI (site: GAATTC, overhang: 5' overhang)
+  Position 11: BamHI (site: GGATCC, overhang: 5' overhang)
+```
+
+### Circular DNA - Single Cut (Default: Intact Circle)
+```
+Topology: circular
+Single-cut behavior: intact circle (yields 1 fragment)
+DNA sequence length: 100 bp
+
+Fragments generated: 1
+
+Fragment Details:
+--------------------------------------------------------------------------------
+Index    Start    End      Length     Wraps    Boundaries
+--------------------------------------------------------------------------------
+0        0        0        100        Yes      START -> END
+--------------------------------------------------------------------------------
+✓ Fragment lengths sum correctly to 100 bp
+```
+
+### Circular DNA - Single Cut (Linearization Mode)
+```
+Topology: circular
+Single-cut behavior: linearizes (yields 2 fragments)
+DNA sequence length: 100 bp
+
+Fragments generated: 2
+
+Fragment Details:
+--------------------------------------------------------------------------------
+Index    Start    End      Length     Wraps    Boundaries
+--------------------------------------------------------------------------------
+0        30       100      70         No       30(EcoRI) -> 30(EcoRI)
+1        0        30       30         No       30(EcoRI) -> 30(EcoRI)
+--------------------------------------------------------------------------------
+✓ Fragment lengths sum correctly to 100 bp
 ```
 
 ### IUPAC Degenerate Bases Example
@@ -228,39 +361,136 @@ The simulator handles various error conditions:
 
 ```
 RES/
-├── sim.py                    # Main simulator script (Phase 3 - Enhanced features)
-├── enzymes.json              # Extended enzyme database (350+ enzymes)
-├── sample_dna.fasta          # Sample DNA sequence for testing
+├── sim.py                          # Main simulator script with linear/circular support
+├── fragment_calculator.py          # Fragment computation module (linear and circular)
+├── enzymes.json                    # Extended enzyme database (350+ enzymes)
+├── sample_dna.fasta                # Sample DNA sequence for testing
+├── synthetic_restriction_test.fasta # Test sequence for synthetic enzymes
 ├── tests/
-│   ├── test_multi_enzyme.py      # Test cases for multi-enzyme functionality
-│   ├── test_enhanced_features.py # Test cases for IUPAC and enhanced features
-│   └── test_iupac.py            # Legacy IUPAC tests
+│   ├── test_circular.py                # Comprehensive circular DNA tests (NEW!)
+│   ├── test_multi_enzyme.py            # Test cases for multi-enzyme functionality
+│   ├── test_enhanced_features.py       # Test cases for IUPAC and enhanced features
+│   └── test_iupac.py                  # IUPAC expansion tests
 ├── prompts/
-│   ├── prompt.txt               # Original requirements
-│   ├── prompt 2.txt             # Enhancement requirements
-│   ├── prompt 3.txt             # Multi-enzyme requirements
-│   ├── prompt 4.txt             # Advanced features requirements
-│   └── prompt 5                 # Current implementation requirements
-└── README.md                    # This file
+│   ├── prompt.txt                  # Original requirements
+│   ├── prompt 2.txt                # Enhancement requirements
+│   ├── prompt 3.txt                # Multi-enzyme requirements
+│   ├── prompt 4.txt                # Advanced features requirements
+│   ├── prompt 5                    # Current implementation requirements
+│   └── prompt 8.txt                # Circular DNA requirements (THIS IMPLEMENTATION)
+└── README.md                       # This file
 ```
 
 ## Testing
 
-Test the simulator with the included sample file:
+### Manual Testing
+
+Test the simulator with the included sample files:
 
 ```bash
-# Test with single enzyme
+# Linear DNA - single enzyme
 python sim.py --seq sample_dna.fasta --enz EcoRI
 
-# Test with multiple enzymes
+# Linear DNA - multiple enzymes
 python sim.py --seq sample_dna.fasta --enz EcoRI BamHI
 
-# Test with case-insensitive enzyme names
+# Circular DNA - two cuts (shows wrap-around)
+python sim.py --seq sample_dna.fasta --enz EcoRI BamHI --circular
+
+# Circular DNA - single cut (intact circle)
+python sim.py --seq sample_dna.fasta --enz EcoRI --circular
+
+# Circular DNA - single cut (linearized)
+python sim.py --seq sample_dna.fasta --enz EcoRI --circular --circular_single_cut_linearizes
+
+# Case-insensitive enzyme names
 python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz ecori bamhi
 
-# Test with a direct sequence and multiple enzymes
+# Direct sequence with multiple enzymes
 python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz EcoRI BamHI HindIII
 ```
+
+### Automated Testing
+
+Run the comprehensive test suite with pytest:
+
+```bash
+# Run all tests
+python -m pytest tests/ -v
+
+# Run only circular DNA tests
+python -m pytest tests/test_circular.py -v
+
+# Run specific test class
+python -m pytest tests/test_circular.py::TestCircularTwoCuts -v
+```
+
+**Test Coverage:**
+- 26 circular DNA tests covering all edge cases
+- Linear mode regression tests
+- Boundary annotation tests
+- Fragment validation tests
+- Edge cases: zero-length sequences, modulo normalization, etc.
+
+## Circular DNA Digestion
+
+### Overview
+
+Circular DNA (such as plasmids) requires special handling for fragment calculation because the DNA molecule has no "ends" - position 0 is adjacent to position L-1 (where L is the sequence length). This creates the possibility of **wrap-around fragments** that span the origin.
+
+### Circular Mode Behavior
+
+#### No Cuts
+- Returns one intact circular molecule
+- Length = full sequence length
+- Marked as wrapping (conceptually)
+
+#### One Cut
+**Default behavior (`--circular` only):**
+- Returns one fragment of length L
+- Treats the molecule as intact (a single nick doesn't fragment a circle in silico unless specified)
+
+**Linearization mode (`--circular --circular_single_cut_linearizes`):**
+- Returns two fragments
+- Effectively "opens" the circle at the cut site
+- Fragment lengths sum to L
+
+#### Two or More Cuts
+- Returns N fragments (where N = number of cuts)
+- N-1 fragments are regular intervals between consecutive cuts
+- 1 fragment is a **wrap-around fragment** that spans from the last cut, around position 0, to the first cut
+- The wrap-around fragment has:
+  - `start > end` (e.g., start=90, end=10 in a 100bp sequence)
+  - `wraps: true` flag
+  - `length = (L - start) + end`
+
+### Example: Circular Plasmid with Two Cuts
+
+Given a 120 bp circular plasmid with cuts at positions 30 and 90:
+
+**Linear mode would produce:**
+- Fragment 1: [0-30] = 30 bp
+- Fragment 2: [30-90] = 60 bp  
+- Fragment 3: [90-120] = 30 bp
+- Total: 3 fragments
+
+**Circular mode produces:**
+- Fragment 1: [30-90] = 60 bp (regular)
+- Fragment 2: [90-30] = 60 bp (wrap-around: wraps=true)
+  - Length = (120-90) + 30 = 60 bp
+- Total: 2 fragments
+
+### Boundary Annotations
+
+Each fragment includes boundary information showing which enzyme(s) created each cut:
+
+```
+Boundaries:
+  left_cut: {pos: 30, enzymes: [EcoRI]}
+  right_cut: {pos: 90, enzymes: [BamHI]}
+```
+
+If multiple enzymes cut at the same position, all are listed in the boundary annotation.
 
 ## Technical Details
 
@@ -268,38 +498,52 @@ python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz EcoRI BamHI HindIII
 
 1. **Database Loading**: Loads enzyme database from `enzymes.json` if present, otherwise uses built-in database
 2. **Sequence Input**: Reads DNA sequence from string or file, converting to uppercase
-3. **Enzyme Validation**: Validates and normalizes enzyme names (case-insensitive) with similarity matching for errors
-4. **IUPAC Expansion**: Converts IUPAC degenerate bases to regex character classes for pattern matching
-5. **Pattern Matching**: Uses lookahead regex to find all overlapping recognition sites
-6. **Cut Position Calculation**: Computes break positions using cut_index specifications
-7. **Individual Analysis**: For each enzyme, finds cut positions and calculates overhang information
-8. **Cut Position Merging**: Combines cut positions from all enzymes, deduplicating overlapping cuts
-9. **Fragment Calculation**: Determines fragment lengths based on merged cut positions for linear DNA
-10. **Output Generation**: Displays individual enzyme results with overhang information and combined digest summary
+3. **Topology Selection**: Determines linear or circular mode based on `--circular` flag
+4. **Enzyme Validation**: Validates and normalizes enzyme names (case-insensitive) with similarity matching for errors
+5. **IUPAC Expansion**: Converts IUPAC degenerate bases to regex character classes for pattern matching
+6. **Pattern Matching**: Uses lookahead regex to find all overlapping recognition sites
+7. **Cut Position Calculation**: Computes break positions using cut_index specifications
+8. **Metadata Collection**: Collects enzyme name, site, cut_index, and overhang_type for each cut
+9. **Cut Position Merging**: Combines cut positions from all enzymes, deduplicating overlapping cuts
+10. **Fragment Calculation**: 
+    - Linear mode: Standard interval calculation
+    - Circular mode: Includes wrap-around fragment calculation
+11. **Boundary Annotation**: Maps enzymes to fragment boundaries based on cut positions
+12. **Validation**: Verifies fragment lengths sum to sequence length
+13. **Output Generation**: Displays comprehensive results including positions, wrapping status, and boundary enzymes
 
 ### Code Structure
 
+**Main Module (sim.py):**
 - `iupac_to_regex()`: Converts IUPAC degenerate bases to regex character classes
 - `normalize()`: Normalizes enzyme names by removing diacritics and converting to lowercase
-- `load_enzyme_database()`: Loads enzyme information from JSON file with support for both legacy and new formats
+- `load_enzyme_database()`: Loads enzyme information from JSON file with overhang_type support
 - `read_dna_sequence()`: Handles input from string or file with validation
-- `find_cut_sites()`: Locates all recognition sequences using IUPAC expansion and returns break positions with overhang info
+- `find_cut_sites()`: Locates all recognition sequences using IUPAC expansion
 - `find_cut_positions_linear()`: Finds cut positions for a single enzyme
 - `merge_cut_positions()`: Combines and deduplicates cut positions from multiple enzymes
-- `fragments_linear()`: Calculates fragment lengths for combined digest
 - `find_closest_enzyme_names()`: Provides helpful suggestions for unknown enzyme names
-- `calculate_fragments()`: Computes fragment sizes for linear DNA (legacy function)
-- `main()`: Orchestrates the entire process with enhanced command-line interface
+- `main()`: Orchestrates the entire process with linear/circular mode support
 
-## Future Enhancements (Not in Phase 3)
+**Fragment Calculator Module (fragment_calculator.py):**
+- `compute_fragments()`: Core algorithm for fragment calculation supporting both topologies
+  - Handles 0, 1, or N cuts
+  - Implements wrap-around logic for circular DNA
+  - Attaches boundary annotations with enzyme metadata
+- `validate_fragment_total()`: Ensures fragment lengths sum to sequence length
 
-This is Phase 3 of the simulator. Future phases may include:
-- Circular DNA support
-- Gel electrophoresis simulation
-- Graphical output
-- Restriction site mapping
-- Fragment analysis with sticky ends
-- Support for more complex enzyme behaviors (e.g., methylation sensitivity)
+## Future Enhancements
+
+Possible future enhancements may include:
+- Gel electrophoresis simulation with band visualization
+- Graphical output (restriction maps, fragment diagrams)
+- Export to standard formats (GenBank, CSV, JSON)
+- Fragment sequences in output (not just lengths)
+- Sticky end compatibility analysis
+- Support for more complex enzyme behaviors (e.g., methylation sensitivity, temperature requirements)
+- Type IIS enzyme support (cut outside recognition site)
+- Dam/Dcm methylation blocking
+- Star activity prediction
 
 ## License
 

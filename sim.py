@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Restriction Enzyme Simulator - Phase 2
-A simple tool to simulate restriction enzyme cutting on linear DNA sequences.
-Now supports multiple enzymes for combined digest analysis.
+Restriction Enzyme Simulator - Phase 3
+A tool to simulate restriction enzyme cutting on linear and circular DNA sequences.
+Supports multiple enzymes for combined digest analysis and circular topology.
 """
 
 import argparse
@@ -11,6 +11,7 @@ import re
 import sys
 import unicodedata
 from typing import List, Dict, Tuple
+from fragment_calculator import compute_fragments, validate_fragment_total
 
 # IUPAC degenerate base mapping
 IUPAC = {
@@ -415,13 +416,17 @@ def main():
     """Main function to run the restriction enzyme simulator."""
     # Set up command-line argument parsing
     parser = argparse.ArgumentParser(
-        description="Restriction Enzyme Simulator - Phase 2",
+        description="Restriction Enzyme Simulator - Phase 3 (Linear and Circular DNA)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Linear digestion (default)
   python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz EcoRI
-  python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz EcoRI BamHI
-  python sim.py --seq my_dna.fasta --enz BamHI HindIII
+  python sim.py --seq my_dna.fasta --enz EcoRI BamHI
+  
+  # Circular digestion
+  python sim.py --seq plasmid.fasta --enz EcoRI BamHI --circular
+  python sim.py --seq plasmid.fasta --enz EcoRI --circular --circular_single_cut_linearizes
         """,
     )
 
@@ -430,6 +435,14 @@ Examples:
     )
     parser.add_argument(
         "--enz", required=True, nargs='+', help="One or more enzyme names (see available enzymes in output)"
+    )
+    parser.add_argument(
+        "--circular", action="store_true", default=False,
+        help="Treat DNA as circular (default: linear)"
+    )
+    parser.add_argument(
+        "--circular_single_cut_linearizes", action="store_true", default=False,
+        help="In circular mode, one cut yields two fragments instead of one intact circle (default: False)"
     )
 
     args = parser.parse_args()
@@ -488,13 +501,22 @@ Examples:
         if not dna_sequence:
             print("Error: Empty sequence after filtering.")
             sys.exit(1)
+        
+        # Display topology mode
+        topology = "circular" if args.circular else "linear"
+        print(f"Topology: {topology}")
+        if args.circular and args.circular_single_cut_linearizes:
+            print("Single-cut behavior: linearizes (yields 2 fragments)")
+        elif args.circular:
+            print("Single-cut behavior: intact circle (yields 1 fragment)")
             
         print(f"DNA sequence length: {len(dna_sequence)} bp")
         print(f"DNA sequence: {dna_sequence}")
         print()
 
-        # Process each enzyme individually
+        # Process each enzyme individually and collect cut metadata
         cuts_by_enzyme = {}
+        cut_metadata = {}  # Maps cut position -> list of enzyme metadata
         
         for enzyme_name in validated_enzymes:
             enzyme_info = ENZYMES[enzyme_name]
@@ -511,33 +533,100 @@ Examples:
             break_positions = find_cut_positions_linear(dna_sequence, enzyme_name, ENZYMES)
             cuts_by_enzyme[enzyme_name] = break_positions
             
+            # Store metadata for each cut position
+            for pos in break_positions:
+                if pos not in cut_metadata:
+                    cut_metadata[pos] = []
+                cut_metadata[pos].append({
+                    'enzyme': enzyme_name,
+                    'site': recognition_seq,
+                    'cut_index': cut_index,
+                    'overhang_type': overhang_type
+                })
+            
             if break_positions:
                 print(f"Matches at positions: {', '.join(map(str, break_positions))}")
             else:
                 print("No cut sites found.")
             print()
 
-        # Calculate combined digest
-        print("Fragments:")
-        
         # Merge all cut positions
         all_cuts = merge_cut_positions(cuts_by_enzyme, len(dna_sequence))
         
-        # Calculate fragment lengths for combined digest
-        fragment_lengths = fragments_linear(len(dna_sequence), all_cuts)
+        # Compute fragments using new calculator
+        fragments = compute_fragments(
+            cut_positions=all_cuts,
+            seq_len=len(dna_sequence),
+            circular=args.circular,
+            circular_single_cut_linearizes=args.circular_single_cut_linearizes,
+            cut_metadata=cut_metadata
+        )
         
-        # Display fragments with start/end positions
-        positions = [0] + sorted(all_cuts) + [len(dna_sequence)]
-        for i in range(len(positions) - 1):
-            start_pos = positions[i]
-            end_pos = positions[i + 1]
-            fragment_length = end_pos - start_pos
-            print(f"  [{start_pos} - {end_pos}] = {fragment_length} bp")
+        # Display detailed fragment information
+        print("=" * 80)
+        print("DIGESTION RESULTS")
+        print("=" * 80)
+        print(f"Mode: {topology}")
+        print(f"Sequence length: {len(dna_sequence)} bp")
+        print(f"Total cuts: {len(all_cuts)}")
+        if all_cuts:
+            print(f"Cut positions: {', '.join(map(str, sorted(all_cuts)))}")
+        print(f"Fragments generated: {len(fragments)}")
+        print()
+        
+        # Display fragments table
+        print("Fragment Details:")
+        print("-" * 80)
+        header = f"{'Index':<8} {'Start':<8} {'End':<8} {'Length':<10} {'Wraps':<8} {'Boundaries'}"
+        print(header)
+        print("-" * 80)
+        
+        for frag in fragments:
+            idx = frag['index']
+            start = frag['start']
+            end = frag['end']
+            length = frag['length']
+            wraps = 'Yes' if frag['wraps'] else 'No'
+            
+            # Build boundary info string
+            left_info = "START"
+            right_info = "END"
+            
+            if frag['boundaries']['left_cut'] is not None:
+                left_pos = frag['boundaries']['left_cut']['pos']
+                left_enzymes = [e['enzyme'] for e in frag['boundaries']['left_cut']['enzymes']]
+                left_info = f"{left_pos}({','.join(left_enzymes) if left_enzymes else '?'})"
+            
+            if frag['boundaries']['right_cut'] is not None:
+                right_pos = frag['boundaries']['right_cut']['pos']
+                right_enzymes = [e['enzyme'] for e in frag['boundaries']['right_cut']['enzymes']]
+                right_info = f"{right_pos}({','.join(right_enzymes) if right_enzymes else '?'})"
+            
+            boundary_str = f"{left_info} -> {right_info}"
+            
+            print(f"{idx:<8} {start:<8} {end:<8} {length:<10} {wraps:<8} {boundary_str}")
+        
+        print("-" * 80)
         
         # Verify total length
-        total_length = sum(fragment_lengths)
-        if total_length != len(dna_sequence):
-            print(f"Warning: Fragment lengths don't sum to original sequence length! ({total_length} vs {len(dna_sequence)})")
+        if not validate_fragment_total(fragments, len(dna_sequence)):
+            total = sum(f['length'] for f in fragments)
+            print(f"WARNING: Fragment lengths don't sum to sequence length! ({total} vs {len(dna_sequence)})")
+        else:
+            print(f"✓ Fragment lengths sum correctly to {len(dna_sequence)} bp")
+        
+        # Display cut site details
+        if all_cuts:
+            print()
+            print("Cut Site Details:")
+            print("-" * 80)
+            for pos in sorted(all_cuts):
+                enzymes_at_pos = cut_metadata.get(pos, [])
+                for enz_meta in enzymes_at_pos:
+                    print(f"  Position {pos}: {enz_meta['enzyme']} "
+                          f"(site: {enz_meta['site']}, overhang: {enz_meta['overhang_type']})")
+        
+        print()
 
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
