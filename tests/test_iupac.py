@@ -55,8 +55,8 @@ class TestIUPACFunctionality(unittest.TestCase):
         self.assertIn("Invalid character 'X'", str(context.exception))
         
         with self.assertRaises(ValueError) as context:
-            iupac_to_regex("ABG")
-        self.assertIn("Invalid character 'B'", str(context.exception))
+            iupac_to_regex("APG")
+        self.assertIn("Invalid character 'P'", str(context.exception))
 
 
 class TestIUPACCutSiteFinding(unittest.TestCase):
