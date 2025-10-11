@@ -1088,6 +1088,222 @@ python sim.py --seq gene.fasta --enz SpeI XbaI --compatibility --require-directi
 python sim.py --seq pcr_product.fasta --enz SmaI EcoRV --compatibility --include-blunt
 ```
 
+## Theoretical Enzyme Compatibility (No Digest) (NEW!)
+
+The simulator now supports **theoretical compatibility analysis** that predicts sticky-end compatibility between enzymes without requiring a DNA sequence or digest. This feature analyzes enzyme metadata (recognition sites, cut positions, overhang types) to compute compatibility, making it ideal for planning cloning strategies before running experiments.
+
+### Features
+
+- **No Sequence Required**: Analyze enzyme compatibility without loading or digesting DNA
+- **IUPAC Template Support**: Handles degenerate bases in recognition sites (useful for Type IIS enzymes)
+- **Overhang Derivation**: Automatically computes sticky-end templates from enzyme metadata
+- **Palindrome Detection**: Identifies directional vs. non-directional overhangs
+- **Pairwise Analysis**: Compare specific enzymes or generate full compatibility matrix
+- **Multiple Output Formats**: Pairs list, matrix view, or detailed JSON output
+- **Batch Processing**: Analyze all enzymes in database with `--theoretical-all`
+
+### How It Works
+
+The theoretical mode:
+
+1. Loads enzyme metadata from `enzymes.json` (recognition site, cut_index, overhang_type)
+2. Derives the sticky-end template (IUPAC 5'→3' sequence) for each enzyme
+3. Calculates overhang length (k) based on cut geometry
+4. Determines if each overhang is palindromic (self-complementary)
+5. Checks pairwise IUPAC-aware compatibility between all enzyme pairs
+6. Filters results based on your criteria (directionality, minimum length, etc.)
+
+### Compatibility Rules (Theoretical Mode)
+
+1. **Sticky ↔ Sticky only**: Blunt-blunt optional with `--include-blunt`
+2. **Length must match**: Overhang lengths must be identical
+3. **Type must match**: Both 5' OR both 3' overhangs
+4. **IUPAC compatibility**: Templates must be complementary considering degenerate bases
+5. **Geometry match**: 5' vs 3' geometry must be the same
+
+### Basic Usage
+
+```bash
+# Compare specific enzymes
+python sim.py --theoretical-enzymes "EcoRI,XbaI,MfeI"
+
+# Generate compatibility matrix for all enzymes
+python sim.py --theoretical-all --format matrix
+
+# Filter to directional pairs only
+python sim.py --theoretical-enzymes "EcoRI,XbaI,SpeI,NheI" --require-directional
+
+# Detailed JSON output
+python sim.py --theoretical-enzymes "EcoRI,MfeI" --format detailed --json-out results.json
+```
+
+### Theoretical Mode Options
+
+All theoretical compatibility flags:
+
+```bash
+--theoretical-enzymes "Enz1,Enz2,..."  # Comma-separated enzyme names
+--theoretical-all                       # Analyze all enzymes in database
+--format {pairs,matrix,detailed}        # Output format (default: pairs)
+--require-directional                   # Only show non-palindromic pairs
+--include-blunt                         # Include blunt-blunt as compatible
+--min-overhang N                        # Minimum overhang length (default: 1)
+--json-out <path>                       # Export to JSON file
+```
+
+### Output Formats
+
+#### Pairs Format (Default)
+
+Shows compatible enzyme pairs with templates and palindromicity:
+
+```
+Theoretical sticky-end compatibility (no digest)
+================================================================================
+
+EcoRI  | 5' overhang k=4 | tpl=AATT | palindromic: YES
+MfeI   | 5' overhang k=4 | tpl=AATT | palindromic: YES
+  ✔ Compatible (non-directional)
+
+SpeI   | 5' overhang k=4 | tpl=ACTA | palindromic: NO
+XbaI   | 5' overhang k=4 | tpl=CTAG | palindromic: NO
+  ✔ Compatible (directional)
+
+Total compatible pairs: 2
+```
+
+#### Matrix Format
+
+Shows N×N compatibility grid:
+
+```
+Theoretical compatibility matrix (no digest)
+================================================================================
+
+       EcoRI  MfeI  SpeI  XbaI  PstI
+     -----------------------------------
+EcoRI    .     ✓     .     .     .   
+MfeI     ✓     .     .     .     .   
+SpeI     .     .     .     ▶     .   
+XbaI     .     .     ▶     .     .   
+PstI     .     .     .     .     .   
+
+Legend:
+  ✓ = compatible (non-directional/palindromic)
+  ▶ = compatible (directional)
+  . = incompatible or same enzyme
+
+Total compatible pairs: 2
+```
+
+#### Detailed Format (JSON)
+
+Complete metadata for programmatic analysis:
+
+```json
+[
+  {
+    "enzyme_a": "EcoRI",
+    "enzyme_b": "MfeI",
+    "overhang_type": "5' overhang",
+    "k": 4,
+    "template_a": "AATT",
+    "template_b": "AATT",
+    "compatible": true,
+    "directional": false,
+    "reason": "Compatible",
+    "palindromic_a": true,
+    "palindromic_b": true
+  }
+]
+```
+
+### Example Use Cases
+
+#### Planning Directional Cloning
+
+```bash
+# Find all directional enzyme pairs in database
+python sim.py --theoretical-all --require-directional --format matrix
+```
+
+Identifies enzyme pairs that enforce insert orientation (e.g., SpeI/XbaI, NheI/XbaI).
+
+#### Checking Isoschizomer Compatibility
+
+```bash
+# Are EcoRI and MfeI compatible?
+python sim.py --theoretical-enzymes "EcoRI,MfeI"
+```
+
+Output shows they produce identical `AATT` overhangs and are compatible.
+
+#### Surveying Database for Compatible Partners
+
+```bash
+# Find all 4bp 5' overhang enzymes
+python sim.py --theoretical-all --min-overhang 4 --format matrix
+```
+
+Generates a matrix of all enzymes with ≥4bp overhangs.
+
+#### Type IIS Enzyme Analysis
+
+```bash
+# Analyze Type IIS enzymes (may have N in templates)
+python sim.py --theoretical-enzymes "BsaI,Esp3I" --format detailed
+```
+
+IUPAC-aware matching handles degenerate bases in recognition sites.
+
+### IUPAC Support
+
+The theoretical mode fully supports IUPAC degenerate bases:
+
+- **Standard bases**: A, C, G, T
+- **Degenerate codes**: R (A/G), Y (C/T), S (G/C), W (A/T), K (G/T), M (A/C), B (C/G/T), D (A/G/T), H (A/C/T), V (A/C/G), N (any)
+
+Two templates are compatible if at every position, their IUPAC sets intersect when accounting for reverse complementarity.
+
+### Theoretical vs. Actual Overhangs
+
+**Important Notes:**
+
+1. **Type II enzymes**: Theoretical templates accurately predict actual overhangs
+2. **Type IIS enzymes**: Overhangs extend beyond recognition sites, so templates may contain `N` (unknown bases)
+3. **Genomic context**: Type IIS actual sequences depend on flanking DNA, which theoretical mode doesn't have
+4. **Use case**: Theoretical mode predicts *potential* compatibility; actual digest confirms *real* compatibility
+
+For Type IIS enzymes or when you need exact sequences, use regular digest mode with `--compatibility`.
+
+### Large Database Warning
+
+When using `--theoretical-all` with large enzyme databases:
+
+```bash
+python sim.py --theoretical-all --format matrix
+```
+
+Output:
+```
+Analyzing all 350 enzymes in database...
+Warning: Large output expected (350 enzymes)
+```
+
+The matrix will be large but remains useful for identifying clusters of compatible enzymes.
+
+### Comparison with Digest Mode
+
+| Feature | Theoretical Mode | Digest Mode |
+|---------|-----------------|-------------|
+| **Requires sequence** | No | Yes |
+| **Speed** | Instant | Depends on sequence length |
+| **Use case** | Planning, database survey | Actual cloning, verification |
+| **Overhang accuracy** | Template (may have N) | Exact sequences |
+| **Type IIS support** | Partial (N in templates) | Full (actual flanking bases) |
+
+**Recommendation**: Use theoretical mode for planning and exploration, then confirm with digest mode before experimental work.
+
 ## Graphics Output (SVG/PNG) (NEW!)
 
 The simulator now includes **publication-ready SVG graphics generation** for plasmid maps, linear restriction maps, and fragment diagrams. SVG files work in all modern applications and require **no additional dependencies**. Optional PNG export is available if needed.

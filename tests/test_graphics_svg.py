@@ -209,7 +209,7 @@ def test_multiple_enzymes_same_position():
 
 
 def test_svg_to_png_import_error():
-    """Test that svg_to_png raises ImportError when cairosvg is not available."""
+    """Test that svg_to_png handles missing dependencies gracefully."""
     svg = "<svg></svg>"
     
     try:
@@ -218,12 +218,15 @@ def test_svg_to_png_import_error():
         
         try:
             svg_to_png(svg, tmp_path)
-            # If cairosvg is installed, this should succeed
+            # If cairosvg is installed and Cairo library is available, this should succeed
             assert os.path.exists(tmp_path), "PNG file should be created"
             os.unlink(tmp_path)
         except ImportError as e:
             # Expected if cairosvg is not installed
             assert "cairosvg" in str(e).lower(), "Error message should mention cairosvg"
+        except OSError as e:
+            # Expected if cairosvg is installed but Cairo library is not available
+            assert "cairo" in str(e).lower(), "Error message should mention cairo"
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
