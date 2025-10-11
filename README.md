@@ -5,7 +5,9 @@ A comprehensive Python tool for simulating restriction enzyme cutting on **linea
 ## Features
 
 - **Linear and Circular DNA Support**: Full support for both linear and circular DNA topology with wrap-around fragment calculation
-- **Fragment Sequence Extraction (NEW!)**: Returns actual DNA sequences for each fragment with detailed overhang analysis and FASTA export
+- **Fragment Sequence Extraction**: Returns actual DNA sequences for each fragment with detailed overhang analysis and FASTA export
+- **GenBank & CSV Export (NEW!)**: Export digest results to GenBank format or CSV tables for use in other tools
+- **Ligation Compatibility Analysis (NEW!)**: Analyzes which fragment ends are compatible for ligation, with directionality and heuristics
 - **Multiple Enzyme Support**: Supports 1 to N enzymes for combined digest analysis
 - **Advanced IUPAC Expansion**: Full support for all IUPAC degenerate bases (A,C,G,T,R,Y,W,S,M,K,B,D,H,V,N)
 - **Overhang Type Classification**: Displays overhang type (5' overhang, 3' overhang, Blunt, Unknown) from enzyme metadata
@@ -649,6 +651,443 @@ python sim.py --seq sample.fasta --enz EcoRI --simulate-gel --gel-smear light
 python sim.py --seq sample.fasta --enz EcoRI --simulate-gel --gel-smear heavy
 ```
 
+## Export (GenBank & CSV) (NEW!)
+
+The simulator now supports exporting restriction digest results to **GenBank** (.gb/.gbk) and **CSV** formats. This allows you to save digest results for use in other tools or for archival purposes.
+
+### Features
+
+- **GenBank Export**: Standard-compliant GenBank files with LOCUS, FEATURES, and ORIGIN sections
+- **CSV Export**: Separate CSV files for fragments and cut sites with full metadata
+- **Circular Topology Support**: Handles circular DNA with proper `join()` notation for wrap-around features
+- **Complete Metadata**: Includes enzyme names, recognition sites, overhang types, and positions
+- **Customizable**: Add custom definitions, organism names, and topology overrides
+
+### GenBank Export
+
+Export your digest results to a GenBank-formatted file that can be opened in tools like SnapGene, Benchling, or ApE:
+
+```bash
+# Basic GenBank export (linear DNA)
+python sim.py --seq sample.fasta --enz EcoRI BamHI --export-genbank output.gbk
+
+# Circular DNA export
+python sim.py --seq plasmid.fasta --enz EcoRI BamHI --circular --export-genbank plasmid_digest.gb
+
+# With custom definition and organism
+python sim.py --seq plasmid.fasta --enz EcoRI --circular \
+  --export-genbank pUC19_EcoRI.gbk \
+  --gb-definition "pUC19 digested with EcoRI" \
+  --source "E. coli cloning vector"
+```
+
+#### GenBank File Structure
+
+The exported GenBank file includes:
+
+1. **LOCUS**: Sanitized name (max 16 chars), length, DNA type, topology, and date
+2. **DEFINITION**: Custom or default description
+3. **ACCESSION/VERSION**: Blank (standard for synthetic constructs)
+4. **SOURCE**: Organism name with "synthetic construct" lineage
+5. **FEATURES**:
+   - `source` feature spanning the entire molecule
+   - `misc_feature` for each restriction site with enzyme name and overhang details
+   - `misc_feature` for each fragment with length and boundary information
+6. **ORIGIN**: Formatted sequence (60 nt/line, 10-nt blocks, 1-based indexing)
+
+#### Circular DNA Handling
+
+For circular DNA with wrap-around features, the GenBank export uses `join()` notation:
+
+```
+misc_feature    join(901..1000,1..100)
+                /label="fragment_1"
+                /note="length=200bp; left=EcoRI(5' overhang), right=BamHI(5' overhang)"
+```
+
+### CSV Export
+
+Export fragment and cut site data to CSV files for analysis in spreadsheet tools:
+
+```bash
+# Basic CSV export (creates two files: prefix_fragments.csv and prefix_cuts.csv)
+python sim.py --seq sample.fasta --enz EcoRI BamHI --export-csv results/digest
+
+# This creates:
+#   results/digest_fragments.csv
+#   results/digest_cuts.csv
+
+# Circular DNA export
+python sim.py --seq plasmid.fasta --enz EcoRI --circular --export-csv plasmid_analysis
+```
+
+#### CSV File Formats
+
+**Fragments CSV** (`<prefix>_fragments.csv`):
+- `fragment_id`: Fragment number
+- `start_idx`: Start position (0-based, inclusive)
+- `end_idx`: End position (0-based, exclusive)
+- `mode`: "linear" or "circular"
+- `length`: Fragment length in base pairs
+- `left_enzyme`: Enzyme at left boundary (empty if none)
+- `left_overhang_type`: Type of left overhang
+- `left_overhang_len`: Length of left overhang
+- `left_end_bases`: Sequence of left overhang bases
+- `right_enzyme`: Enzyme at right boundary (empty if none)
+- `right_overhang_type`: Type of right overhang
+- `right_overhang_len`: Length of right overhang
+- `right_end_bases`: Sequence of right overhang bases
+- `sequence`: Full fragment sequence
+
+**Cuts CSV** (`<prefix>_cuts.csv`):
+- `cut_id`: Sequential cut number
+- `pos`: Cut position (0-based)
+- `enzyme`: Enzyme name
+- `recognition_site`: Recognition sequence
+- `cut_index`: Position within site where cut occurs
+- `overhang_type`: "5' overhang", "3' overhang", or "Blunt"
+- `overhang_len`: Length of overhang in base pairs
+
+### Export Options
+
+All export-related command-line flags:
+
+```bash
+--export-genbank <path>            # Export to GenBank file at specified path
+--export-csv <prefix>              # Export to CSV files (creates <prefix>_fragments.csv and <prefix>_cuts.csv)
+--gb-definition "<text>"           # GenBank DEFINITION line (default: "Restriction digest export")
+--source "<organism>"              # GenBank SOURCE organism (default: "synthetic DNA")
+--topology {linear,circular}       # Override topology for export (defaults to current run mode)
+```
+
+### Combined Export Example
+
+You can export to both formats simultaneously:
+
+```bash
+# Export to both GenBank and CSV
+python sim.py --seq plasmid.fasta --enz EcoRI BamHI HindIII --circular \
+  --export-genbank output/plasmid_digest.gbk \
+  --export-csv output/plasmid_digest \
+  --gb-definition "Triple digest of pUC19" \
+  --source "pUC19 cloning vector"
+
+# This creates:
+#   output/plasmid_digest.gbk
+#   output/plasmid_digest_fragments.csv
+#   output/plasmid_digest_cuts.csv
+```
+
+### Important Notes
+
+#### Coordinate Systems
+
+- **GenBank**: Uses 1-based, inclusive-inclusive coordinates (e.g., `1..100`)
+- **CSV**: Uses 0-based, inclusive-exclusive coordinates (e.g., `start=0, end=100`)
+- **Circular wraps**: GenBank uses `join()` notation; CSV shows actual start/end with `mode=circular`
+
+#### Fragment Sequences
+
+In CSV export, the `sequence` column contains the full fragment sequence:
+- Linear fragments: Direct subsequence extraction
+- Circular wraps: Concatenated sequence from wrap-around (end of sequence + beginning of sequence)
+
+#### Overhang Information
+
+Both formats include complete overhang metadata:
+- Overhang type (5', 3', or Blunt)
+- Overhang length in base pairs
+- End bases (5'→3' orientation) where applicable
+
+## Ligation Compatibility Analysis (NEW!)
+
+The simulator now includes **ligation compatibility analysis** that determines which fragment ends can be ligated together. This feature analyzes sticky-end compatibility, directionality, and provides ligation heuristics (GC%, Tm) for cloning applications.
+
+### Features
+
+- **Sticky-End Compatibility**: Checks if fragment ends can anneal based on overhang sequence complementarity
+- **Directionality Analysis**: Identifies directional vs. palindromic overhangs (important for preventing self-ligation)
+- **Blunt-End Support**: Optional analysis of blunt-blunt compatibility
+- **Ligation Heuristics**: Calculates GC%, Tm (Wallace rule), and provides ligation guidance
+- **Multiple Output Formats**: Pairs list, compatibility matrix, or detailed report
+- **JSON Export**: Machine-readable output for downstream analysis
+
+### Compatibility Rules
+
+The simulator applies the following rules for ligation compatibility:
+
+1. **Sticky ↔ Sticky only**: Sticky ends can only ligate with other sticky ends (blunt is optional)
+2. **Sticky ↔ Blunt is incompatible**: Mixed sticky/blunt ends cannot ligate
+3. **Length must match**: Both overhangs must be the same length (e.g., 4 bp with 4 bp)
+4. **Type must match**: Both must be 5' overhangs OR both must be 3' overhangs
+5. **Complementarity**: The sticky sequences must be reverse complements: `sticky_seq_A == revcomp(sticky_seq_B)`
+6. **Directionality**: A pair is directional if the overhang is non-palindromic (prevents self-ligation)
+
+### Basic Usage
+
+```bash
+# Basic compatibility analysis
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII --compatibility
+
+# Show detailed information with heuristics
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII --compatibility --compat-summary detailed
+
+# Matrix view of all end-to-end compatibility
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII --compatibility --compat-summary matrix
+
+# Filter to directional pairs only (non-palindromic)
+python sim.py --seq plasmid.fasta --enz SpeI XbaI --compatibility --require-directional
+
+# Include blunt-blunt as compatible
+python sim.py --seq plasmid.fasta --enz EcoRI EcoRV --compatibility --include-blunt
+
+# Export to JSON for downstream analysis
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII --compatibility --json-out results.json
+```
+
+### Compatibility Options
+
+All ligation compatibility flags:
+
+```bash
+--compatibility                 # Enable compatibility analysis
+--compat-summary {pairs,matrix,detailed}  # Output format (default: pairs)
+--require-directional          # Filter to directional pairs only
+--include-blunt                # Include blunt-blunt as compatible (default: False)
+--min-overhang N               # Minimum overhang length for sticky classification (default: 1)
+--json-out <path>              # Export results to JSON file
+```
+
+### Output Formats
+
+#### Pairs Format (Default)
+
+Lists all compatible end pairs with ligation details:
+
+```
+================================================================================
+LIGATION COMPATIBILITY ANALYSIS - COMPATIBLE PAIRS
+================================================================================
+
+Compatible pair #1 (k=4):
+  [frag1:right] EcoRI 5' overhang: AATT
+  ↔ [frag2:left] EcoRI 5' overhang: AATT (revcomp match)
+  directionality: NO (palindromic), GC%: 0.0, Tm≈8°C
+
+Compatible pair #2 (k=4):
+  [frag3:right] SpeI 5' overhang: CTAG
+  ↔ [frag7:left] XbaI 5' overhang: CTAG (revcomp match)
+  directionality: NO (palindromic), GC%: 50.0, Tm≈12°C
+
+Total compatible pairs: 2
+```
+
+#### Matrix Format
+
+Shows N×N compatibility matrix for all fragment ends:
+
+```
+================================================================================
+LIGATION COMPATIBILITY ANALYSIS - COMPATIBILITY MATRIX
+================================================================================
+
+     F0R  F1L  F1R  F2L
+    --------------------
+F0R   ·   ✓   .   . 
+F1L   ✓   ·   .   . 
+F1R   .   .   ·   ✓ 
+F2L   .   .   ✓   · 
+
+Legend:
+  ✓  = compatible (sticky ends)
+  •  = compatible (blunt ends)
+  .  = incompatible
+  ·  = same end
+
+Total compatible pairs: 2
+```
+
+#### Detailed Format
+
+Includes all metadata, heuristics, and scores:
+
+```
+================================================================================
+LIGATION COMPATIBILITY ANALYSIS - DETAILED REPORT
+================================================================================
+
+Pair #1:
+  End A: Fragment 1 (right), Enzyme: EcoRI
+         Type: 5' overhang, Length: 4 bp
+         Sequence: 5'-AATT-3'
+         GC%: 0.0%, Tm: 8.0°C
+  End B: Fragment 2 (left), Enzyme: EcoRI
+         Type: 5' overhang, Length: 4 bp
+         Sequence: 5'-AATT-3'
+         GC%: 0.0%, Tm: 8.0°C
+  Compatible: True
+  Directional: False
+  Note: 5' overhang, 4 bp overhang, non-directional (palindromic)
+
+Total compatible pairs: 1
+```
+
+### Example Scenarios
+
+#### Classic Compatible Pair: SpeI and XbaI
+
+```bash
+python sim.py --seq test.fasta --enz SpeI XbaI --compatibility
+```
+
+SpeI (`A↓CTAGT`) and XbaI (`T↓CTAGA`) both produce `CTAG` overhangs, making them compatible for creating directional cloning sites.
+
+#### Incompatible: EcoRI and MfeI
+
+```bash
+python sim.py --seq test.fasta --enz EcoRI MfeI --compatibility
+```
+
+Although EcoRI (`G↓AATTC`) and MfeI (`C↓AATTG`) produce similar overhangs, they may have different lengths or complementarity depending on the exact cut pattern.
+
+#### 3' Overhangs: PstI and NsiI
+
+```bash
+python sim.py --seq test.fasta --enz PstI NsiI --compatibility
+```
+
+PstI (`CTGCA↓G`) produces a 3' overhang. Compatible ends must also have 3' overhangs with matching sequences.
+
+#### Blunt End Ligation
+
+```bash
+python sim.py --seq test.fasta --enz EcoRV SmaI --compatibility --include-blunt
+```
+
+Both EcoRV and SmaI are blunt cutters. With `--include-blunt`, their ends are compatible for blunt-end ligation (requires T4 DNA ligase).
+
+### Heuristics Explained
+
+#### GC Percentage
+
+Shows the GC content of the overhang sequence:
+- Higher GC% = stronger annealing
+- Typical range: 0-100%
+
+#### Tm Estimation (Wallace Rule)
+
+Rough melting temperature for short overhangs:
+- Formula: `Tm ≈ 2×(A+T) + 4×(G+C)`
+- Only accurate for short oligos (<14 nt)
+- Higher Tm = more stable annealing
+- Useful for choosing ligation temperatures
+
+Example:
+- `AATT`: Tm ≈ 8°C (weak, AT-rich)
+- `GGCC`: Tm ≈ 16°C (strong, GC-rich)
+
+### Directionality
+
+**Directional pairs** have non-palindromic overhangs that enforce insert orientation and prevent self-ligation:
+
+```bash
+# Filter to directional pairs only
+python sim.py --seq test.fasta --enz SpeI XbaI --compatibility --require-directional
+```
+
+**Non-directional (palindromic)** overhangs can self-ligate and don't enforce orientation:
+- EcoRI: `AATT` (palindrome)
+- BamHI: `GATC` (palindrome)
+
+### JSON Export
+
+Export compatibility results for programmatic analysis:
+
+```bash
+python sim.py --seq test.fasta --enz EcoRI HindIII --compatibility --json-out compat.json
+```
+
+JSON format:
+```json
+[
+  {
+    "end_a": {
+      "fragment_id": 0,
+      "polarity": "right",
+      "enzyme": "EcoRI",
+      "overhang_type": "5' overhang",
+      "overhang_len": 4,
+      "sticky_seq": "AATT",
+      "gc_percent": 0.0,
+      "tm": 8.0,
+      "position": 100
+    },
+    "end_b": {
+      "fragment_id": 1,
+      "polarity": "left",
+      "enzyme": "EcoRI",
+      "overhang_type": "5' overhang",
+      "overhang_len": 4,
+      "sticky_seq": "AATT",
+      "gc_percent": 0.0,
+      "tm": 8.0,
+      "position": 200
+    },
+    "compatible": true,
+    "directional": false,
+    "note": "5' overhang, 4 bp overhang, non-directional (palindromic)"
+  }
+]
+```
+
+### Circular DNA Support
+
+Compatibility analysis works with both linear and circular DNA:
+
+```bash
+# Circular plasmid with multiple cuts
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII --circular --compatibility
+
+# Linearized plasmid (single cut)
+python sim.py --seq plasmid.fasta --enz EcoRI --circular --circular_single_cut_linearizes --compatibility
+```
+
+For circular DNA with 2+ cuts, wrap-around fragment ends are analyzed correctly.
+
+### Edge Cases
+
+The simulator handles several edge cases:
+
+1. **Mixed 5' and 3' overhangs**: Always incompatible (different geometry)
+2. **Unequal lengths**: Incompatible even if partially complementary
+3. **Same cut site**: Ends from the same cut can be compatible (useful for re-ligation)
+4. **Coincident cuts**: Multiple enzymes at the same position are handled correctly
+5. **Palindromic sticky ends**: Compatible but flagged as non-directional
+
+### Practical Applications
+
+#### Subcloning Strategy
+
+```bash
+# Check if insert and vector ends are compatible
+python sim.py --seq insert.fasta --enz EcoRI XbaI --compatibility
+python sim.py --seq vector.fasta --enz EcoRI XbaI --compatibility
+```
+
+#### Directional Cloning
+
+```bash
+# Find directional enzyme pairs
+python sim.py --seq gene.fasta --enz SpeI XbaI --compatibility --require-directional
+```
+
+#### Blunt-End Cloning
+
+```bash
+# Check blunt-end compatibility
+python sim.py --seq pcr_product.fasta --enz SmaI EcoRV --compatibility --include-blunt
+```
+
 ## Graphics Output (SVG/PNG) (NEW!)
 
 The simulator now includes **publication-ready SVG graphics generation** for plasmid maps, linear restriction maps, and fragment diagrams. SVG files work in all modern applications and require **no additional dependencies**. Optional PNG export is available if needed.
@@ -1087,7 +1526,9 @@ The simulator handles various error conditions:
 RES/
 ├── sim.py                          # Main simulator script with linear/circular support
 ├── fragment_calculator.py          # Fragment computation module (linear, circular, restriction maps, gel simulation)
-├── gel_ladders.py                  # DNA ladder presets for gel simulation (NEW!)
+├── gel_ladders.py                  # DNA ladder presets for gel simulation
+├── ligation_compatibility.py       # Ligation compatibility analysis (NEW!)
+├── graphics.py                     # SVG/PNG graphics generation
 ├── enzymes.json                    # Extended enzyme database (350+ enzymes)
 ├── sample_dna.fasta                # Sample DNA sequence for testing
 ├── synthetic_restriction_test.fasta # Test sequence for synthetic enzymes
@@ -1097,7 +1538,9 @@ RES/
 │   ├── test_enhanced_features.py       # Test cases for IUPAC and enhanced features
 │   ├── test_iupac.py                   # IUPAC expansion tests
 │   ├── test_restriction_map.py         # Restriction map visualization tests
-│   └── test_gel_ascii.py               # ASCII gel simulation tests (NEW!)
+│   ├── test_gel_ascii.py               # ASCII gel simulation tests
+│   ├── test_ligation_compatibility.py  # Ligation compatibility tests (NEW!)
+│   └── test_ligation_sequence.fasta    # Test sequence for ligation analysis
 ├── prompts/
 │   ├── prompt.txt                  # Original requirements
 │   ├── prompt 2.txt                # Enhancement requirements
@@ -1108,7 +1551,9 @@ RES/
 │   ├── prompt 7.txt                # Further requirements
 │   ├── prompt 8.txt                # Circular DNA requirements
 │   ├── prompt 9.txt                # Restriction map requirements
-│   └── prompt 10.txt               # Gel simulation requirements (THIS IMPLEMENTATION)
+│   ├── prompt 10.txt               # Gel simulation requirements
+│   └── prompt 11.txt               # Graphics output requirements
+│   └── prompt 12.txt               # Ligation compatibility requirements (THIS IMPLEMENTATION)
 └── README.md                       # This file
 ```
 
@@ -1273,21 +1718,34 @@ If multiple enzymes cut at the same position, all are listed in the boundary ann
 - `get_available_ladders()`: Lists available ladder presets
 - Presets: 100bp, 1kb, broad
 
+**Ligation Compatibility Module (ligation_compatibility.py):**
+- `revcomp()`: Calculate reverse complement of DNA sequences
+- `calculate_gc_percent()`: Calculate GC percentage of overhang sequences
+- `calculate_tm()`: Estimate melting temperature using Wallace rule
+- `are_compatible()`: Check if two fragment ends are compatible for ligation
+- `is_directional()`: Determine if a pair is directional (non-palindromic)
+- `calculate_compatibility()`: Analyze all fragment ends for compatibility
+- `format_pairs_output()`: Format results as list of compatible pairs
+- `format_matrix_output()`: Format results as compatibility matrix
+- `format_detailed_output()`: Format results with full details and heuristics
+- `export_to_json()`: Export compatibility results to JSON
+- `analyze_enzyme_pair_theoretical()`: Analyze theoretical enzyme compatibility
+
 ## Future Enhancements
 
 Possible future enhancements may include:
-- Graphical output (SVG/PNG restriction maps, fragment diagrams)
-- Export to standard formats (GenBank, CSV, JSON)
-- Fragment sequences in output (not just lengths)
-- Sticky end compatibility analysis
+- Export to standard formats (GenBank, CSV)
 - Support for more complex enzyme behaviors (e.g., methylation sensitivity, temperature requirements)
 - Enhanced Type IIS enzyme support with better visualization
 - Dam/Dcm methylation blocking
 - Star activity prediction
+- Theoretical enzyme pair compatibility (query without digest)
+- Multi-step cloning strategy planning
 
 **Recently Implemented:**
 - ✅ Text-mode restriction map visualization (prompt 9)
 - ✅ ASCII agarose gel simulation (prompt 10)
+- ✅ Ligation compatibility analysis (prompt 12)
 
 ## License
 
