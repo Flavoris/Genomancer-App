@@ -5,9 +5,11 @@ A comprehensive Python tool for simulating restriction enzyme cutting on **linea
 ## Features
 
 - **Linear and Circular DNA Support**: Full support for both linear and circular DNA topology with wrap-around fragment calculation
+- **Fragment Sequence Extraction (NEW!)**: Returns actual DNA sequences for each fragment with detailed overhang analysis and FASTA export
 - **Multiple Enzyme Support**: Supports 1 to N enzymes for combined digest analysis
 - **Advanced IUPAC Expansion**: Full support for all IUPAC degenerate bases (A,C,G,T,R,Y,W,S,M,K,B,D,H,V,N)
 - **Overhang Type Classification**: Displays overhang type (5' overhang, 3' overhang, Blunt, Unknown) from enzyme metadata
+- **End Base Analysis**: Calculates and reports the exact bases present at each fragment end based on overhang type
 - **Boundary Annotations**: Tracks which enzymes create each fragment boundary with detailed metadata
 - **Overlapping Matches**: Uses lookahead regex to find all overlapping recognition sites
 - **Extensive Enzyme Database**: Loads from `enzymes.json` file with 350+ enzymes, falls back to 5 built-in enzymes
@@ -18,17 +20,19 @@ A comprehensive Python tool for simulating restriction enzyme cutting on **linea
 - **Clear Output**: Detailed analysis showing fragment positions, wrapping status, boundary enzymes, and validation
 - **Restriction Map Visualization**: Text-mode restriction maps showing cut sites along the sequence
 - **Gel Simulation**: ASCII agarose gel electrophoresis with multi-lane support, ladders, and circular DNA topology rendering
-- **Graphics Output (NEW!)**: Publication-ready SVG/PNG generation for plasmid maps, linear maps, and fragment diagrams
+- **Graphics Output**: Publication-ready SVG/PNG generation for plasmid maps, linear maps, and fragment diagrams
 
 ## Installation
 
-No additional dependencies required! This simulator uses only Python standard library modules:
+**No additional dependencies required!** This simulator uses only Python standard library modules:
 - `argparse` for command-line arguments
 - `json` for loading enzyme database
 - `re` for pattern matching and IUPAC expansion
 - `sys` for system operations
 - `unicodedata` for name normalization
 - `typing` for type hints
+
+**Optional:** For PNG export from SVG graphics, you can install `cairo` and `cairosvg` (see Graphics Output section below).
 
 ## Enzyme Database
 
@@ -128,7 +132,13 @@ python sim.py --seq "ATCGCCACGTGGCCATCG" --enz BsrI
 - `--circular`: Treat DNA as circular (default: linear)
 - `--circular_single_cut_linearizes`: In circular mode, one cut yields two fragments instead of one intact circle (default: False)
 
-#### Restriction Map Arguments (NEW!)
+#### Sequence Extraction Arguments (NEW!)
+
+- `--include-seqs`: Include DNA sequences in text output
+- `--seq-context <int>`: Limit sequence display to N bases at each end (0 = show full sequence, default: 0)
+- `--fasta-out <path>`: Output fragment sequences to a FASTA file
+
+#### Restriction Map Arguments
 
 - `--print-map`: Print restriction map after digestion results
 - `--print-map-only`: Print only the restriction map (skip fragment table)
@@ -140,7 +150,162 @@ python sim.py --seq "ATCGCCACGTGGCCATCG" --enz BsrI
 - `--map-show-sites`: Show recognition sequences in the map
 - `--map-circular-origin <int>`: Origin position for circular DNA map (default: 0)
 
-## Restriction Map Visualization (NEW!)
+## Fragment Sequence Extraction (NEW!)
+
+The simulator now extracts and reports the actual DNA sequence for each fragment, including detailed information about overhang types and end bases. This feature supports both linear and circular DNA with wrap-around fragments.
+
+### Features
+
+- **Complete Sequence Extraction**: Returns the exact 5'→3' DNA sequence for each fragment
+- **Overhang Analysis**: Calculates and reports overhang types (5', 3', or blunt) and overhang lengths
+- **End Base Detection**: Shows the specific bases present at each fragment end
+- **Circular Wrap-Around**: Correctly handles fragments that wrap around the origin in circular DNA
+- **FASTA Export**: Exports fragment sequences to FASTA format with informative headers
+- **Context Control**: Option to show only N bases at each end for long fragments
+
+### Basic Usage
+
+#### Display Sequences in Console
+
+```bash
+# Show full sequences inline
+python sim.py --seq plasmid.fasta --enz EcoRI BamHI --include-seqs
+
+# Show only first/last 10 bases of each fragment (elided display)
+python sim.py --seq plasmid.fasta --enz EcoRI BamHI --include-seqs --seq-context 10
+```
+
+#### Export to FASTA File
+
+```bash
+# Export all fragment sequences to a FASTA file
+python sim.py --seq plasmid.fasta --enz EcoRI BamHI --fasta-out fragments.fasta
+
+# Combine with other outputs
+python sim.py --seq plasmid.fasta --enz EcoRI BamHI --include-seqs --fasta-out fragments.fasta --print-map
+```
+
+### Example Output
+
+#### Console Output with Sequences
+
+```bash
+$ python sim.py --seq sample.fasta --enz EcoRI --include-seqs --seq-context 10
+```
+
+```
+================================================================================
+FRAGMENT SEQUENCES
+================================================================================
+
+# Fragment 1 (length: 1421 bp)
+start=1053  end=2474  mode=linear
+ends: left=START, right=EcoRI (5' overhang, 4 bp: AATT)
+seq: ATCGATCGAT...GATCGATCGA
+
+# Fragment 2 (length: 2356 bp)
+start=2474  end=4830  mode=linear
+ends: left=EcoRI (5' overhang, 4 bp: AATT), right=END
+seq: GAATTCGCTA...GCTAGCTAGC
+```
+
+#### FASTA Output Format
+
+The FASTA file contains one entry per fragment with a structured header:
+
+```
+>frag_001|len=1421|start=1053|end=2474|left=START|right=EcoRI:5p:4:AATT
+ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG
+ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG
+...
+
+>frag_002|len=2356|start=2474|end=4830|left=EcoRI:5p:4:AATT|right=END
+GAATTCGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC
+TAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC
+...
+```
+
+**Header Format:**
+- `frag_NNN`: Fragment ID (001, 002, etc.)
+- `len=N`: Fragment length in base pairs
+- `start=N`: Start position (0-based, inclusive)
+- `end=N`: End position (0-based, exclusive)
+- `left=INFO`: Left end information (enzyme:overhang:length:bases or START)
+- `right=INFO`: Right end information (enzyme:overhang:length:bases or END)
+- `wraps=True`: Present only if fragment wraps around origin (circular DNA)
+
+**End Information Format:**
+- `Enzyme:5p:4:AATT` = 5' overhang, 4 bp, bases AATT
+- `Enzyme:3p:4:CTGC` = 3' overhang, 4 bp, bases CTGC
+- `Enzyme:blunt:0` = Blunt end, no overhang
+- `START` = Beginning of linear sequence
+- `END` = End of linear sequence
+
+### Circular DNA with Wrap-Around
+
+For circular DNA with multiple cuts, wrap-around fragments are correctly handled:
+
+```bash
+$ python sim.py --seq plasmid.fasta --enz EcoRI PstI --circular --include-seqs
+```
+
+```
+# Fragment 3 (length: 891 bp)
+start=4530  end=421  mode=circular
+ends: left=PstI (3' overhang, 4 bp: CTGC), right=EcoRI (5' overhang, 4 bp: AATT)
+seq: CTGCAGATCG...ATCGGAATTC
+
+Note: This fragment wraps around the origin (position 0)
+```
+
+### Overhang Type Examples
+
+The simulator calculates overhang lengths and displays end bases for each fragment:
+
+#### 5' Overhang (EcoRI)
+```
+Recognition site: GAATTC
+Cut position: G^AATTC (after position 1)
+Overhang: 4 bp, 5' type
+Left fragment end: ...XXXG (trailing 4 bp form 5' overhang)
+Right fragment end: AATTCXXX... (recessed end)
+```
+
+#### 3' Overhang (PstI)
+```
+Recognition site: CTGCAG
+Cut position: CTGCA^G (after position 5)
+Overhang: 4 bp, 3' type
+Left fragment end: ...CTGCA (recessed end)
+Right fragment end: GXXXX... (3' overhang on complementary strand)
+```
+
+#### Blunt End (EcoRV)
+```
+Recognition site: GATATC
+Cut position: GAT^ATC (after position 3)
+Overhang: 0 bp, blunt
+No overhang bases
+```
+
+### Type IIS Enzymes
+
+The simulator supports Type IIS enzymes that cut outside their recognition sequence:
+
+```bash
+$ python sim.py --seq test.fasta --enz BsaI --include-seqs
+```
+
+BsaI recognizes `GGTCTC` and cuts 7 bp downstream, creating fragments with the cut position offset from the recognition site.
+
+### Validation
+
+The simulator verifies that fragment sequences are correct:
+- ✓ Fragment lengths sum to total sequence length
+- ✓ Sequences concatenate to reconstruct the original DNA (with appropriate overhang handling)
+- ✓ Wrap-around fragments correctly span the origin in circular mode
+
+## Restriction Map Visualization
 
 The simulator now includes a powerful text-mode restriction map that visually summarizes cut sites along the DNA sequence. This feature works for both linear and circular DNA and provides an intuitive overview of where enzymes cut.
 
@@ -486,7 +651,7 @@ python sim.py --seq sample.fasta --enz EcoRI --simulate-gel --gel-smear heavy
 
 ## Graphics Output (SVG/PNG) (NEW!)
 
-The simulator now includes publication-ready SVG graphics generation for plasmid maps, linear restriction maps, and fragment diagrams. SVG files can be converted to high-resolution PNG images for use in presentations and publications.
+The simulator now includes **publication-ready SVG graphics generation** for plasmid maps, linear restriction maps, and fragment diagrams. SVG files work in all modern applications and require **no additional dependencies**. Optional PNG export is available if needed.
 
 ### Features
 
@@ -494,14 +659,15 @@ The simulator now includes publication-ready SVG graphics generation for plasmid
 - **Linear Restriction Maps**: Traditional linear maps with cut positions and enzyme labels
 - **Fragment Diagrams**: Visual representation of fragment sizes with wrap-around indication
 - **Publication Ready**: Clean, professional styling with customizable themes
+- **No Dependencies**: SVG generation works out-of-the-box with no external libraries
 - **Deterministic Colors**: Enzyme colors are consistent across runs (hash-based coloring)
 - **Collision Avoidance**: Smart label placement to prevent overlapping text
 - **Overhang Badges**: Shows overhang type (5', 3', B for blunt) directly from enzymes.json
-- **PNG Export**: Optional high-DPI PNG conversion (requires cairosvg)
+- **PNG Export (Optional)**: High-DPI PNG conversion available with cairo/cairosvg
 
 ### Basic Usage
 
-Generate SVG graphics by adding output path flags:
+Generate SVG graphics by adding output path flags (no additional dependencies required):
 
 ```bash
 # Generate plasmid map
@@ -520,6 +686,8 @@ python sim.py --seq plasmid.fasta --enz EcoRI HindIII --circular \
   --out-svg-fragments frags.svg
 ```
 
+**SVG files can be used directly** in web browsers, vector editors (Inkscape, Illustrator), presentations (PowerPoint, Keynote), documents (Word, Google Docs), and publications. They scale to any size without quality loss.
+
 ### Graphics Options
 
 All graphics generation flags:
@@ -528,7 +696,7 @@ All graphics generation flags:
 --out-svg <path>              # Plasmid/DNA map SVG output path
 --out-svg-linear <path>       # Linear restriction map SVG output path
 --out-svg-fragments <path>    # Fragment diagram SVG output path
---png                         # Also generate PNG files (requires cairosvg)
+--png                         # Also generate PNG files (optional, requires cairo library)
 --theme {light,dark}          # Color theme (default: light)
 --title <text>                # Custom title for graphics
 --show-sites                  # Include recognition sequences on labels
@@ -545,17 +713,18 @@ All graphics generation flags:
 ```bash
 python sim.py --seq plasmid.fasta --enz EcoRI HindIII BamHI --circular \
   --out-svg map.svg --out-svg-linear linear.svg --out-svg-fragments frags.svg \
-  --png --theme dark --show-sites --title "pUC19 Digest" --origin 500
+  --theme dark --show-sites --title "pUC19 Digest" --origin 500
 ```
 
 This command:
 - Digests circular plasmid with three enzymes
-- Generates all three types of graphics
-- Creates PNG versions alongside SVG files
-- Uses dark theme
-- Shows recognition sequences
+- Generates all three types of graphics (SVG format)
+- Uses dark theme for better presentation visibility
+- Shows recognition sequences on labels
 - Uses custom title "pUC19 Digest"
 - Sets circular origin at position 500
+
+Add `--png` if you also want PNG files (requires Cairo library to be installed).
 
 #### Dark Theme with Custom Dimensions
 
@@ -577,30 +746,38 @@ The labels will show:
 - Overhang badges (e.g., "[5']", "[3']", "[B]") by default
 - Position (e.g., "@ 1234")
 
-### PNG Export
+### PNG Export (Optional)
 
-To generate high-resolution PNG images alongside SVG files, install the `cairosvg` library:
+**SVG files are the recommended output format** - they work in all modern applications, scale perfectly, and require no additional dependencies. However, if you specifically need PNG format, you can optionally enable PNG export.
 
-```bash
-pip install cairosvg
-```
+To generate high-resolution PNG images alongside SVG files:
 
-**Note:** cairosvg requires the Cairo graphics library to be installed on your system:
+1. Install the Cairo graphics library on your system:
+   ```bash
+   # macOS
+   brew install cairo
+   
+   # Ubuntu/Debian
+   sudo apt-get install libcairo2-dev
+   
+   # Windows
+   # Download from https://www.cairographics.org/
+   ```
 
-- **macOS**: `brew install cairo`
-- **Ubuntu/Debian**: `sudo apt-get install libcairo2-dev`
-- **Windows**: Download from https://www.cairographics.org/
+2. Install the `cairosvg` Python package:
+   ```bash
+   pip install cairosvg
+   ```
 
-Then use the `--png` flag:
-
-```bash
-python sim.py --seq plasmid.fasta --enz EcoRI --circular \
-  --out-svg map.svg --png
-```
+3. Use the `--png` flag:
+   ```bash
+   python sim.py --seq plasmid.fasta --enz EcoRI --circular \
+     --out-svg map.svg --png
+   ```
 
 This creates both `map.svg` and `map.png` (at 2× resolution for high DPI displays).
 
-If cairosvg is not installed, the simulator will still save the SVG file and display a helpful message about PNG export requirements.
+**If Cairo is not installed:** The simulator will still save the SVG file successfully and display a helpful warning message. Your graphics are not affected - you can use the SVG files directly in publications, presentations, and web pages.
 
 ### Plasmid Map Details
 
