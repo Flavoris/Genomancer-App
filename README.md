@@ -16,6 +16,8 @@ A comprehensive Python tool for simulating restriction enzyme cutting on **linea
 - **Combined Digest Analysis**: Merges cut positions from multiple enzymes and deduplicates overlapping cuts
 - **Smart Error Handling**: Helpful suggestions for unknown enzyme names with similarity matching
 - **Clear Output**: Detailed analysis showing fragment positions, wrapping status, boundary enzymes, and validation
+- **Restriction Map Visualization**: Text-mode restriction maps showing cut sites along the sequence
+- **Gel Simulation**: ASCII agarose gel electrophoresis with multi-lane support, ladders, and circular DNA topology rendering
 
 ## Installation
 
@@ -261,6 +263,226 @@ python sim.py --seq plasmid.fasta --enz EcoRI BamHI --circular --print-map --map
 
 This adjusts the coordinate system so that position 1000 appears at the left edge of the map.
 
+## Gel Simulation (NEW!)
+
+The simulator now includes an ASCII agarose gel electrophoresis visualization that shows how DNA fragments migrate through a gel. This feature supports multiple lanes, different agarose concentrations, circular DNA topology rendering, and customizable gel parameters.
+
+### Features
+
+- **Visual Migration**: Realistic band migration based on fragment size and agarose percentage
+- **Multi-Lane Support**: Compare multiple digests side-by-side with different enzyme combinations
+- **Ladder Support**: Three built-in ladder presets (100bp, 1kb, broad)
+- **Circular DNA Handling**: Special rendering for supercoiled (SC) and open circular (OC) forms
+- **Band Merging**: Automatically merges fragments of similar size with intensity indicators
+- **Customizable Parameters**: Adjust gel size, agarose concentration, smear effects, and more
+
+### Basic Usage
+
+```bash
+# Simple gel with single digest
+python sim.py --seq sample_dna.fasta --enz EcoRI HindIII --simulate-gel
+
+# Show only the gel (skip digestion table)
+python sim.py --seq sample_dna.fasta --enz EcoRI HindIII --gel-only
+
+# Adjust agarose percentage
+python sim.py --seq sample_dna.fasta --enz EcoRI --simulate-gel --gel-percent 1.2
+```
+
+### Gel Parameters
+
+#### Basic Options
+- `--simulate-gel`: Add gel visualization after digestion results
+- `--gel-only`: Show only the gel (skip digestion table and map)
+- `--gel-percent <float>`: Agarose concentration, 0.7-3.0% (default: 1.0)
+- `--gel-length <int>`: Gel height in rows (default: 24)
+- `--gel-width <int>`: Gel width in characters (default: 80)
+
+#### Ladder Options
+- `--gel-ladder <name>`: Ladder preset - "100bp", "1kb", "broad" (default: 1kb)
+
+Available ladders:
+- **100bp**: 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1200, 1500, 2000 bp
+- **1kb**: 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000 bp
+- **broad**: 100, 200, 500, 1000, 1500, 2000, 3000, 4000, 5000, 7000, 10000, 12000 bp
+
+#### Advanced Options
+- `--gel-lane-gap <int>`: Spacing between lanes (default: 3)
+- `--gel-merge-threshold <bp>`: Merge bands closer than this size (default: 20)
+- `--gel-smear {none,light,heavy}`: Add gel artifacts (default: none)
+- `--gel-dye-front <float>`: Dye front position, 0-1 (default: 0.85)
+- `--gel-topology {auto,linearized,native}`: How to render circular DNA (default: auto)
+
+#### Multi-Lane Configuration
+- `--lanes-config <json>`: JSON file or string defining multiple lanes
+
+### Example Output - Linear DNA
+
+```bash
+$ python sim.py --seq sample_dna.fasta --enz EcoRI HindIII --simulate-gel --gel-percent 1.0 --gel-ladder 1kb
+```
+
+```
+================================================================================
+AGAROSE GEL SIMULATION
+================================================================================
+
+┏━┓   ┏━┓
+              
+    ·     
+         ·
+              
+    •     
+         •
+              
+              
+              
+         ·
+              
+              
+              
+              
+    ·     
+              
+              
+              
+              
+~~~~~~~~~~~~~~
+
+Legend:
+  Agarose: 1.0%
+  Dye front: 85%
+
+  Ladder: 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000 bp
+  EcoRI+HindIII: 4872, 1512, 324 bp
+```
+
+### Example Output - Circular DNA with No Cuts
+
+For circular DNA with zero cuts, the gel shows supercoiled (SC) and open circular (OC) forms:
+
+```bash
+$ python sim.py --seq plasmid.fasta --enz NotI --circular --simulate-gel --gel-topology native
+```
+
+```
+================================================================================
+AGAROSE GEL SIMULATION
+================================================================================
+
+┏━┓   ┏━┓
+              
+    ·     
+              
+         ·   (OC - slower migration)
+              
+              
+         ·   (SC - faster migration)
+              
+              
+~~~~~~~~~~~~~~
+
+Legend:
+  Agarose: 1.0%
+  Dye front: 85%
+
+  Ladder: 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000 bp
+  NotI: 3000 (OC), 3000 (SC) bp
+```
+
+### Multi-Lane Gels
+
+Create a JSON configuration file or pass JSON directly to compare multiple digests:
+
+**lanes_config.json:**
+```json
+[
+  {
+    "label": "Uncut",
+    "enzymes": [],
+    "circular": true,
+    "notes": "Control plasmid"
+  },
+  {
+    "label": "EcoRI",
+    "enzymes": ["EcoRI"],
+    "circular": true
+  },
+  {
+    "label": "EcoRI+HindIII",
+    "enzymes": ["EcoRI", "HindIII"],
+    "circular": true
+  }
+]
+```
+
+```bash
+$ python sim.py --seq plasmid.fasta --enz EcoRI --lanes-config lanes_config.json --gel-only
+```
+
+This produces a gel with ladder plus three sample lanes showing different digest conditions.
+
+### Gel Topology Modes
+
+For circular DNA, three topology modes control how fragments are rendered:
+
+#### Auto (default)
+- **0 cuts**: Renders SC/OC forms (native plasmid topology)
+- **1 cut**: Renders as linearized band (single band at full plasmid length)
+- **2+ cuts**: Renders as normal fragments
+
+#### Linearized
+- Always renders fragments as linear DNA, even for single cuts
+
+#### Native
+- Preserves circular topology rendering
+- Shows SC/OC forms for 0-1 cuts
+- Use with `--gel-topology native` flag
+
+Example:
+```bash
+# Force native topology rendering
+python sim.py --seq plasmid.fasta --enz EcoRI --circular --simulate-gel --gel-topology native
+```
+
+### Band Intensity and Merging
+
+Fragments that migrate to the same position or are within the merge threshold are combined into a single brighter band:
+
+- `·` - Single fragment (light)
+- `•` - Two fragments merged
+- `▮` - Three fragments merged
+- `█` - Four or more fragments merged
+
+The legend shows the multiplicity, e.g., "500 (3×)" indicates three fragments near 500 bp merged into one band.
+
+### Agarose Percentage Effects
+
+Different agarose concentrations provide optimal resolution for different size ranges:
+
+- **0.7-0.8%**: Best for large fragments (1-20 kb)
+- **1.0-1.2%**: General purpose (0.5-10 kb)
+- **1.5-2.0%**: Small fragments (0.1-3 kb)
+- **2.5-3.0%**: Very small fragments (50-1000 bp)
+
+Example:
+```bash
+# High percentage gel for small fragments
+python sim.py --seq sample.fasta --enz MseI --simulate-gel --gel-percent 2.0 --gel-ladder 100bp
+```
+
+### Smear Effects
+
+Simulate gel artifacts and DNA degradation:
+
+```bash
+# Light smear (trailing below bands)
+python sim.py --seq sample.fasta --enz EcoRI --simulate-gel --gel-smear light
+
+# Heavy smear (more artifacts, overloading)
+python sim.py --seq sample.fasta --enz EcoRI --simulate-gel --gel-smear heavy
+```
+
 ## Supported Enzymes
 
 With the included `enzymes.json` file, over 160 restriction enzymes are available. Here are examples of the built-in enzymes (available even without `enzymes.json`):
@@ -500,7 +722,8 @@ The simulator handles various error conditions:
 ```
 RES/
 ├── sim.py                          # Main simulator script with linear/circular support
-├── fragment_calculator.py          # Fragment computation module (linear, circular, and restriction maps)
+├── fragment_calculator.py          # Fragment computation module (linear, circular, restriction maps, gel simulation)
+├── gel_ladders.py                  # DNA ladder presets for gel simulation (NEW!)
 ├── enzymes.json                    # Extended enzyme database (350+ enzymes)
 ├── sample_dna.fasta                # Sample DNA sequence for testing
 ├── synthetic_restriction_test.fasta # Test sequence for synthetic enzymes
@@ -509,7 +732,8 @@ RES/
 │   ├── test_multi_enzyme.py            # Test cases for multi-enzyme functionality
 │   ├── test_enhanced_features.py       # Test cases for IUPAC and enhanced features
 │   ├── test_iupac.py                   # IUPAC expansion tests
-│   └── test_restriction_map.py         # Restriction map visualization tests (NEW!)
+│   ├── test_restriction_map.py         # Restriction map visualization tests
+│   └── test_gel_ascii.py               # ASCII gel simulation tests (NEW!)
 ├── prompts/
 │   ├── prompt.txt                  # Original requirements
 │   ├── prompt 2.txt                # Enhancement requirements
@@ -519,7 +743,8 @@ RES/
 │   ├── prompt 6.txt                # Additional requirements
 │   ├── prompt 7.txt                # Further requirements
 │   ├── prompt 8.txt                # Circular DNA requirements
-│   └── prompt 9.txt                # Restriction map requirements (THIS IMPLEMENTATION)
+│   ├── prompt 9.txt                # Restriction map requirements
+│   └── prompt 10.txt               # Gel simulation requirements (THIS IMPLEMENTATION)
 └── README.md                       # This file
 ```
 
@@ -673,11 +898,20 @@ If multiple enzymes cut at the same position, all are listed in the boundary ann
   - Implements wrap-around logic for circular DNA
   - Attaches boundary annotations with enzyme metadata
 - `validate_fragment_total()`: Ensures fragment lengths sum to sequence length
+- `build_restriction_map()`: Generates text-mode restriction maps
+- `simulate_gel()`: Generates ASCII agarose gel electrophoresis visualization
+- `gel_coefficients()`, `calculate_migration_row()`: Migration model for gel simulation
+- `merge_bands()`, `get_band_glyph()`: Band rendering and merging logic
+- `render_circular_topology_bands()`: Special rendering for SC/OC plasmid forms
+
+**Gel Ladders Module (gel_ladders.py):**
+- `get_ladder()`: Returns fragment sizes for standard DNA ladders
+- `get_available_ladders()`: Lists available ladder presets
+- Presets: 100bp, 1kb, broad
 
 ## Future Enhancements
 
 Possible future enhancements may include:
-- Gel electrophoresis simulation with band visualization
 - Graphical output (SVG/PNG restriction maps, fragment diagrams)
 - Export to standard formats (GenBank, CSV, JSON)
 - Fragment sequences in output (not just lengths)
@@ -689,6 +923,7 @@ Possible future enhancements may include:
 
 **Recently Implemented:**
 - ✅ Text-mode restriction map visualization (prompt 9)
+- ✅ ASCII agarose gel simulation (prompt 10)
 
 ## License
 

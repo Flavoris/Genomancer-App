@@ -11,7 +11,8 @@ import re
 import sys
 import unicodedata
 from typing import List, Dict, Tuple
-from fragment_calculator import compute_fragments, validate_fragment_total, build_restriction_map
+from fragment_calculator import compute_fragments, validate_fragment_total, build_restriction_map, simulate_gel
+from gel_ladders import get_ladder
 
 # IUPAC degenerate base mapping
 IUPAC = {
@@ -482,6 +483,56 @@ Examples:
         "--map-circular-origin", type=int, default=0,
         help="Origin position for circular DNA map (default: 0)"
     )
+    
+    # Gel simulation options
+    parser.add_argument(
+        "--simulate-gel", action="store_true", default=False,
+        help="Print ASCII gel simulation after digestion results"
+    )
+    parser.add_argument(
+        "--gel-only", action="store_true", default=False,
+        help="Print only the gel simulation (skip digestion results and map)"
+    )
+    parser.add_argument(
+        "--gel-percent", type=float, default=1.0,
+        help="Agarose gel percentage (0.7-3.0, default: 1.0)"
+    )
+    parser.add_argument(
+        "--gel-length", type=int, default=24,
+        help="Gel height in rows (default: 24)"
+    )
+    parser.add_argument(
+        "--gel-width", type=int, default=80,
+        help="Gel width in characters (default: 80)"
+    )
+    parser.add_argument(
+        "--gel-lane-gap", type=int, default=3,
+        help="Spacing between lanes (default: 3)"
+    )
+    parser.add_argument(
+        "--gel-ladder", type=str, default="1kb",
+        help="Ladder preset: 100bp, 1kb, broad (default: 1kb)"
+    )
+    parser.add_argument(
+        "--gel-topology", choices=["auto", "linearized", "native"], default="auto",
+        help="Topology rendering mode (default: auto)"
+    )
+    parser.add_argument(
+        "--gel-merge-threshold", type=int, default=20,
+        help="Merge bands closer than this size (bp, default: 20)"
+    )
+    parser.add_argument(
+        "--gel-smear", choices=["none", "light", "heavy"], default="none",
+        help="Gel smear effect (default: none)"
+    )
+    parser.add_argument(
+        "--gel-dye-front", type=float, default=0.85,
+        help="Dye front position, 0-1 fraction down gel (default: 0.85)"
+    )
+    parser.add_argument(
+        "--lanes-config", type=str, default=None,
+        help="JSON file or string defining multiple lanes for gel"
+    )
 
     args = parser.parse_args()
 
@@ -612,8 +663,8 @@ Examples:
                     'overhang_type': enz_meta['overhang_type']
                 })
         
-        # Display detailed fragment information (unless --print-map-only is set)
-        if not args.print_map_only:
+        # Display detailed fragment information (unless --print-map-only or --gel-only is set)
+        if not args.print_map_only and not args.gel_only:
             print("=" * 80)
             print("DIGESTION RESULTS")
             print("=" * 80)
@@ -679,8 +730,8 @@ Examples:
             
             print()
         
-        # Display restriction map if requested
-        if args.print_map or args.print_map_only:
+        # Display restriction map if requested (skip with --gel-only)
+        if (args.print_map or args.print_map_only) and not args.gel_only:
             if args.print_map_only:
                 print("=" * 80)
                 print("RESTRICTION MAP")
@@ -706,6 +757,150 @@ Examples:
             
             print(restriction_map)
             print()
+        
+        # Display gel simulation if requested
+        if args.simulate_gel or args.gel_only:
+            # Load ladder
+            try:
+                ladder_bp = get_ladder(args.gel_ladder)
+            except ValueError as e:
+                print(f"Error: {e}")
+                sys.exit(1)
+            
+            # Prepare lanes for gel simulation
+            gel_lanes = []
+            
+            if args.lanes_config:
+                # Load multi-lane configuration
+                try:
+                    # Try to parse as JSON string first
+                    if args.lanes_config.strip().startswith('[') or args.lanes_config.strip().startswith('{'):
+                        lanes_data = json.loads(args.lanes_config)
+                    else:
+                        # Try to load from file
+                        with open(args.lanes_config, 'r') as f:
+                            lanes_data = json.load(f)
+                    
+                    # Ensure it's a list
+                    if isinstance(lanes_data, dict):
+                        lanes_data = [lanes_data]
+                    
+                    # Process each lane configuration
+                    for lane_config in lanes_data:
+                        lane_enzymes = lane_config.get('enzymes', [])
+                        lane_label = lane_config.get('label', '+'.join(lane_enzymes))
+                        lane_circular = lane_config.get('circular', args.circular)
+                        lane_notes = lane_config.get('notes', '')
+                        
+                        # Compute fragments for this lane
+                        lane_cuts_by_enzyme = {}
+                        lane_cut_metadata = {}
+                        
+                        for enz_name in lane_enzymes:
+                            if enz_name not in ENZYMES:
+                                print(f"Warning: Enzyme '{enz_name}' not found, skipping in lane '{lane_label}'")
+                                continue
+                            
+                            enz_info = ENZYMES[enz_name]
+                            enz_cuts = find_cut_positions_linear(dna_sequence, enz_name, ENZYMES)
+                            lane_cuts_by_enzyme[enz_name] = enz_cuts
+                            
+                            for pos in enz_cuts:
+                                if pos not in lane_cut_metadata:
+                                    lane_cut_metadata[pos] = []
+                                lane_cut_metadata[pos].append({
+                                    'enzyme': enz_name,
+                                    'site': enz_info['sequence'],
+                                    'cut_index': enz_info['cut_index'],
+                                    'overhang_type': enz_info['overhang_type']
+                                })
+                        
+                        lane_all_cuts = merge_cut_positions(lane_cuts_by_enzyme, len(dna_sequence))
+                        
+                        # Compute fragments for this lane
+                        lane_fragments = compute_fragments(
+                            cut_positions=lane_all_cuts,
+                            seq_len=len(dna_sequence),
+                            circular=lane_circular,
+                            circular_single_cut_linearizes=args.circular_single_cut_linearizes,
+                            cut_metadata=lane_cut_metadata
+                        )
+                        
+                        # Extract fragment sizes
+                        fragment_sizes = [f['length'] for f in lane_fragments]
+                        
+                        # Determine topology for gel rendering
+                        gel_topology = args.gel_topology
+                        
+                        # Handle circular special cases for gel rendering
+                        if lane_circular:
+                            num_cuts = len(lane_all_cuts)
+                            if gel_topology == "auto":
+                                if num_cuts == 0:
+                                    # No cuts: render SC/OC forms
+                                    gel_topology = "native"
+                                elif num_cuts == 1:
+                                    # One cut: linearized
+                                    gel_topology = "linearized"
+                        
+                        gel_lanes.append({
+                            'label': lane_label,
+                            'fragments': fragment_sizes,
+                            'topology': gel_topology,
+                            'circular': lane_circular,
+                            'notes': lane_notes
+                        })
+                
+                except (json.JSONDecodeError, FileNotFoundError) as e:
+                    print(f"Error loading lanes config: {e}")
+                    sys.exit(1)
+            
+            else:
+                # Use current digest as single lane
+                fragment_sizes = [f['length'] for f in fragments]
+                lane_label = '+'.join(validated_enzymes)
+                
+                # Determine topology for gel rendering
+                gel_topology = args.gel_topology
+                
+                # Handle circular special cases
+                if args.circular:
+                    num_cuts = len(all_cuts)
+                    if gel_topology == "auto":
+                        if num_cuts == 0:
+                            gel_topology = "native"
+                        elif num_cuts == 1:
+                            gel_topology = "linearized"
+                
+                gel_lanes.append({
+                    'label': lane_label,
+                    'fragments': fragment_sizes,
+                    'topology': gel_topology,
+                    'circular': args.circular,
+                    'notes': ''
+                })
+            
+            # Generate gel simulation
+            gel_output = simulate_gel(
+                lanes=gel_lanes,
+                ladder_bp=ladder_bp,
+                gel_percent=args.gel_percent,
+                gel_length=args.gel_length,
+                gel_width=args.gel_width,
+                lane_gap=args.gel_lane_gap,
+                merge_threshold=args.gel_merge_threshold,
+                smear=args.gel_smear,
+                dye_front=args.gel_dye_front
+            )
+            
+            # Print gel
+            if args.gel_only:
+                # Clear previous output and only show gel
+                pass  # Already skipped above with --gel-only
+            else:
+                print()
+            
+            print(gel_output)
 
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")

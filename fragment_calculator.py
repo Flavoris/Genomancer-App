@@ -2,9 +2,12 @@
 """
 Fragment Calculator Module
 Handles fragment computation for both linear and circular DNA digestion.
+Also includes ASCII agarose gel simulation.
 """
 
-from typing import List, Dict, Tuple
+import math
+import random
+from typing import List, Dict, Tuple, Optional
 
 
 def compute_fragments(
@@ -590,4 +593,440 @@ def build_restriction_map(
         lines.append("Single cut on circular molecule (linearization depends on analysis mode)")
     
     return '\n'.join(lines)
+
+
+# ============================================================================
+# AGAROSE GEL SIMULATION
+# ============================================================================
+
+def gel_coefficients(percent: float) -> Tuple[float, float]:
+    """
+    Get migration coefficients (a, b) for the log-linear model based on agarose %.
+    
+    Migration formula: y_norm = clamp01(a + b * log10(bp))
+    Higher % resolves smaller bands better, slows large ones.
+    
+    Small fragments migrate further (higher y_norm, larger row number).
+    Large fragments migrate less (lower y_norm, smaller row number).
+    
+    Typical range: log10(100) = 2, log10(10000) = 4
+    We want small fragments near y=0.9 and large near y=0.1
+    
+    Args:
+        percent: Agarose concentration (0.7 to 3.0)
+        
+    Returns:
+        Tuple of (a, b) coefficients
+    """
+    # Lower % gels are better for larger fragments
+    if percent <= 0.8:
+        return (1.8, -0.42)  # Good for large fragments
+    elif percent <= 1.0:
+        return (1.7, -0.40)  # General purpose
+    elif percent <= 1.2:
+        return (1.65, -0.38)
+    elif percent <= 1.5:
+        return (1.6, -0.37)
+    elif percent <= 2.0:
+        return (1.55, -0.36)  # Good for small fragments
+    else:
+        return (1.5, -0.35)  # Best for very small fragments
+
+
+def calculate_migration_row(
+    bp: int,
+    gel_percent: float,
+    gel_length: int,
+    dye_front: float
+) -> int:
+    """
+    Calculate the row index for a DNA fragment based on size.
+    
+    Args:
+        bp: Fragment size in base pairs
+        gel_percent: Agarose concentration
+        gel_length: Total gel height in rows
+        dye_front: Dye front position (0-1 fraction down the gel)
+        
+    Returns:
+        Row index where the band appears
+    """
+    if bp <= 0:
+        return 0
+    
+    # Get migration coefficients
+    a, b = gel_coefficients(gel_percent)
+    
+    # Calculate normalized position (0 = top, 1 = bottom)
+    y_norm = a + b * math.log10(bp)
+    y_norm = max(0.0, min(1.0, y_norm))  # Clamp to [0, 1]
+    
+    # Convert to row index (wells at top, bands migrate down)
+    max_row = int((gel_length - 1) * dye_front)
+    row = int(y_norm * max_row)
+    
+    # Ensure band is below wells (row 0-1 are wells)
+    row = max(2, row)
+    
+    return row
+
+
+def merge_bands(
+    fragments: List[int],
+    merge_threshold: int,
+    gel_percent: float,
+    gel_length: int,
+    dye_front: float
+) -> Dict[int, List[int]]:
+    """
+    Group fragments into bands based on merge threshold.
+    
+    Fragments that land on the same row or have size difference <= threshold
+    are merged into one band.
+    
+    Args:
+        fragments: List of fragment sizes in bp
+        merge_threshold: Size difference threshold for merging (bp)
+        gel_percent: Agarose concentration
+        gel_length: Gel height in rows
+        dye_front: Dye front position
+        
+    Returns:
+        Dictionary mapping row index to list of fragment sizes in that band
+    """
+    if not fragments:
+        return {}
+    
+    # Sort fragments by size
+    sorted_fragments = sorted(fragments)
+    
+    # Calculate row for each fragment
+    fragment_rows = [(bp, calculate_migration_row(bp, gel_percent, gel_length, dye_front)) 
+                     for bp in sorted_fragments]
+    
+    # Group by row and merge threshold
+    bands = {}  # row -> list of bp values
+    
+    for bp, row in fragment_rows:
+        placed = False
+        
+        # Check if we can merge with existing band at this row
+        if row in bands:
+            # Check if size difference is within threshold
+            for existing_bp in bands[row]:
+                if abs(bp - existing_bp) <= merge_threshold:
+                    bands[row].append(bp)
+                    placed = True
+                    break
+        
+        if not placed:
+            # Try adjacent rows
+            for adj_row in [row - 1, row, row + 1]:
+                if adj_row in bands and adj_row >= 2:
+                    for existing_bp in bands[adj_row]:
+                        if abs(bp - existing_bp) <= merge_threshold:
+                            bands[adj_row].append(bp)
+                            placed = True
+                            break
+                if placed:
+                    break
+        
+        if not placed:
+            # Create new band
+            bands[row] = [bp]
+    
+    return bands
+
+
+def get_band_glyph(intensity: int) -> str:
+    """
+    Get the character glyph for a band based on intensity (number of merged fragments).
+    
+    Args:
+        intensity: Number of fragments merged into this band
+        
+    Returns:
+        Character to display
+    """
+    if intensity >= 4:
+        return '█'
+    elif intensity >= 3:
+        return '▮'
+    elif intensity >= 2:
+        return '•'
+    else:
+        return '·'
+
+
+def add_smear(
+    canvas: List[List[str]],
+    lane_col: int,
+    bands_in_lane: Dict[int, List[int]],
+    smear: str,
+    gel_length: int,
+    seed: Optional[int] = None
+) -> None:
+    """
+    Add smearing/noise to a lane to simulate gel artifacts.
+    
+    Args:
+        canvas: 2D array of characters [row][col]
+        lane_col: Column index for this lane
+        bands_in_lane: Dictionary of bands (row -> bp list)
+        smear: Smear intensity ("none", "light", "heavy")
+        gel_length: Height of gel
+        seed: Random seed for deterministic smearing
+    """
+    if smear == "none" or not bands_in_lane:
+        return
+    
+    if seed is not None:
+        random.seed(seed)
+    
+    # Find lowest band (highest row number)
+    max_band_row = max(bands_in_lane.keys())
+    
+    # Add tailing below bands
+    if smear == "light":
+        # Light smear: few dots below bands
+        for row in range(max_band_row + 1, min(max_band_row + 5, gel_length)):
+            if random.random() < 0.15:
+                if canvas[row][lane_col] == ' ':
+                    canvas[row][lane_col] = '.'
+    
+    elif smear == "heavy":
+        # Heavy smear: more dots and commas
+        for row in range(max_band_row + 1, min(max_band_row + 8, gel_length)):
+            rand_val = random.random()
+            if rand_val < 0.25:
+                if canvas[row][lane_col] == ' ':
+                    canvas[row][lane_col] = '.' if rand_val < 0.20 else ','
+
+
+def render_circular_topology_bands(
+    L: int,
+    topology: str,
+    gel_percent: float,
+    gel_length: int,
+    dye_front: float
+) -> Dict[int, List[tuple]]:
+    """
+    Render plasmid topology forms (supercoiled, nicked, linear) for circular DNA with 0 cuts.
+    
+    Args:
+        L: Plasmid size in bp
+        topology: "native" or "auto"
+        gel_percent: Agarose concentration
+        gel_length: Gel height in rows
+        dye_front: Dye front position
+        
+    Returns:
+        Dictionary mapping row to list of (label, size) tuples
+    """
+    # Calculate where linear form would migrate
+    linear_row = calculate_migration_row(L, gel_percent, gel_length, dye_front)
+    
+    # Delta for topology forms (about 12% of gel height)
+    delta = int(0.12 * gel_length)
+    delta = max(1, delta)
+    
+    # Supercoiled migrates faster (higher row number = further down)
+    sc_row = linear_row + delta
+    # Nicked/open circular migrates slower (lower row number = stays higher)
+    oc_row = linear_row - delta
+    
+    # Clamp to valid range (below wells, above max)
+    sc_row = max(2, min(gel_length - 1, sc_row))
+    oc_row = max(2, min(gel_length - 1, oc_row))
+    
+    bands = {}
+    bands[sc_row] = [('SC', L)]
+    bands[oc_row] = [('OC', L)]
+    
+    return bands
+
+
+def simulate_gel(
+    lanes: List[dict],
+    ladder_bp: List[int],
+    *,
+    gel_percent: float = 1.0,
+    gel_length: int = 24,
+    gel_width: int = 80,
+    lane_gap: int = 3,
+    merge_threshold: int = 20,
+    smear: str = "none",
+    dye_front: float = 0.85
+) -> str:
+    """
+    Simulate an ASCII agarose gel electrophoresis.
+    
+    Args:
+        lanes: List of lane dictionaries, each with:
+               - label: str (lane name)
+               - fragments: List[int] (fragment sizes in bp)
+               - topology: str ("auto", "linearized", "native")
+               - circular: bool (whether this is circular DNA)
+        ladder_bp: List of ladder fragment sizes
+        gel_percent: Agarose concentration (0.7-3.0)
+        gel_length: Gel height in character rows
+        gel_width: Total gel width in characters
+        lane_gap: Spacing between lanes
+        merge_threshold: Size difference for merging bands (bp)
+        smear: Smear effect ("none", "light", "heavy")
+        dye_front: Dye front position (0-1, fraction down gel)
+        
+    Returns:
+        Multi-line ASCII gel string
+    """
+    # Validate inputs
+    if gel_percent < 0.7 or gel_percent > 3.0:
+        gel_percent = max(0.7, min(3.0, gel_percent))
+    
+    if gel_length < 10:
+        gel_length = 10
+    
+    if gel_width < 40:
+        gel_width = 40
+    
+    # Calculate lane widths
+    total_lanes = 1 + len(lanes)  # ladder + sample lanes
+    lane_width = (gel_width - (total_lanes - 1) * lane_gap) // total_lanes
+    lane_width = max(1, lane_width)
+    
+    # Initialize canvas
+    canvas = [[' ' for _ in range(gel_width)] for _ in range(gel_length)]
+    
+    # Track lane info for legend
+    lane_info = []
+    
+    # Process ladder first
+    ladder_label = "Ladder"
+    ladder_bands = merge_bands(ladder_bp, merge_threshold, gel_percent, gel_length, dye_front)
+    ladder_col = lane_width // 2
+    lane_info.append({
+        'label': ladder_label,
+        'col': ladder_col,
+        'bands': ladder_bands,
+        'fragments': sorted(ladder_bp)
+    })
+    
+    # Process sample lanes
+    for lane_idx, lane in enumerate(lanes):
+        lane_label = lane.get('label', f'Lane{lane_idx+1}')
+        fragments = lane.get('fragments', [])
+        topology = lane.get('topology', 'auto')
+        circular = lane.get('circular', False)
+        
+        # Calculate column position
+        lane_col = (lane_idx + 1) * (lane_width + lane_gap) + lane_width // 2
+        
+        # Handle circular topology special cases
+        if circular and len(fragments) == 1 and topology in ['auto', 'native']:
+            # Check if this is a 0-cut or 1-cut scenario
+            # For 0 cuts: render SC/OC forms
+            # For 1 cut (auto): single linearized band
+            L = fragments[0]
+            
+            # If we have exactly the plasmid length, it could be 0 or 1 cut
+            # The caller should tell us via the fragments list
+            # Assume if fragments=[L], it's either 1-cut linearized or intact
+            # For native topology with 0 cuts, render SC/OC
+            if topology == 'native':
+                # Render supercoiled and open circular
+                bands = render_circular_topology_bands(L, topology, gel_percent, gel_length, dye_front)
+            else:
+                # topology == 'auto': single cut linearized
+                bands = merge_bands(fragments, merge_threshold, gel_percent, gel_length, dye_front)
+        else:
+            # Normal fragment migration
+            bands = merge_bands(fragments, merge_threshold, gel_percent, gel_length, dye_front)
+        
+        lane_info.append({
+            'label': lane_label,
+            'col': lane_col,
+            'bands': bands,
+            'fragments': fragments,
+            'topology': topology,
+            'circular': circular
+        })
+    
+    # Draw wells at top (rows 0-1)
+    for info in lane_info:
+        col = info['col']
+        if col > 0 and col < gel_width - 1:
+            canvas[0][col-1] = '┏'
+            canvas[0][col] = '━'
+            canvas[0][col+1] = '┓'
+    
+    # Draw bands for all lanes
+    for info in lane_info:
+        col = info['col']
+        bands = info['bands']
+        
+        for row, bp_list in bands.items():
+            if row < gel_length and col < gel_width:
+                intensity = len(bp_list)
+                glyph = get_band_glyph(intensity)
+                canvas[row][col] = glyph
+        
+        # Add smear if requested
+        add_smear(canvas, col, bands, smear, gel_length, seed=42)
+    
+    # Draw dye front line
+    dye_row = int((gel_length - 1) * dye_front)
+    if 2 <= dye_row < gel_length:
+        for c in range(gel_width):
+            if canvas[dye_row][c] == ' ':
+                canvas[dye_row][c] = '~'
+    
+    # Convert canvas to string
+    gel_lines = [''.join(row) for row in canvas]
+    
+    # Build legend on the right side
+    legend_lines = []
+    legend_lines.append(f"  Agarose: {gel_percent}%")
+    legend_lines.append(f"  Dye front: {int(dye_front*100)}%")
+    legend_lines.append("")
+    
+    for idx, info in enumerate(lane_info):
+        label = info['label']
+        fragments = info.get('fragments', [])
+        bands = info['bands']
+        
+        # Count merged bands
+        band_labels = []
+        for row in sorted(bands.keys()):
+            bp_list = bands[row]
+            if len(bp_list) > 1:
+                # Merged band
+                avg_size = int(sum(bp_list) / len(bp_list))
+                band_labels.append(f"{avg_size} ({len(bp_list)}×)")
+            elif bp_list and isinstance(bp_list[0], tuple):
+                # Topology label (SC, OC)
+                band_labels.append(f"{bp_list[0][1]} ({bp_list[0][0]})")
+            else:
+                # Single band
+                band_labels.append(f"{bp_list[0]}")
+        
+        band_str = ", ".join(band_labels) if band_labels else "no cuts"
+        legend_lines.append(f"  {label}: {band_str} bp")
+    
+    # Combine gel and legend
+    result_lines = []
+    result_lines.append("=" * gel_width)
+    result_lines.append("AGAROSE GEL SIMULATION")
+    result_lines.append("=" * gel_width)
+    result_lines.append("")
+    
+    # Add gel canvas
+    result_lines.extend(gel_lines)
+    result_lines.append("")
+    
+    # Add legend
+    result_lines.append("Legend:")
+    result_lines.extend(legend_lines)
+    result_lines.append("")
+    
+    return '\n'.join(result_lines)
 
