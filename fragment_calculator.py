@@ -195,6 +195,97 @@ def extract_end_bases(
         return seq[start:end]
 
 
+def extract_sticky_seq(
+    seq: str,
+    cut_pos: int,
+    enzyme_meta: Dict,
+    is_left_end: bool,
+    circular: bool = False
+) -> str:
+    """
+    Extract the sticky sequence for ligation compatibility analysis.
+    
+    This represents the single-stranded overhang sequence in 5'→3' orientation
+    on the fragment strand that will anneal with a complementary overhang.
+    
+    For 5' overhangs:
+      - The top strand extends past the bottom strand at the 5' end
+      - Left fragment end: the overhanging bases are at the 3' end (trailing)
+      - Right fragment end: the overhanging bases are at the 5' end (leading)
+    
+    For 3' overhangs:
+      - The bottom strand extends past the top strand at the 3' end
+      - Left fragment end: the overhanging bases are at the 5' end (leading)
+      - Right fragment end: the overhanging bases are at the 3' end (trailing)
+    
+    Args:
+        seq: Full DNA sequence
+        cut_pos: Position of the cut
+        enzyme_meta: Dictionary with enzyme information
+        is_left_end: True if this is the left (5') end of the fragment
+        circular: True if sequence is circular
+        
+    Returns:
+        String representing the sticky overhang sequence (5'→3')
+    """
+    overhang_type = enzyme_meta.get('overhang_type', 'Blunt')
+    recognition_site = enzyme_meta.get('site', '')
+    cut_index = enzyme_meta.get('cut_index', 0)
+    
+    # Calculate overhang length
+    overhang_len = calculate_overhang_length(recognition_site, cut_index)
+    
+    if overhang_type == "Blunt" or overhang_len == 0:
+        return ""
+    
+    seq_len = len(seq)
+    
+    # For ligation compatibility, we need the single-stranded overhang
+    # that will be available for annealing
+    
+    if overhang_type == "5' overhang":
+        # 5' overhang: top strand extends beyond bottom strand
+        # The recognition site is cut asymmetrically
+        # Example: EcoRI cuts G^AATTC, producing ...G and AATTC...
+        
+        if is_left_end:
+            # Left end of a fragment after a 5' overhang cut
+            # The fragment ends with bases that stick out on the 5' side
+            # These are the last bases before the cut
+            start = cut_pos - overhang_len
+            end = cut_pos
+        else:
+            # Right end of a fragment after a 5' overhang cut
+            # The fragment starts with bases that are recessed
+            # The sticky sequence is the complement of what's missing
+            start = cut_pos
+            end = cut_pos + overhang_len
+    
+    else:  # 3' overhang
+        # 3' overhang: bottom strand extends beyond top strand
+        # Example: PstI cuts CTGCA^G, producing CTGCA and G...
+        
+        if is_left_end:
+            # Left end of a fragment after a 3' overhang cut
+            # The fragment starts with recessed top strand
+            start = cut_pos
+            end = cut_pos + overhang_len
+        else:
+            # Right end of a fragment after a 3' overhang cut
+            # The fragment ends with sticky 3' overhang
+            start = cut_pos - overhang_len
+            end = cut_pos
+    
+    # Handle circular wrapping
+    if circular:
+        return slice_circular(seq, start, end)
+    else:
+        # Clamp to sequence boundaries
+        start = max(0, min(start, seq_len))
+        end = max(0, min(end, seq_len))
+        return seq[start:end]
+
+
 def build_end_info(
     enzyme_meta: Dict,
     seq: str,
@@ -733,6 +824,187 @@ def compute_fragments_with_sequences(
             ))
     
     return fragments
+
+
+# ============================================================================
+# LIGATION COMPATIBILITY SUPPORT
+# ============================================================================
+
+def extract_fragment_ends_for_ligation(
+    dna_sequence: str,
+    cut_positions: List[int],
+    circular: bool = False,
+    circular_single_cut_linearizes: bool = False,
+    cut_metadata: Dict[int, List[Dict]] = None
+) -> List:
+    """
+    Extract all fragment ends for ligation compatibility analysis.
+    
+    Returns a list of EndInfo objects compatible with ligation_compatibility module.
+    
+    Args:
+        dna_sequence: The complete DNA sequence
+        cut_positions: List of cut position indices
+        circular: If True, treat DNA as circular
+        circular_single_cut_linearizes: If True and circular, one cut yields two fragments
+        cut_metadata: Dictionary mapping cut position to enzyme metadata
+        
+    Returns:
+        List of EndInfo objects with sticky_seq for ligation analysis
+    """
+    # Import the ligation compatibility EndInfo here to avoid circular imports
+    from ligation_compatibility import EndInfo as LigationEndInfo
+    
+    seq_len = len(dna_sequence)
+    
+    if seq_len == 0:
+        return []
+    
+    # Default empty metadata
+    if cut_metadata is None:
+        cut_metadata = {}
+    
+    # Normalize and deduplicate cut positions
+    ps = sorted(set(p % seq_len for p in cut_positions))
+    n = len(ps)
+    
+    # Build position-to-enzyme mapping with metadata
+    pos_to_enzymes = {}
+    for pos in ps:
+        # Get all enzymes that cut at this position
+        enzymes_at_pos = []
+        for orig_pos in cut_positions:
+            normalized = orig_pos % seq_len
+            if normalized == pos and orig_pos in cut_metadata:
+                enzymes_at_pos.extend(cut_metadata[orig_pos])
+        
+        # Deduplicate by enzyme name
+        seen = set()
+        unique_enzymes = []
+        for enz_meta in enzymes_at_pos:
+            if enz_meta['enzyme'] not in seen:
+                seen.add(enz_meta['enzyme'])
+                unique_enzymes.append(enz_meta)
+        
+        pos_to_enzymes[pos] = unique_enzymes
+    
+    ends = []
+    fragment_id = 0
+    
+    if not circular:
+        # ========== LINEAR MODE ==========
+        if n == 0:
+            # No cuts - no sticky ends to analyze
+            return []
+        
+        # Process each cut position
+        for i, cut_pos in enumerate(ps):
+            enzymes = pos_to_enzymes.get(cut_pos, [])
+            
+            for enzyme_meta in enzymes:
+                # Left fragment end (right side of previous fragment)
+                if i > 0 or cut_pos > 0:
+                    sticky_seq = extract_sticky_seq(dna_sequence, cut_pos, enzyme_meta, False, circular)
+                    end = LigationEndInfo(
+                        enzyme=enzyme_meta['enzyme'],
+                        overhang_type=enzyme_meta['overhang_type'],
+                        overhang_len=calculate_overhang_length(enzyme_meta['site'], enzyme_meta['cut_index']),
+                        sticky_seq=sticky_seq,
+                        polarity="left",
+                        fragment_id=i + 1,
+                        position=cut_pos
+                    )
+                    ends.append(end)
+                
+                # Right fragment end (left side of next fragment)
+                if i < n - 1 or cut_pos < seq_len:
+                    sticky_seq = extract_sticky_seq(dna_sequence, cut_pos, enzyme_meta, True, circular)
+                    end = LigationEndInfo(
+                        enzyme=enzyme_meta['enzyme'],
+                        overhang_type=enzyme_meta['overhang_type'],
+                        overhang_len=calculate_overhang_length(enzyme_meta['site'], enzyme_meta['cut_index']),
+                        sticky_seq=sticky_seq,
+                        polarity="right",
+                        fragment_id=i,
+                        position=cut_pos
+                    )
+                    ends.append(end)
+    
+    else:
+        # ========== CIRCULAR MODE ==========
+        if n == 0:
+            # No cuts - intact circle, no ends
+            return []
+        
+        if n == 1:
+            # One cut
+            if circular_single_cut_linearizes:
+                # Two fragments with same enzyme at both ends
+                cut_pos = ps[0]
+                enzymes = pos_to_enzymes.get(cut_pos, [])
+                
+                for enzyme_meta in enzymes:
+                    # Both ends of the linearized plasmid
+                    sticky_seq_left = extract_sticky_seq(dna_sequence, cut_pos, enzyme_meta, True, circular)
+                    sticky_seq_right = extract_sticky_seq(dna_sequence, cut_pos, enzyme_meta, False, circular)
+                    
+                    end_left = LigationEndInfo(
+                        enzyme=enzyme_meta['enzyme'],
+                        overhang_type=enzyme_meta['overhang_type'],
+                        overhang_len=calculate_overhang_length(enzyme_meta['site'], enzyme_meta['cut_index']),
+                        sticky_seq=sticky_seq_left,
+                        polarity="left",
+                        fragment_id=0,
+                        position=cut_pos
+                    )
+                    
+                    end_right = LigationEndInfo(
+                        enzyme=enzyme_meta['enzyme'],
+                        overhang_type=enzyme_meta['overhang_type'],
+                        overhang_len=calculate_overhang_length(enzyme_meta['site'], enzyme_meta['cut_index']),
+                        sticky_seq=sticky_seq_right,
+                        polarity="right",
+                        fragment_id=0,
+                        position=cut_pos
+                    )
+                    
+                    ends.extend([end_left, end_right])
+            else:
+                # One fragment - intact circle, no ends to analyze
+                return []
+        else:
+            # Multiple cuts - process all boundaries
+            for i, cut_pos in enumerate(ps):
+                enzymes = pos_to_enzymes.get(cut_pos, [])
+                
+                for enzyme_meta in enzymes:
+                    # Left end of fragment starting at this cut
+                    sticky_seq_left = extract_sticky_seq(dna_sequence, cut_pos, enzyme_meta, True, circular)
+                    end_left = LigationEndInfo(
+                        enzyme=enzyme_meta['enzyme'],
+                        overhang_type=enzyme_meta['overhang_type'],
+                        overhang_len=calculate_overhang_length(enzyme_meta['site'], enzyme_meta['cut_index']),
+                        sticky_seq=sticky_seq_left,
+                        polarity="left",
+                        fragment_id=i,
+                        position=cut_pos
+                    )
+                    ends.append(end_left)
+                    
+                    # Right end of fragment ending at this cut
+                    sticky_seq_right = extract_sticky_seq(dna_sequence, cut_pos, enzyme_meta, False, circular)
+                    end_right = LigationEndInfo(
+                        enzyme=enzyme_meta['enzyme'],
+                        overhang_type=enzyme_meta['overhang_type'],
+                        overhang_len=calculate_overhang_length(enzyme_meta['site'], enzyme_meta['cut_index']),
+                        sticky_seq=sticky_seq_right,
+                        polarity="right",
+                        fragment_id=(i - 1) % n,  # Wrap around for circular
+                        position=cut_pos
+                    )
+                    ends.append(end_right)
+    
+    return ends
 
 
 def _scale_position_to_column(pos: int, seq_len: int, map_width: int) -> int:

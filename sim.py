@@ -13,10 +13,15 @@ import unicodedata
 from typing import List, Dict, Tuple
 from fragment_calculator import (
     compute_fragments, validate_fragment_total, build_restriction_map, simulate_gel,
-    compute_fragments_with_sequences, elide_sequence
+    compute_fragments_with_sequences, elide_sequence, extract_fragment_ends_for_ligation
 )
 from gel_ladders import get_ladder
 from graphics import render_plasmid_map, render_linear_map, render_fragment_diagram, svg_to_png
+from ligation_compatibility import (
+    calculate_compatibility, format_pairs_output, format_matrix_output,
+    format_detailed_output, export_to_json
+)
+from exporters import export_genbank, export_csv
 
 # IUPAC degenerate base mapping
 IUPAC = {
@@ -596,6 +601,54 @@ Examples:
     parser.add_argument(
         "--fasta-out", type=str, default=None,
         help="Output fragment sequences to a FASTA file"
+    )
+    
+    # Ligation compatibility options
+    parser.add_argument(
+        "--compatibility", action="store_true", default=False,
+        help="Compute sticky-end compatibility for fragment ends"
+    )
+    parser.add_argument(
+        "--compat-summary", choices=["pairs", "matrix", "detailed"], default="pairs",
+        help="Format for compatibility output (default: pairs)"
+    )
+    parser.add_argument(
+        "--require-directional", action="store_true", default=False,
+        help="Filter to directional pairs only (non-palindromic overhangs)"
+    )
+    parser.add_argument(
+        "--include-blunt", action="store_true", default=False,
+        help="Include blunt-blunt as compatible (default: False)"
+    )
+    parser.add_argument(
+        "--min-overhang", type=int, default=1,
+        help="Minimum overhang length for sticky classification (default: 1)"
+    )
+    parser.add_argument(
+        "--json-out", type=str, default=None,
+        help="Output compatibility results to JSON file"
+    )
+    
+    # Export options
+    parser.add_argument(
+        "--export-genbank", type=str, default=None,
+        help="Export digest to GenBank file at specified path"
+    )
+    parser.add_argument(
+        "--export-csv", type=str, default=None,
+        help="Export digest to CSV files with specified prefix (creates prefix_fragments.csv and prefix_cuts.csv)"
+    )
+    parser.add_argument(
+        "--gb-definition", type=str, default=None,
+        help="GenBank DEFINITION line text (default: 'Restriction digest export')"
+    )
+    parser.add_argument(
+        "--source", type=str, default="synthetic DNA",
+        help="GenBank SOURCE organism name (default: 'synthetic DNA')"
+    )
+    parser.add_argument(
+        "--topology", type=str, choices=["linear", "circular"], default=None,
+        help="Override topology for export (defaults to current run mode)"
     )
 
     args = parser.parse_args()
@@ -1184,6 +1237,164 @@ Examples:
             
             except Exception as e:
                 print(f"\nError writing FASTA file: {e}")
+        
+        # Perform ligation compatibility analysis if requested
+        if args.compatibility:
+            print()
+            print("=" * 80)
+            print("LIGATION COMPATIBILITY ANALYSIS")
+            print("=" * 80)
+            print()
+            
+            # Extract fragment ends for compatibility analysis
+            try:
+                fragment_ends = extract_fragment_ends_for_ligation(
+                    dna_sequence=dna_sequence,
+                    cut_positions=all_cuts,
+                    circular=args.circular,
+                    circular_single_cut_linearizes=args.circular_single_cut_linearizes,
+                    cut_metadata=cut_metadata
+                )
+                
+                if not fragment_ends:
+                    print("No fragment ends to analyze (no cuts or intact circle).")
+                    print()
+                else:
+                    # Calculate compatibility
+                    compat_results = calculate_compatibility(
+                        ends=fragment_ends,
+                        include_blunt=args.include_blunt,
+                        min_overhang=args.min_overhang,
+                        require_directional=args.require_directional
+                    )
+                    
+                    # Display results based on format
+                    if args.compat_summary == "pairs":
+                        output = format_pairs_output(compat_results)
+                        print(output)
+                    elif args.compat_summary == "matrix":
+                        output = format_matrix_output(compat_results, fragment_ends)
+                        print(output)
+                    elif args.compat_summary == "detailed":
+                        output = format_detailed_output(compat_results)
+                        print(output)
+                    
+                    # Export to JSON if requested
+                    if args.json_out:
+                        try:
+                            export_to_json(compat_results, args.json_out)
+                            print(f"✓ Compatibility results saved to: {args.json_out}")
+                            print(f"  Total compatible pairs: {len(compat_results)}")
+                            print()
+                        except Exception as e:
+                            print(f"Error writing JSON file: {e}")
+            
+            except Exception as e:
+                print(f"Error during compatibility analysis: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Export to GenBank if requested
+        if args.export_genbank:
+            try:
+                # Build cuts list for export
+                export_cuts = []
+                for pos in sorted(all_cuts):
+                    enzymes_at_pos = cut_metadata.get(pos, [])
+                    for enz_meta in enzymes_at_pos:
+                        # Calculate overhang length
+                        site_len = len(enz_meta['site'])
+                        cut_idx = enz_meta['cut_index']
+                        
+                        if enz_meta['overhang_type'] == "Blunt":
+                            overhang_len = 0
+                        elif enz_meta['overhang_type'] == "5' overhang":
+                            # Cut index is where top strand cuts
+                            # For 5' overhang, bottom strand cuts further right
+                            # Overhang length = site_len - cut_idx
+                            overhang_len = site_len - cut_idx
+                        elif enz_meta['overhang_type'] == "3' overhang":
+                            # For 3' overhang, bottom strand cuts further left
+                            # Overhang length = cut_idx
+                            overhang_len = cut_idx
+                        else:
+                            overhang_len = 0
+                        
+                        export_cuts.append({
+                            'pos': pos,
+                            'enzyme': enz_meta['enzyme'],
+                            'recognition_site': enz_meta['site'],
+                            'cut_index': enz_meta['cut_index'],
+                            'overhang_type': enz_meta['overhang_type'],
+                            'overhang_len': overhang_len
+                        })
+                
+                # Determine topology for export
+                export_topology = args.topology if args.topology else ("circular" if args.circular else "linear")
+                
+                # Determine definition
+                gb_definition = args.gb_definition if args.gb_definition else "Restriction digest export"
+                
+                export_genbank(
+                    sequence=dna_sequence,
+                    cuts=export_cuts,
+                    fragments=fragments,
+                    path=args.export_genbank,
+                    topology=export_topology,
+                    definition=gb_definition,
+                    organism=args.source
+                )
+            
+            except Exception as e:
+                print(f"Error exporting GenBank file: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Export to CSV if requested
+        if args.export_csv:
+            try:
+                # Build cuts list for export (same as GenBank)
+                export_cuts = []
+                for pos in sorted(all_cuts):
+                    enzymes_at_pos = cut_metadata.get(pos, [])
+                    for enz_meta in enzymes_at_pos:
+                        # Calculate overhang length
+                        site_len = len(enz_meta['site'])
+                        cut_idx = enz_meta['cut_index']
+                        
+                        if enz_meta['overhang_type'] == "Blunt":
+                            overhang_len = 0
+                        elif enz_meta['overhang_type'] == "5' overhang":
+                            overhang_len = site_len - cut_idx
+                        elif enz_meta['overhang_type'] == "3' overhang":
+                            overhang_len = cut_idx
+                        else:
+                            overhang_len = 0
+                        
+                        export_cuts.append({
+                            'pos': pos,
+                            'enzyme': enz_meta['enzyme'],
+                            'recognition_site': enz_meta['site'],
+                            'cut_index': enz_meta['cut_index'],
+                            'overhang_type': enz_meta['overhang_type'],
+                            'overhang_len': overhang_len
+                        })
+                
+                # Determine topology for export
+                export_topology = args.topology if args.topology else ("circular" if args.circular else "linear")
+                
+                export_csv(
+                    prefix=args.export_csv,
+                    cuts=export_cuts,
+                    fragments=fragments,
+                    topology=export_topology,
+                    dna_sequence=dna_sequence
+                )
+            
+            except Exception as e:
+                print(f"Error exporting CSV files: {e}")
+                import traceback
+                traceback.print_exc()
 
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
