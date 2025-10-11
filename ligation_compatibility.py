@@ -2,10 +2,74 @@
 """
 Ligation Compatibility Analysis Module
 Analyzes sticky-end compatibility between fragment ends produced by restriction enzymes.
+Supports theoretical analysis based on enzyme metadata without sequence digests.
 """
 
-from typing import List, Tuple, Dict, Optional, NamedTuple
+from typing import List, Tuple, Dict, Optional, NamedTuple, Any
 import json
+
+
+# ============================================================================
+# IUPAC SUPPORT
+# ============================================================================
+
+# IUPAC degenerate base code mapping to possible bases
+IUPAC = {
+    'A': {'A'}, 'C': {'C'}, 'G': {'G'}, 'T': {'T'},
+    'R': {'A', 'G'}, 'Y': {'C', 'T'}, 'S': {'G', 'C'}, 'W': {'A', 'T'},
+    'K': {'G', 'T'}, 'M': {'A', 'C'}, 'B': {'C', 'G', 'T'}, 'D': {'A', 'G', 'T'},
+    'H': {'A', 'C', 'T'}, 'V': {'A', 'C', 'G'}, 'N': {'A', 'C', 'G', 'T'}
+}
+
+
+def revcomp_iupac(s: str) -> str:
+    """
+    Calculate reverse complement of a DNA sequence with IUPAC support.
+    
+    Args:
+        s: DNA sequence with IUPAC codes
+        
+    Returns:
+        Reverse complement sequence with IUPAC codes
+    """
+    comp_map = str.maketrans(
+        "ACGTRYSWKMBDHVNacgtryswkmbdhvn",
+        "TGCAYRSWMKVHDBNtgcayrswmkvhdbn"
+    )
+    return s.translate(comp_map)[::-1]
+
+
+def iupac_compatible(a: str, b: str) -> bool:
+    """
+    Check if two IUPAC sequences are compatible for ligation.
+    
+    Two sequences are compatible if at every position, the set of possible bases
+    in sequence A intersects with the complement set of possible bases in sequence B.
+    
+    Args:
+        a: First IUPAC sequence (5'→3')
+        b: Second IUPAC sequence (5'→3')
+        
+    Returns:
+        True if compatible, False otherwise
+    """
+    if len(a) != len(b):
+        return False
+    
+    b_revcomp = revcomp_iupac(b)
+    
+    for i, (x, yc) in enumerate(zip(a, b_revcomp)):
+        x_upper = x.upper()
+        yc_upper = yc.upper()
+        
+        # Check if the sets intersect
+        if x_upper not in IUPAC or yc_upper not in IUPAC:
+            return False
+        
+        if not (IUPAC[x_upper] & IUPAC[yc_upper]):
+            return False
+    
+    return True
 
 
 # ============================================================================
@@ -21,6 +85,15 @@ class EndInfo(NamedTuple):
     polarity: str           # "left" or "right" end of fragment
     fragment_id: int        # Fragment index
     position: int           # Position in the sequence where this end is
+
+
+class TheoreticalEnd(NamedTuple):
+    """Theoretical enzyme end information derived from metadata only."""
+    enzyme: str
+    overhang_type: str      # "5' overhang" | "3' overhang" | "Blunt"
+    k: int                  # overhang length (0 if blunt)
+    sticky_template: str    # 5'→3' IUPAC template of the single-stranded overhang
+    is_palindromic: bool    # True if sticky_template == revcomp(sticky_template)
 
 
 class CompatibilityResult(NamedTuple):
@@ -455,7 +528,358 @@ def export_to_json(results: List[CompatibilityResult], output_path: str) -> None
 
 
 # ============================================================================
-# ENZYME PAIR ANALYSIS (THEORETICAL)
+# THEORETICAL ANALYSIS (NO DIGEST REQUIRED)
+# ============================================================================
+
+def derive_template(site: str, cut_index: int, overhang_type: str, k: int) -> str:
+    """
+    Derive the sticky end template from enzyme metadata.
+    
+    Returns the 5'→3' sequence of the single-stranded overhang that would be
+    produced at the ligating end.
+    
+    Args:
+        site: Recognition site (IUPAC)
+        cut_index: Position where enzyme cuts on top strand
+        overhang_type: "5' overhang" | "3' overhang" | "Blunt"
+        k: Overhang length
+        
+    Returns:
+        IUPAC template string (5'→3') of the overhang, or "" if blunt
+    """
+    if overhang_type == "Blunt" or k == 0:
+        return ""
+    
+    site_len = len(site)
+    
+    if overhang_type == "5' overhang":
+        # For 5' overhangs:
+        # Top strand: 5'---NNNN^NNNN---3'
+        # Bot strand: 3'---NNNN    ^NNNN---5'
+        # The 5' overhang is the protruding part of the top strand
+        # starting from the top cut position
+        
+        # The sticky end is from cut_index to cut_index + k on the top strand
+        if cut_index + k <= site_len:
+            # Overhang is within the recognition site
+            template = site[cut_index:cut_index + k]
+        else:
+            # Overhang extends beyond the site (Type IIS)
+            template = site[cut_index:] + 'N' * (k - (site_len - cut_index))
+    
+    elif overhang_type == "3' overhang":
+        # For 3' overhangs:
+        # Top strand: 5'---NNNN    ^NNNN---3'
+        # Bot strand: 3'---NNNN^NNNN---5'
+        # The 3' overhang is the protruding part of the bottom strand
+        # We need to return the complement of what protrudes
+        
+        # Bottom strand cuts at position (site_len - cut_index)
+        # The overhang on the bottom strand goes from (site_len - cut_index - k) to (site_len - cut_index)
+        # But we want the 5'→3' sequence of that bottom strand overhang
+        
+        # For a 3' overhang, the single-stranded region is on the 3' end
+        # The sequence we want is from (cut_index - k) to cut_index on top strand
+        if cut_index - k >= 0:
+            # Overhang is within the recognition site
+            template = site[cut_index - k:cut_index]
+        else:
+            # Overhang extends beyond the site (Type IIS)
+            template = 'N' * (k - cut_index) + site[:cut_index]
+    
+    else:
+        template = ""
+    
+    return template.upper()
+
+
+def theoretical_end_from_enzyme(name: str, db: Dict[str, Any]) -> TheoreticalEnd:
+    """
+    Create a TheoreticalEnd from enzyme metadata.
+    
+    Args:
+        name: Enzyme name
+        db: Enzyme database with metadata
+        
+    Returns:
+        TheoreticalEnd object with computed template
+        
+    Raises:
+        KeyError: If enzyme not found in database
+        ValueError: If enzyme metadata is invalid
+    """
+    if name not in db:
+        raise KeyError(f"Enzyme '{name}' not found in database")
+    
+    meta = db[name]
+    
+    # Get site and cut information
+    site = meta.get("sequence", meta.get("site", ""))
+    if not site:
+        raise ValueError(f"Enzyme '{name}' missing recognition site")
+    
+    cut = meta.get("cut_index")
+    if cut is None:
+        raise ValueError(f"Enzyme '{name}' missing cut_index")
+    
+    typ = meta.get("overhang_type", "Unknown")
+    if typ not in ["5' overhang", "3' overhang", "Blunt"]:
+        raise ValueError(f"Enzyme '{name}' has invalid overhang_type: {typ}")
+    
+    # Calculate overhang length
+    if typ == "Blunt":
+        k = 0
+    else:
+        k = abs(len(site) - 2 * cut)
+    
+    # Derive template
+    tpl = derive_template(site, cut, typ, k)
+    
+    # Check if palindromic
+    pal = (k > 0) and (tpl.upper() == revcomp_iupac(tpl).upper())
+    
+    return TheoreticalEnd(name, typ, k, tpl.upper(), pal)
+
+
+def are_theoretical_ends_compatible(
+    a: TheoreticalEnd,
+    b: TheoreticalEnd,
+    include_blunt: bool = False,
+    min_overhang: int = 1
+) -> Tuple[bool, str]:
+    """
+    Check if two theoretical enzyme ends are compatible.
+    
+    Args:
+        a: First TheoreticalEnd
+        b: Second TheoreticalEnd
+        include_blunt: Allow blunt-blunt compatibility
+        min_overhang: Minimum overhang length
+        
+    Returns:
+        Tuple of (compatible, reason)
+    """
+    # Check if both are blunt
+    if a.k == 0 and b.k == 0:
+        if include_blunt:
+            return True, "Blunt-blunt (compatible with option)"
+        else:
+            return False, "Both blunt (excluded by default)"
+    
+    # Check if one is blunt and one is sticky
+    if (a.k == 0) != (b.k == 0):
+        return False, "One blunt, one sticky - incompatible"
+    
+    # Check minimum overhang
+    if a.k < min_overhang or b.k < min_overhang:
+        return False, f"Overhang shorter than minimum ({min_overhang} bp)"
+    
+    # Check length match
+    if a.k != b.k:
+        return False, f"Length mismatch: {a.k} vs {b.k} bp"
+    
+    # Check overhang type match
+    if a.overhang_type != b.overhang_type:
+        return False, f"Type mismatch: {a.overhang_type} vs {b.overhang_type}"
+    
+    # Check IUPAC compatibility
+    if not iupac_compatible(a.sticky_template, b.sticky_template):
+        return False, "IUPAC sequences not compatible"
+    
+    return True, "Compatible"
+
+
+def calculate_theoretical_compatibility(
+    ends: List[TheoreticalEnd],
+    include_blunt: bool = False,
+    min_overhang: int = 1,
+    require_directional: bool = False
+) -> List[Tuple[TheoreticalEnd, TheoreticalEnd, bool, str]]:
+    """
+    Calculate pairwise compatibility for theoretical enzyme ends.
+    
+    Args:
+        ends: List of TheoreticalEnd objects
+        include_blunt: Include blunt-blunt pairs
+        min_overhang: Minimum overhang length
+        require_directional: Only include non-palindromic pairs
+        
+    Returns:
+        List of tuples: (end_a, end_b, directional, reason)
+    """
+    results = []
+    
+    for i in range(len(ends)):
+        for j in range(i + 1, len(ends)):
+            a = ends[i]
+            b = ends[j]
+            
+            # Check compatibility
+            compatible, reason = are_theoretical_ends_compatible(
+                a, b, include_blunt, min_overhang
+            )
+            
+            if not compatible:
+                continue
+            
+            # Check directionality (non-palindromic)
+            directional = not a.is_palindromic
+            
+            # Skip if directional required but not met
+            if require_directional and not directional:
+                continue
+            
+            results.append((a, b, directional, reason))
+    
+    return results
+
+
+def format_theoretical_pairs(
+    results: List[Tuple[TheoreticalEnd, TheoreticalEnd, bool, str]]
+) -> str:
+    """
+    Format theoretical compatibility results as pairs.
+    
+    Args:
+        results: List of compatibility tuples
+        
+    Returns:
+        Formatted string
+    """
+    if not results:
+        return "No compatible enzyme pairs found.\n"
+    
+    lines = []
+    lines.append("Theoretical sticky-end compatibility (no digest)")
+    lines.append("=" * 80)
+    lines.append("")
+    
+    for a, b, directional, reason in results:
+        lines.append(f"{a.enzyme}  | {a.overhang_type} k={a.k} | tpl={a.sticky_template} | palindromic: {'YES' if a.is_palindromic else 'NO'}")
+        lines.append(f"{b.enzyme}  | {b.overhang_type} k={b.k} | tpl={b.sticky_template} | palindromic: {'YES' if b.is_palindromic else 'NO'}")
+        
+        if directional:
+            lines.append("  ✔ Compatible (directional)")
+        else:
+            lines.append("  ✔ Compatible (non-directional)")
+        
+        lines.append("")
+    
+    lines.append(f"Total compatible pairs: {len(results)}")
+    return "\n".join(lines)
+
+
+def format_theoretical_matrix(
+    results: List[Tuple[TheoreticalEnd, TheoreticalEnd, bool, str]],
+    all_ends: List[TheoreticalEnd]
+) -> str:
+    """
+    Format theoretical compatibility as a matrix.
+    
+    Args:
+        results: List of compatibility tuples
+        all_ends: All enzyme ends for the matrix
+        
+    Returns:
+        Formatted string
+    """
+    if not all_ends:
+        return "No enzymes to display.\n"
+    
+    lines = []
+    lines.append("Theoretical compatibility matrix (no digest)")
+    lines.append("=" * 80)
+    lines.append("")
+    
+    # Build compatibility lookup
+    compat_set = set()
+    directional_set = set()
+    
+    for a, b, directional, reason in results:
+        key1 = (a.enzyme, b.enzyme)
+        key2 = (b.enzyme, a.enzyme)
+        compat_set.add(key1)
+        compat_set.add(key2)
+        if directional:
+            directional_set.add(key1)
+            directional_set.add(key2)
+    
+    # Create labels
+    labels = [e.enzyme for e in all_ends]
+    max_label_len = max(len(label) for label in labels)
+    col_width = max(4, max_label_len + 1)
+    
+    # Print header
+    header = " " * (col_width + 1) + " ".join(f"{label[:col_width]:>{col_width}}" for label in labels)
+    lines.append(header)
+    lines.append(" " * (col_width + 1) + "-" * (col_width * len(labels) + len(labels) - 1))
+    
+    # Print matrix
+    for i, end_i in enumerate(all_ends):
+        row = f"{labels[i][:col_width]:<{col_width}} "
+        for j, end_j in enumerate(all_ends):
+            if i == j:
+                cell = "."
+            else:
+                key = (end_i.enzyme, end_j.enzyme)
+                if key in compat_set:
+                    if key in directional_set:
+                        cell = "▶"  # Directional
+                    else:
+                        cell = "✓"  # Non-directional
+                else:
+                    cell = "."
+            row += f"{cell:^{col_width}} "
+        lines.append(row)
+    
+    lines.append("")
+    lines.append("Legend:")
+    lines.append("  ✓ = compatible (non-directional/palindromic)")
+    lines.append("  ▶ = compatible (directional)")
+    lines.append("  . = incompatible or same enzyme")
+    lines.append("")
+    lines.append(f"Total compatible pairs: {len(results)}")
+    
+    return "\n".join(lines)
+
+
+def format_theoretical_detailed(
+    results: List[Tuple[TheoreticalEnd, TheoreticalEnd, bool, str]]
+) -> str:
+    """
+    Format theoretical compatibility with detailed information.
+    
+    Args:
+        results: List of compatibility tuples
+        
+    Returns:
+        Formatted string (JSON-like)
+    """
+    if not results:
+        return "[]"
+    
+    output = []
+    for a, b, directional, reason in results:
+        entry = {
+            "enzyme_a": a.enzyme,
+            "enzyme_b": b.enzyme,
+            "overhang_type": a.overhang_type,
+            "k": a.k,
+            "template_a": a.sticky_template,
+            "template_b": b.sticky_template,
+            "compatible": True,
+            "directional": directional,
+            "reason": reason,
+            "palindromic_a": a.is_palindromic,
+            "palindromic_b": b.is_palindromic
+        }
+        output.append(entry)
+    
+    return json.dumps(output, indent=2)
+
+
+# ============================================================================
+# ENZYME PAIR ANALYSIS (THEORETICAL) - LEGACY
 # ============================================================================
 
 def analyze_enzyme_pair_theoretical(

@@ -19,7 +19,9 @@ from gel_ladders import get_ladder
 from graphics import render_plasmid_map, render_linear_map, render_fragment_diagram, svg_to_png
 from ligation_compatibility import (
     calculate_compatibility, format_pairs_output, format_matrix_output,
-    format_detailed_output, export_to_json
+    format_detailed_output, export_to_json,
+    theoretical_end_from_enzyme, calculate_theoretical_compatibility,
+    format_theoretical_pairs, format_theoretical_matrix, format_theoretical_detailed
 )
 from exporters import export_genbank, export_csv
 
@@ -441,10 +443,10 @@ Examples:
     )
 
     parser.add_argument(
-        "--seq", required=True, help="DNA sequence (string) or path to FASTA/text file"
+        "--seq", required=False, help="DNA sequence (string) or path to FASTA/text file"
     )
     parser.add_argument(
-        "--enz", required=True, nargs='+', help="One or more enzyme names (see available enzymes in output)"
+        "--enz", required=False, nargs='+', help="One or more enzyme names (see available enzymes in output)"
     )
     parser.add_argument(
         "--circular", action="store_true", default=False,
@@ -629,6 +631,20 @@ Examples:
         help="Output compatibility results to JSON file"
     )
     
+    # Theoretical compatibility options (no digest required)
+    parser.add_argument(
+        "--theoretical-enzymes", type=str, default=None,
+        help="Comma-separated enzyme names for theoretical compatibility analysis (no sequence required)"
+    )
+    parser.add_argument(
+        "--theoretical-all", action="store_true", default=False,
+        help="Compute theoretical compatibility matrix for all enzymes in database"
+    )
+    parser.add_argument(
+        "--format", choices=["pairs", "matrix", "detailed"], default="pairs",
+        help="Format for theoretical compatibility output (default: pairs)"
+    )
+    
     # Export options
     parser.add_argument(
         "--export-genbank", type=str, default=None,
@@ -654,15 +670,119 @@ Examples:
     args = parser.parse_args()
 
     try:
-        # Handle empty enzyme list
+        # Load enzyme database first (needed for both modes)
+        ENZYMES = load_enzyme_database()
+        
+        # ====================================================================
+        # THEORETICAL COMPATIBILITY MODE (no sequence required)
+        # ====================================================================
+        if args.theoretical_enzymes or args.theoretical_all:
+            print("=" * 80)
+            print("THEORETICAL ENZYME COMPATIBILITY ANALYSIS (NO DIGEST)")
+            print("=" * 80)
+            print()
+            
+            # Determine which enzymes to analyze
+            if args.theoretical_all:
+                enzyme_names = list(ENZYMES.keys())
+                print(f"Analyzing all {len(enzyme_names)} enzymes in database...")
+                if len(enzyme_names) > 100:
+                    print(f"Warning: Large output expected ({len(enzyme_names)} enzymes)")
+                print()
+            else:
+                # Parse comma-separated enzyme names
+                enzyme_names = [name.strip() for name in args.theoretical_enzymes.split(',')]
+                print(f"Analyzing {len(enzyme_names)} enzymes: {', '.join(enzyme_names)}")
+                print()
+            
+            # Build TheoreticalEnd objects for each enzyme
+            theoretical_ends = []
+            skipped = []
+            
+            for name in enzyme_names:
+                try:
+                    end = theoretical_end_from_enzyme(name, ENZYMES)
+                    theoretical_ends.append(end)
+                except (KeyError, ValueError) as e:
+                    skipped.append((name, str(e)))
+            
+            # Report skipped enzymes
+            if skipped:
+                print("Skipped enzymes:")
+                for name, reason in skipped:
+                    print(f"  - {name}: {reason}")
+                print()
+            
+            # Filter by min-overhang if specified
+            if args.min_overhang > 1:
+                before_count = len(theoretical_ends)
+                theoretical_ends = [e for e in theoretical_ends if e.k >= args.min_overhang or e.k == 0]
+                filtered_count = before_count - len(theoretical_ends)
+                if filtered_count > 0:
+                    print(f"Filtered out {filtered_count} enzymes with overhang < {args.min_overhang} bp")
+                    print()
+            
+            # Calculate compatibility
+            results = calculate_theoretical_compatibility(
+                ends=theoretical_ends,
+                include_blunt=args.include_blunt,
+                min_overhang=args.min_overhang,
+                require_directional=args.require_directional
+            )
+            
+            # Format and display output
+            if args.format == "pairs":
+                output = format_theoretical_pairs(results)
+                print(output)
+            elif args.format == "matrix":
+                output = format_theoretical_matrix(results, theoretical_ends)
+                print(output)
+            elif args.format == "detailed":
+                output = format_theoretical_detailed(results)
+                print(output)
+            
+            # Save JSON output if requested
+            if args.json_out:
+                import json
+                json_data = []
+                for a, b, directional, reason in results:
+                    entry = {
+                        "enzyme_a": a.enzyme,
+                        "enzyme_b": b.enzyme,
+                        "overhang_type": a.overhang_type,
+                        "k": a.k,
+                        "template_a": a.sticky_template,
+                        "template_b": b.sticky_template,
+                        "compatible": True,
+                        "directional": directional,
+                        "reason": reason,
+                        "palindromic_a": a.is_palindromic,
+                        "palindromic_b": b.is_palindromic
+                    }
+                    json_data.append(entry)
+                
+                with open(args.json_out, 'w') as f:
+                    json.dump(json_data, f, indent=2)
+                print(f"\n✓ Results saved to: {args.json_out}")
+            
+            # Exit after theoretical analysis
+            sys.exit(0)
+        
+        # ====================================================================
+        # REGULAR DIGEST MODE (requires sequence)
+        # ====================================================================
+        
+        # Validate required arguments for digest mode
+        if not args.seq:
+            print("Error: --seq is required for digest mode.")
+            print("For theoretical compatibility without a sequence, use --theoretical-enzymes or --theoretical-all")
+            sys.exit(2)
+        
         if not args.enz:
             print("Error: No enzymes specified.")
             print("Usage: python sim.py --seq <sequence> --enz <enzyme1> [enzyme2] ...")
             sys.exit(2)
 
-        # Load enzyme database
-        ENZYMES = load_enzyme_database()
-        
         # Create normalized lookup dictionary for case-insensitive matching
         normalized_lookup = {}
         for name in ENZYMES.keys():
