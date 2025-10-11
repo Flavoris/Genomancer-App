@@ -118,10 +118,148 @@ python sim.py --seq "ATCGCCACGTGGCCATCG" --enz BsrI
 
 ### Command-Line Arguments
 
+#### Basic Arguments
+
 - `--seq`: DNA sequence as a string or path to a FASTA/text file
 - `--enz`: One or more enzyme names (case-insensitive, with helpful suggestions for unknown enzymes)
 - `--circular`: Treat DNA as circular (default: linear)
 - `--circular_single_cut_linearizes`: In circular mode, one cut yields two fragments instead of one intact circle (default: False)
+
+#### Restriction Map Arguments (NEW!)
+
+- `--print-map`: Print restriction map after digestion results
+- `--print-map-only`: Print only the restriction map (skip fragment table)
+- `--map-width <int>`: Width of the restriction map in characters (default: 80)
+- `--map-ticks <int>`: Number of tick marks on the map scale (default: 10)
+- `--map-min-hits <int>`: Minimum number of cuts to show an enzyme (default: 1)
+- `--map-group-by {enzyme,position}`: Group cuts by enzyme or by position (default: enzyme)
+- `--map-show-overhangs`: Show overhang type labels in the map
+- `--map-show-sites`: Show recognition sequences in the map
+- `--map-circular-origin <int>`: Origin position for circular DNA map (default: 0)
+
+## Restriction Map Visualization (NEW!)
+
+The simulator now includes a powerful text-mode restriction map that visually summarizes cut sites along the DNA sequence. This feature works for both linear and circular DNA and provides an intuitive overview of where enzymes cut.
+
+### Basic Usage
+
+```bash
+# Show restriction map for linear DNA
+python sim.py --seq sample_dna.fasta --enz EcoRI BamHI --print-map
+
+# Show only the map (skip fragment table)
+python sim.py --seq sample_dna.fasta --enz EcoRI BamHI --print-map-only
+
+# Show map for circular DNA with custom width
+python sim.py --seq plasmid.fasta --enz EcoRI BamHI --circular --print-map --map-width 60
+```
+
+### Map Features
+
+- **Scale line**: Shows base pair positions along the sequence
+- **Ruler line**: Visual guide with tick marks
+- **All cuts track**: Shows all cut positions, with `*` marking positions where multiple enzymes cut
+- **Enzyme tracks**: Individual tracks for each enzyme showing where it cuts (marked with `^`)
+- **Annotations**: Optional overhang types and recognition sequences
+- **Wrap-around note**: For circular DNA, shows the wrap-around fragment details
+
+### Example Output - Linear DNA
+
+```bash
+$ python sim.py --seq sample_dna.fasta --enz EcoRI HindIII --print-map
+```
+
+```
+================================================================================
+RESTRICTION MAP
+================================================================================
+Length: 4827 bp   Mode: linear
+0        482       965       1447      1930      2412      2895      3377      3860      4827
+|---------|---------|---------|---------|---------|---------|---------|---------|---------|
+All (5):    ^   ^     ^         *               ^             ^
+EcoRI (3):  ^         ^                         ^
+HindIII(2):     ^               ^
+```
+
+### Example Output - Circular DNA
+
+```bash
+$ python sim.py --seq plasmid.fasta --enz BsaI BsmBI --circular --print-map --map-show-overhangs
+```
+
+```
+================================================================================
+RESTRICTION MAP
+================================================================================
+Length: 3000 bp   Mode: circular
+0        300       600       900       1200      1500      1800      2100      2400      3000
+|---------|---------|---------|---------|---------|---------|---------|---------|---------|
+All (4):  ^     ^                        *                     ^
+BsaI (2): ^                 ^            [5' overhang]
+BsmBI(2):           ^                     ^  [5' overhang]
+
+wrap spans: last_cut→first_cut = 2890→110 (len = 220)
+```
+
+### Advanced Options
+
+#### Show Overhang Types
+
+```bash
+python sim.py --seq sample.fasta --enz EcoRI PstI --print-map --map-show-overhangs
+```
+
+This adds overhang type labels (e.g., `[5' overhang]`, `[3' overhang]`, `[Blunt]`) to each enzyme track.
+
+#### Show Recognition Sites
+
+```bash
+python sim.py --seq sample.fasta --enz EcoRI BamHI --print-map --map-show-sites
+```
+
+This displays the recognition sequence next to each enzyme name (truncated if longer than 16 bases).
+
+#### Group by Position
+
+```bash
+python sim.py --seq sample.fasta --enz EcoRI BamHI --print-map --map-group-by position
+```
+
+Instead of showing one track per enzyme, this groups cuts by position and lists all enzymes that cut at each position:
+
+```
+All (5):  ^   ^     ^         *               ^
+pos 100: EcoRI [5' overhang]
+pos 250: BamHI [5' overhang]
+pos 500: EcoRI, HindIII [5' overhang]
+...
+```
+
+#### Filter Sparse Enzymes
+
+```bash
+python sim.py --seq sample.fasta --enz EcoRI BamHI HindIII --print-map --map-min-hits 2
+```
+
+Only shows enzymes that cut at least 2 times, useful for focusing on frequent cutters.
+
+#### Adjust Map Width
+
+```bash
+# Narrow map for terminal windows
+python sim.py --seq sample.fasta --enz EcoRI --print-map --map-width 60
+
+# Wide map for detailed view
+python sim.py --seq sample.fasta --enz EcoRI --print-map --map-width 120
+```
+
+#### Circular DNA with Custom Origin
+
+```bash
+python sim.py --seq plasmid.fasta --enz EcoRI BamHI --circular --print-map --map-circular-origin 1000
+```
+
+This adjusts the coordinate system so that position 1000 appears at the left edge of the map.
 
 ## Supported Enzymes
 
@@ -362,22 +500,26 @@ The simulator handles various error conditions:
 ```
 RES/
 ├── sim.py                          # Main simulator script with linear/circular support
-├── fragment_calculator.py          # Fragment computation module (linear and circular)
+├── fragment_calculator.py          # Fragment computation module (linear, circular, and restriction maps)
 ├── enzymes.json                    # Extended enzyme database (350+ enzymes)
 ├── sample_dna.fasta                # Sample DNA sequence for testing
 ├── synthetic_restriction_test.fasta # Test sequence for synthetic enzymes
 ├── tests/
-│   ├── test_circular.py                # Comprehensive circular DNA tests (NEW!)
+│   ├── test_circular.py                # Comprehensive circular DNA tests
 │   ├── test_multi_enzyme.py            # Test cases for multi-enzyme functionality
 │   ├── test_enhanced_features.py       # Test cases for IUPAC and enhanced features
-│   └── test_iupac.py                  # IUPAC expansion tests
+│   ├── test_iupac.py                   # IUPAC expansion tests
+│   └── test_restriction_map.py         # Restriction map visualization tests (NEW!)
 ├── prompts/
 │   ├── prompt.txt                  # Original requirements
 │   ├── prompt 2.txt                # Enhancement requirements
 │   ├── prompt 3.txt                # Multi-enzyme requirements
 │   ├── prompt 4.txt                # Advanced features requirements
-│   ├── prompt 5                    # Current implementation requirements
-│   └── prompt 8.txt                # Circular DNA requirements (THIS IMPLEMENTATION)
+│   ├── prompt 5                    # Implementation requirements
+│   ├── prompt 6.txt                # Additional requirements
+│   ├── prompt 7.txt                # Further requirements
+│   ├── prompt 8.txt                # Circular DNA requirements
+│   └── prompt 9.txt                # Restriction map requirements (THIS IMPLEMENTATION)
 └── README.md                       # This file
 ```
 
@@ -536,14 +678,17 @@ If multiple enzymes cut at the same position, all are listed in the boundary ann
 
 Possible future enhancements may include:
 - Gel electrophoresis simulation with band visualization
-- Graphical output (restriction maps, fragment diagrams)
+- Graphical output (SVG/PNG restriction maps, fragment diagrams)
 - Export to standard formats (GenBank, CSV, JSON)
 - Fragment sequences in output (not just lengths)
 - Sticky end compatibility analysis
 - Support for more complex enzyme behaviors (e.g., methylation sensitivity, temperature requirements)
-- Type IIS enzyme support (cut outside recognition site)
+- Enhanced Type IIS enzyme support with better visualization
 - Dam/Dcm methylation blocking
 - Star activity prediction
+
+**Recently Implemented:**
+- ✅ Text-mode restriction map visualization (prompt 9)
 
 ## License
 

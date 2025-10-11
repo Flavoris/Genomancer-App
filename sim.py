@@ -11,7 +11,7 @@ import re
 import sys
 import unicodedata
 from typing import List, Dict, Tuple
-from fragment_calculator import compute_fragments, validate_fragment_total
+from fragment_calculator import compute_fragments, validate_fragment_total, build_restriction_map
 
 # IUPAC degenerate base mapping
 IUPAC = {
@@ -444,6 +444,44 @@ Examples:
         "--circular_single_cut_linearizes", action="store_true", default=False,
         help="In circular mode, one cut yields two fragments instead of one intact circle (default: False)"
     )
+    
+    # Restriction map options
+    parser.add_argument(
+        "--print-map", action="store_true", default=False,
+        help="Print restriction map after digestion results"
+    )
+    parser.add_argument(
+        "--print-map-only", action="store_true", default=False,
+        help="Print only the restriction map (skip fragment table)"
+    )
+    parser.add_argument(
+        "--map-width", type=int, default=80,
+        help="Width of the restriction map in characters (default: 80)"
+    )
+    parser.add_argument(
+        "--map-ticks", type=int, default=10,
+        help="Number of tick marks on the map scale (default: 10)"
+    )
+    parser.add_argument(
+        "--map-min-hits", type=int, default=1,
+        help="Minimum number of cuts to show an enzyme (default: 1)"
+    )
+    parser.add_argument(
+        "--map-group-by", choices=["enzyme", "position"], default="enzyme",
+        help="Group cuts by enzyme or by position (default: enzyme)"
+    )
+    parser.add_argument(
+        "--map-show-overhangs", action="store_true", default=False,
+        help="Show overhang type labels in the map"
+    )
+    parser.add_argument(
+        "--map-show-sites", action="store_true", default=False,
+        help="Show recognition sequences in the map"
+    )
+    parser.add_argument(
+        "--map-circular-origin", type=int, default=0,
+        help="Origin position for circular DNA map (default: 0)"
+    )
 
     args = parser.parse_args()
 
@@ -562,71 +600,112 @@ Examples:
             cut_metadata=cut_metadata
         )
         
-        # Display detailed fragment information
-        print("=" * 80)
-        print("DIGESTION RESULTS")
-        print("=" * 80)
-        print(f"Mode: {topology}")
-        print(f"Sequence length: {len(dna_sequence)} bp")
-        print(f"Total cuts: {len(all_cuts)}")
-        if all_cuts:
-            print(f"Cut positions: {', '.join(map(str, sorted(all_cuts)))}")
-        print(f"Fragments generated: {len(fragments)}")
-        print()
+        # Build cut_events list for restriction map
+        cut_events = []
+        for pos in sorted(all_cuts):
+            enzymes_at_pos = cut_metadata.get(pos, [])
+            for enz_meta in enzymes_at_pos:
+                cut_events.append({
+                    'pos': pos,
+                    'enzyme': enz_meta['enzyme'],
+                    'site': enz_meta['site'],
+                    'overhang_type': enz_meta['overhang_type']
+                })
         
-        # Display fragments table
-        print("Fragment Details:")
-        print("-" * 80)
-        header = f"{'Index':<8} {'Start':<8} {'End':<8} {'Length':<10} {'Wraps':<8} {'Boundaries'}"
-        print(header)
-        print("-" * 80)
-        
-        for frag in fragments:
-            idx = frag['index']
-            start = frag['start']
-            end = frag['end']
-            length = frag['length']
-            wraps = 'Yes' if frag['wraps'] else 'No'
-            
-            # Build boundary info string
-            left_info = "START"
-            right_info = "END"
-            
-            if frag['boundaries']['left_cut'] is not None:
-                left_pos = frag['boundaries']['left_cut']['pos']
-                left_enzymes = [e['enzyme'] for e in frag['boundaries']['left_cut']['enzymes']]
-                left_info = f"{left_pos}({','.join(left_enzymes) if left_enzymes else '?'})"
-            
-            if frag['boundaries']['right_cut'] is not None:
-                right_pos = frag['boundaries']['right_cut']['pos']
-                right_enzymes = [e['enzyme'] for e in frag['boundaries']['right_cut']['enzymes']]
-                right_info = f"{right_pos}({','.join(right_enzymes) if right_enzymes else '?'})"
-            
-            boundary_str = f"{left_info} -> {right_info}"
-            
-            print(f"{idx:<8} {start:<8} {end:<8} {length:<10} {wraps:<8} {boundary_str}")
-        
-        print("-" * 80)
-        
-        # Verify total length
-        if not validate_fragment_total(fragments, len(dna_sequence)):
-            total = sum(f['length'] for f in fragments)
-            print(f"WARNING: Fragment lengths don't sum to sequence length! ({total} vs {len(dna_sequence)})")
-        else:
-            print(f"✓ Fragment lengths sum correctly to {len(dna_sequence)} bp")
-        
-        # Display cut site details
-        if all_cuts:
+        # Display detailed fragment information (unless --print-map-only is set)
+        if not args.print_map_only:
+            print("=" * 80)
+            print("DIGESTION RESULTS")
+            print("=" * 80)
+            print(f"Mode: {topology}")
+            print(f"Sequence length: {len(dna_sequence)} bp")
+            print(f"Total cuts: {len(all_cuts)}")
+            if all_cuts:
+                print(f"Cut positions: {', '.join(map(str, sorted(all_cuts)))}")
+            print(f"Fragments generated: {len(fragments)}")
             print()
-            print("Cut Site Details:")
+            
+            # Display fragments table
+            print("Fragment Details:")
             print("-" * 80)
-            for pos in sorted(all_cuts):
-                enzymes_at_pos = cut_metadata.get(pos, [])
-                for enz_meta in enzymes_at_pos:
-                    print(f"  Position {pos}: {enz_meta['enzyme']} "
-                          f"(site: {enz_meta['site']}, overhang: {enz_meta['overhang_type']})")
+            header = f"{'Index':<8} {'Start':<8} {'End':<8} {'Length':<10} {'Wraps':<8} {'Boundaries'}"
+            print(header)
+            print("-" * 80)
+            
+            for frag in fragments:
+                idx = frag['index']
+                start = frag['start']
+                end = frag['end']
+                length = frag['length']
+                wraps = 'Yes' if frag['wraps'] else 'No'
+                
+                # Build boundary info string
+                left_info = "START"
+                right_info = "END"
+                
+                if frag['boundaries']['left_cut'] is not None:
+                    left_pos = frag['boundaries']['left_cut']['pos']
+                    left_enzymes = [e['enzyme'] for e in frag['boundaries']['left_cut']['enzymes']]
+                    left_info = f"{left_pos}({','.join(left_enzymes) if left_enzymes else '?'})"
+                
+                if frag['boundaries']['right_cut'] is not None:
+                    right_pos = frag['boundaries']['right_cut']['pos']
+                    right_enzymes = [e['enzyme'] for e in frag['boundaries']['right_cut']['enzymes']]
+                    right_info = f"{right_pos}({','.join(right_enzymes) if right_enzymes else '?'})"
+                
+                boundary_str = f"{left_info} -> {right_info}"
+                
+                print(f"{idx:<8} {start:<8} {end:<8} {length:<10} {wraps:<8} {boundary_str}")
+            
+            print("-" * 80)
+            
+            # Verify total length
+            if not validate_fragment_total(fragments, len(dna_sequence)):
+                total = sum(f['length'] for f in fragments)
+                print(f"WARNING: Fragment lengths don't sum to sequence length! ({total} vs {len(dna_sequence)})")
+            else:
+                print(f"✓ Fragment lengths sum correctly to {len(dna_sequence)} bp")
+            
+            # Display cut site details
+            if all_cuts:
+                print()
+                print("Cut Site Details:")
+                print("-" * 80)
+                for pos in sorted(all_cuts):
+                    enzymes_at_pos = cut_metadata.get(pos, [])
+                    for enz_meta in enzymes_at_pos:
+                        print(f"  Position {pos}: {enz_meta['enzyme']} "
+                              f"(site: {enz_meta['site']}, overhang: {enz_meta['overhang_type']})")
+            
+            print()
         
-        print()
+        # Display restriction map if requested
+        if args.print_map or args.print_map_only:
+            if args.print_map_only:
+                print("=" * 80)
+                print("RESTRICTION MAP")
+                print("=" * 80)
+            else:
+                print()
+                print("=" * 80)
+                print("RESTRICTION MAP")
+                print("=" * 80)
+            
+            restriction_map = build_restriction_map(
+                L=len(dna_sequence),
+                cut_events=cut_events,
+                circular=args.circular,
+                map_width=args.map_width,
+                map_ticks=args.map_ticks,
+                map_min_hits=args.map_min_hits,
+                group_by=args.map_group_by,
+                show_overhangs=args.map_show_overhangs,
+                show_sites=args.map_show_sites,
+                circular_origin=args.map_circular_origin
+            )
+            
+            print(restriction_map)
+            print()
 
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
