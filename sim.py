@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Restriction Enzyme Simulator - Phase 3
+Restriction Enzyme Simulator - Phase 4
 A tool to simulate restriction enzyme cutting on linear and circular DNA sequences.
 Supports multiple enzymes for combined digest analysis and circular topology.
 """
@@ -11,7 +11,10 @@ import re
 import sys
 import unicodedata
 from typing import List, Dict, Tuple
-from fragment_calculator import compute_fragments, validate_fragment_total, build_restriction_map, simulate_gel
+from fragment_calculator import (
+    compute_fragments, validate_fragment_total, build_restriction_map, simulate_gel,
+    compute_fragments_with_sequences, elide_sequence
+)
 from gel_ladders import get_ladder
 from graphics import render_plasmid_map, render_linear_map, render_fragment_diagram, svg_to_png
 
@@ -580,6 +583,20 @@ Examples:
         "--svg-height", type=int, default=None,
         help="Override height for linear map and fragment diagram"
     )
+    
+    # Sequence output options
+    parser.add_argument(
+        "--include-seqs", action="store_true", default=False,
+        help="Include DNA sequences in text output"
+    )
+    parser.add_argument(
+        "--seq-context", type=int, default=0,
+        help="Limit sequence display to N bases at each end (0 = show full sequence)"
+    )
+    parser.add_argument(
+        "--fasta-out", type=str, default=None,
+        help="Output fragment sequences to a FASTA file"
+    )
 
     args = parser.parse_args()
 
@@ -698,6 +715,17 @@ Examples:
             cut_metadata=cut_metadata
         )
         
+        # Compute fragments with sequences if requested
+        fragments_with_seqs = None
+        if args.include_seqs or args.fasta_out:
+            fragments_with_seqs = compute_fragments_with_sequences(
+                dna_sequence=dna_sequence,
+                cut_positions=all_cuts,
+                circular=args.circular,
+                circular_single_cut_linearizes=args.circular_single_cut_linearizes,
+                cut_metadata=cut_metadata
+            )
+        
         # Build cut_events list for restriction map
         cut_events = []
         for pos in sorted(all_cuts):
@@ -763,6 +791,44 @@ Examples:
                 print(f"WARNING: Fragment lengths don't sum to sequence length! ({total} vs {len(dna_sequence)})")
             else:
                 print(f"✓ Fragment lengths sum correctly to {len(dna_sequence)} bp")
+            
+            # Display sequences if requested
+            if args.include_seqs and fragments_with_seqs:
+                print()
+                print("=" * 80)
+                print("FRAGMENT SEQUENCES")
+                print("=" * 80)
+                
+                for idx, frag in enumerate(fragments_with_seqs):
+                    print(f"\n# Fragment {idx + 1} (length: {frag.length} bp)")
+                    print(f"start={frag.start_idx}  end={frag.end_idx}  mode={'circular' if args.circular else 'linear'}")
+                    
+                    # Display end information
+                    left_end, right_end = frag.enzymes_at_ends
+                    
+                    if left_end:
+                        left_str = f"{left_end.enzyme} ({left_end.overhang_type}"
+                        if left_end.overhang_len > 0:
+                            left_str += f", {left_end.overhang_len} bp: {left_end.end_bases}"
+                        left_str += ")"
+                    else:
+                        left_str = "START"
+                    
+                    if right_end:
+                        right_str = f"{right_end.enzyme} ({right_end.overhang_type}"
+                        if right_end.overhang_len > 0:
+                            right_str += f", {right_end.overhang_len} bp: {right_end.end_bases}"
+                        right_str += ")"
+                    else:
+                        right_str = "END"
+                    
+                    print(f"ends: left={left_str}, right={right_str}")
+                    
+                    # Display sequence (with optional elision)
+                    display_seq = elide_sequence(frag.sequence, args.seq_context)
+                    print(f"seq: {display_seq}")
+                
+                print()
             
             # Display cut site details
             if all_cuts:
@@ -993,11 +1059,11 @@ Examples:
                             print(f"✓ PNG saved to: {png_path}")
                         except ImportError as e:
                             print(f"Warning: Could not generate PNG - {e}")
-                        except Exception as e:
-                            print(f"Warning: Could not generate PNG - Cairo library not found.")
-                            print(f"  The SVG was saved successfully. To enable PNG export, install Cairo:")
-                            print(f"  macOS: brew install cairo")
-                            print(f"  Ubuntu: sudo apt-get install libcairo2-dev")
+                        except Exception:
+                            print("Warning: Could not generate PNG - Cairo library not found.")
+                            print("  The SVG was saved successfully. To enable PNG export, install Cairo:")
+                            print("  macOS: brew install cairo")
+                            print("  Ubuntu: sudo apt-get install libcairo2-dev")
                 
                 except Exception as e:
                     print(f"Error generating plasmid map SVG: {e}")
@@ -1032,10 +1098,10 @@ Examples:
                             print(f"✓ PNG saved to: {png_path}")
                         except ImportError as e:
                             print(f"Warning: Could not generate PNG - {e}")
-                        except Exception as e:
-                            print(f"Warning: Could not generate PNG - Cairo library not found.")
-                            print(f"  The SVG was saved successfully. To enable PNG export, install Cairo:")
-                            print(f"  macOS: brew install cairo")
+                        except Exception:
+                            print("Warning: Could not generate PNG - Cairo library not found.")
+                            print("  The SVG was saved successfully. To enable PNG export, install Cairo:")
+                            print("  macOS: brew install cairo")
                 
                 except Exception as e:
                     print(f"Error generating linear map SVG: {e}")
@@ -1069,13 +1135,55 @@ Examples:
                             print(f"✓ PNG saved to: {png_path}")
                         except ImportError as e:
                             print(f"Warning: Could not generate PNG - {e}")
-                        except Exception as e:
-                            print(f"Warning: Could not generate PNG - Cairo library not found.")
-                            print(f"  The SVG was saved successfully. To enable PNG export, install Cairo:")
-                            print(f"  macOS: brew install cairo")
+                        except Exception:
+                            print("Warning: Could not generate PNG - Cairo library not found.")
+                            print("  The SVG was saved successfully. To enable PNG export, install Cairo:")
+                            print("  macOS: brew install cairo")
                 
                 except Exception as e:
                     print(f"Error generating fragment diagram SVG: {e}")
+        
+        # Generate FASTA output if requested
+        if args.fasta_out and fragments_with_seqs:
+            try:
+                with open(args.fasta_out, 'w') as fasta_file:
+                    for idx, frag in enumerate(fragments_with_seqs):
+                        # Build FASTA header with fragment information
+                        frag_id = f"frag_{idx+1:03d}"
+                        
+                        # Left end info
+                        left_end, right_end = frag.enzymes_at_ends
+                        if left_end and left_end.overhang_len > 0:
+                            left_info = f"{left_end.enzyme}:{left_end.overhang_type[0]}p:{left_end.overhang_len}:{left_end.end_bases}"
+                        elif left_end:
+                            left_info = f"{left_end.enzyme}:blunt:0"
+                        else:
+                            left_info = "START"
+                        
+                        # Right end info
+                        if right_end and right_end.overhang_len > 0:
+                            right_info = f"{right_end.enzyme}:{right_end.overhang_type[0]}p:{right_end.overhang_len}:{right_end.end_bases}"
+                        elif right_end:
+                            right_info = f"{right_end.enzyme}:blunt:0"
+                        else:
+                            right_info = "END"
+                        
+                        # Write header
+                        header = f">{frag_id}|len={frag.length}|start={frag.start_idx}|end={frag.end_idx}|left={left_info}|right={right_info}"
+                        if frag.wraps:
+                            header += "|wraps=True"
+                        fasta_file.write(header + "\n")
+                        
+                        # Write sequence (wrapped at 80 characters)
+                        seq = frag.sequence
+                        for i in range(0, len(seq), 80):
+                            fasta_file.write(seq[i:i+80] + "\n")
+                
+                print(f"\n✓ Fragment sequences saved to: {args.fasta_out}")
+                print(f"  Total fragments: {len(fragments_with_seqs)}")
+            
+            except Exception as e:
+                print(f"\nError writing FASTA file: {e}")
 
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")

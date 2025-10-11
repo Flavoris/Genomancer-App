@@ -7,8 +7,236 @@ Also includes ASCII agarose gel simulation.
 
 import math
 import random
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, NamedTuple
 
+
+# ============================================================================
+# DATA STRUCTURES FOR FRAGMENT SEQUENCES
+# ============================================================================
+
+class EndInfo(NamedTuple):
+    """Information about a fragment end created by enzyme cutting."""
+    enzyme: str
+    recognition_site: str
+    cut_index: int
+    overhang_type: str   # "5' overhang" | "3' overhang" | "Blunt"
+    end_type: str        # Same as overhang_type for consistency
+    overhang_len: int
+    end_bases: str       # 5'->3' bases present at that end
+
+
+class Fragment(NamedTuple):
+    """Complete fragment information including sequence."""
+    start_idx: int       # 0-based, inclusive
+    end_idx: int         # 0-based, exclusive (or wraps for circular)
+    length: int
+    sequence: str        # 5'->3' orientation
+    enzymes_at_ends: Tuple[Optional[EndInfo], Optional[EndInfo]]  # (left, right)
+    wraps: bool          # True if fragment wraps around origin in circular mode
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+# IUPAC degenerate base mapping (imported from sim.py)
+IUPAC_MAP = {
+    "A": "A", "C": "C", "G": "G", "T": "T",
+    "R": "[AG]", "Y": "[CT]", "W": "[AT]", "S": "[GC]", 
+    "M": "[AC]", "K": "[GT]", "B": "[CGT]", "D": "[AGT]", 
+    "H": "[ACT]", "V": "[ACG]", "N": "[ACGT]"
+}
+
+
+def iupac_to_regex(site: str) -> str:
+    """
+    Convert IUPAC degenerate base notation to regex character classes.
+    
+    Args:
+        site: Recognition site string that may contain IUPAC letters
+        
+    Returns:
+        Regex pattern where IUPAC letters are expanded to character classes
+    """
+    site_upper = site.upper()
+    return "".join(IUPAC_MAP.get(ch, ch) for ch in site_upper)
+
+
+def slice_circular(seq: str, start: int, end: int) -> str:
+    """
+    Extract a sequence slice that may wrap around in circular DNA.
+    
+    Args:
+        seq: Full DNA sequence
+        start: Start position (0-based, inclusive)
+        end: End position (0-based, exclusive)
+        
+    Returns:
+        Sliced sequence, wrapping around if start >= end
+    """
+    n = len(seq)
+    if n == 0:
+        return ""
+    
+    start = start % n
+    end = end % n
+    
+    if start < end:
+        return seq[start:end]
+    elif start > end:
+        # Wrap around
+        return seq[start:] + seq[:end]
+    else:
+        # start == end means full circle or empty
+        return seq if start == 0 else ""
+
+
+def elide_sequence(seq: str, context: int) -> str:
+    """
+    Elide a sequence to show only context bases at each end.
+    
+    Args:
+        seq: DNA sequence to elide
+        context: Number of bases to show at each end (0 = show all)
+        
+    Returns:
+        Elided sequence string
+    """
+    if context <= 0 or len(seq) <= 2 * context:
+        return seq
+    return seq[:context] + "..." + seq[-context:]
+
+
+def calculate_overhang_length(recognition_site: str, cut_index: int) -> int:
+    """
+    Calculate the length of the overhang based on recognition site and cut position.
+    
+    For Type II enzymes, the overhang length is determined by the symmetry of the cut.
+    For palindromic sites, overhang = |2*cut_index - site_length|
+    
+    Args:
+        recognition_site: The enzyme recognition sequence
+        cut_index: Position where enzyme cuts within the site
+        
+    Returns:
+        Length of overhang in bases
+    """
+    site_len = len(recognition_site)
+    
+    # For standard Type II enzymes with palindromic sites
+    # The overhang is the difference between the top and bottom strand cuts
+    overhang = abs(2 * cut_index - site_len)
+    
+    return overhang
+
+
+def extract_end_bases(
+    seq: str,
+    cut_pos: int,
+    enzyme_meta: Dict,
+    is_left_end: bool,
+    circular: bool = False
+) -> str:
+    """
+    Extract the bases at a fragment end based on the overhang type.
+    
+    Args:
+        seq: Full DNA sequence
+        cut_pos: Position of the cut
+        enzyme_meta: Dictionary with enzyme information
+        is_left_end: True if this is the left (5') end of the fragment
+        circular: True if sequence is circular
+        
+    Returns:
+        String of bases at the end (5'->3' orientation)
+    """
+    overhang_type = enzyme_meta.get('overhang_type', 'Blunt')
+    recognition_site = enzyme_meta.get('site', '')
+    cut_index = enzyme_meta.get('cut_index', 0)
+    
+    # Calculate overhang length
+    overhang_len = calculate_overhang_length(recognition_site, cut_index)
+    
+    if overhang_type == "Blunt" or overhang_len == 0:
+        return ""
+    
+    # Extract the overhang bases
+    # For 5' overhang: left fragment has overhang, right fragment has recess
+    # For 3' overhang: left fragment has recess, right fragment has overhang
+    
+    seq_len = len(seq)
+    
+    if overhang_type == "5' overhang":
+        if is_left_end:
+            # Left end of fragment - has the 5' overhang (trailing bases)
+            start = cut_pos - overhang_len
+            end = cut_pos
+        else:
+            # Right end of fragment - has recessed end
+            start = cut_pos
+            end = cut_pos + overhang_len
+    else:  # 3' overhang
+        if is_left_end:
+            # Left end of fragment - has recessed end
+            start = cut_pos
+            end = cut_pos + overhang_len
+        else:
+            # Right end of fragment - has the 3' overhang
+            start = cut_pos - overhang_len
+            end = cut_pos
+    
+    # Handle circular wrapping
+    if circular:
+        return slice_circular(seq, start, end)
+    else:
+        # Clamp to sequence boundaries
+        start = max(0, min(start, seq_len))
+        end = max(0, min(end, seq_len))
+        return seq[start:end]
+
+
+def build_end_info(
+    enzyme_meta: Dict,
+    seq: str,
+    cut_pos: int,
+    is_left_end: bool,
+    circular: bool = False
+) -> EndInfo:
+    """
+    Build EndInfo object for a fragment end.
+    
+    Args:
+        enzyme_meta: Dictionary with enzyme metadata
+        seq: Full DNA sequence
+        cut_pos: Position of the cut
+        is_left_end: True if this is the left end
+        circular: True if sequence is circular
+        
+    Returns:
+        EndInfo object
+    """
+    enzyme = enzyme_meta['enzyme']
+    recognition_site = enzyme_meta['site']
+    cut_index = enzyme_meta['cut_index']
+    overhang_type = enzyme_meta['overhang_type']
+    
+    overhang_len = calculate_overhang_length(recognition_site, cut_index)
+    end_bases = extract_end_bases(seq, cut_pos, enzyme_meta, is_left_end, circular)
+    
+    return EndInfo(
+        enzyme=enzyme,
+        recognition_site=recognition_site,
+        cut_index=cut_index,
+        overhang_type=overhang_type,
+        end_type=overhang_type,
+        overhang_len=overhang_len,
+        end_bases=end_bases
+    )
+
+
+# ============================================================================
+# FRAGMENT COMPUTATION (LEGACY)
+# ============================================================================
 
 def compute_fragments(
     cut_positions: List[int],
@@ -279,6 +507,232 @@ def validate_fragment_total(fragments: List[Dict], expected_length: int) -> bool
     """
     total = sum(f['length'] for f in fragments)
     return total == expected_length
+
+
+# ============================================================================
+# FRAGMENT COMPUTATION WITH SEQUENCES
+# ============================================================================
+
+def compute_fragments_with_sequences(
+    dna_sequence: str,
+    cut_positions: List[int],
+    circular: bool = False,
+    circular_single_cut_linearizes: bool = False,
+    cut_metadata: Dict[int, List[Dict]] = None
+) -> List[Fragment]:
+    """
+    Compute DNA fragments with full sequence information after restriction enzyme cutting.
+    
+    Args:
+        dna_sequence: The complete DNA sequence
+        cut_positions: List of cut position indices [0, seq_len)
+        circular: If True, treat DNA as circular; if False, treat as linear
+        circular_single_cut_linearizes: If True and circular, one cut yields two fragments
+        cut_metadata: Dictionary mapping cut position to list of enzyme metadata dicts
+                     Each dict contains: {enzyme, site, cut_index, overhang_type}
+        
+    Returns:
+        List of Fragment namedtuples with sequence and end information
+    """
+    seq_len = len(dna_sequence)
+    
+    if seq_len == 0:
+        return []
+    
+    # Default empty metadata
+    if cut_metadata is None:
+        cut_metadata = {}
+    
+    # Normalize and deduplicate cut positions
+    ps = sorted(set(p % seq_len for p in cut_positions))
+    n = len(ps)
+    
+    # Build position-to-enzyme mapping with metadata
+    pos_to_enzymes = {}
+    for pos in ps:
+        # Get all enzymes that cut at this position (handling modulo)
+        enzymes_at_pos = []
+        for orig_pos in cut_positions:
+            normalized = orig_pos % seq_len
+            if normalized == pos and orig_pos in cut_metadata:
+                enzymes_at_pos.extend(cut_metadata[orig_pos])
+        
+        # Deduplicate by enzyme name
+        seen = set()
+        unique_enzymes = []
+        for enz_meta in enzymes_at_pos:
+            if enz_meta['enzyme'] not in seen:
+                seen.add(enz_meta['enzyme'])
+                unique_enzymes.append(enz_meta)
+        
+        pos_to_enzymes[pos] = unique_enzymes
+    
+    fragments = []
+    
+    if not circular:
+        # ========== LINEAR MODE ==========
+        if n == 0:
+            # No cuts - return entire sequence
+            frag = Fragment(
+                start_idx=0,
+                end_idx=seq_len,
+                length=seq_len,
+                sequence=dna_sequence,
+                enzymes_at_ends=(None, None),
+                wraps=False
+            )
+            return [frag]
+        
+        # First fragment: from sequence start to first cut
+        frag_seq = dna_sequence[0:ps[0]]
+        right_enzymes = pos_to_enzymes.get(ps[0], [])
+        right_end = build_end_info(right_enzymes[0], dna_sequence, ps[0], False, circular) if right_enzymes else None
+        
+        fragments.append(Fragment(
+            start_idx=0,
+            end_idx=ps[0],
+            length=ps[0],
+            sequence=frag_seq,
+            enzymes_at_ends=(None, right_end),
+            wraps=False
+        ))
+        
+        # Middle fragments: between consecutive cuts
+        for i in range(n - 1):
+            start = ps[i]
+            end = ps[i + 1]
+            frag_seq = dna_sequence[start:end]
+            
+            left_enzymes = pos_to_enzymes.get(start, [])
+            right_enzymes = pos_to_enzymes.get(end, [])
+            
+            left_end = build_end_info(left_enzymes[0], dna_sequence, start, True, circular) if left_enzymes else None
+            right_end = build_end_info(right_enzymes[0], dna_sequence, end, False, circular) if right_enzymes else None
+            
+            fragments.append(Fragment(
+                start_idx=start,
+                end_idx=end,
+                length=end - start,
+                sequence=frag_seq,
+                enzymes_at_ends=(left_end, right_end),
+                wraps=False
+            ))
+        
+        # Last fragment: from last cut to sequence end
+        start = ps[-1]
+        frag_seq = dna_sequence[start:seq_len]
+        left_enzymes = pos_to_enzymes.get(start, [])
+        left_end = build_end_info(left_enzymes[0], dna_sequence, start, True, circular) if left_enzymes else None
+        
+        fragments.append(Fragment(
+            start_idx=start,
+            end_idx=seq_len,
+            length=seq_len - start,
+            sequence=frag_seq,
+            enzymes_at_ends=(left_end, None),
+            wraps=False
+        ))
+        
+    else:
+        # ========== CIRCULAR MODE ==========
+        if n == 0:
+            # No cuts - intact circle
+            frag = Fragment(
+                start_idx=0,
+                end_idx=0,
+                length=seq_len,
+                sequence=dna_sequence,
+                enzymes_at_ends=(None, None),
+                wraps=True
+            )
+            return [frag]
+        
+        if n == 1:
+            # One cut
+            if circular_single_cut_linearizes:
+                # Two fragments: linearized plasmid split at the cut
+                p0 = ps[0]
+                enzymes_at_p0 = pos_to_enzymes.get(p0, [])
+                end_info = build_end_info(enzymes_at_p0[0], dna_sequence, p0, True, circular) if enzymes_at_p0 else None
+                
+                # Fragment 1: from cut to end of sequence
+                frag1_seq = dna_sequence[p0:seq_len]
+                fragments.append(Fragment(
+                    start_idx=p0,
+                    end_idx=seq_len,
+                    length=seq_len - p0,
+                    sequence=frag1_seq,
+                    enzymes_at_ends=(end_info, end_info),
+                    wraps=False
+                ))
+                
+                # Fragment 2: from start to cut
+                frag2_seq = dna_sequence[0:p0]
+                fragments.append(Fragment(
+                    start_idx=0,
+                    end_idx=p0,
+                    length=p0,
+                    sequence=frag2_seq,
+                    enzymes_at_ends=(end_info, end_info),
+                    wraps=False
+                ))
+            else:
+                # One fragment - intact circle (single cut doesn't fragment)
+                frag = Fragment(
+                    start_idx=0,
+                    end_idx=0,
+                    length=seq_len,
+                    sequence=dna_sequence,
+                    enzymes_at_ends=(None, None),
+                    wraps=True
+                )
+                return [frag]
+        else:
+            # Multiple cuts in circular mode
+            
+            # Fragments between consecutive cuts
+            for i in range(n - 1):
+                start = ps[i]
+                end = ps[i + 1]
+                frag_seq = dna_sequence[start:end]
+                
+                left_enzymes = pos_to_enzymes.get(start, [])
+                right_enzymes = pos_to_enzymes.get(end, [])
+                
+                left_end = build_end_info(left_enzymes[0], dna_sequence, start, True, circular) if left_enzymes else None
+                right_end = build_end_info(right_enzymes[0], dna_sequence, end, False, circular) if right_enzymes else None
+                
+                fragments.append(Fragment(
+                    start_idx=start,
+                    end_idx=end,
+                    length=end - start,
+                    sequence=frag_seq,
+                    enzymes_at_ends=(left_end, right_end),
+                    wraps=False
+                ))
+            
+            # Wrap-around fragment: from last cut, around origin, to first cut
+            start = ps[-1]
+            end = ps[0]
+            length = (seq_len - start) + end
+            frag_seq = slice_circular(dna_sequence, start, end)
+            
+            left_enzymes = pos_to_enzymes.get(start, [])
+            right_enzymes = pos_to_enzymes.get(end, [])
+            
+            left_end = build_end_info(left_enzymes[0], dna_sequence, start, True, circular) if left_enzymes else None
+            right_end = build_end_info(right_enzymes[0], dna_sequence, end, False, circular) if right_enzymes else None
+            
+            fragments.append(Fragment(
+                start_idx=start,
+                end_idx=end,
+                length=length,
+                sequence=frag_seq,
+                enzymes_at_ends=(left_end, right_end),
+                wraps=True
+            ))
+    
+    return fragments
 
 
 def _scale_position_to_column(pos: int, seq_len: int, map_width: int) -> int:
