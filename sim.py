@@ -13,6 +13,7 @@ import unicodedata
 from typing import List, Dict, Tuple
 from fragment_calculator import compute_fragments, validate_fragment_total, build_restriction_map, simulate_gel
 from gel_ladders import get_ladder
+from graphics import render_plasmid_map, render_linear_map, render_fragment_diagram, svg_to_png
 
 # IUPAC degenerate base mapping
 IUPAC = {
@@ -533,6 +534,52 @@ Examples:
         "--lanes-config", type=str, default=None,
         help="JSON file or string defining multiple lanes for gel"
     )
+    
+    # Graphics output options
+    parser.add_argument(
+        "--out-svg", type=str, default=None,
+        help="Output SVG file path for plasmid map"
+    )
+    parser.add_argument(
+        "--out-svg-linear", type=str, default=None,
+        help="Output SVG file path for linear restriction map"
+    )
+    parser.add_argument(
+        "--out-svg-fragments", type=str, default=None,
+        help="Output SVG file path for fragment diagram"
+    )
+    parser.add_argument(
+        "--png", action="store_true", default=False,
+        help="Also export PNG alongside each SVG (requires cairosvg)"
+    )
+    parser.add_argument(
+        "--theme", choices=["light", "dark"], default="light",
+        help="Color theme for graphics (default: light)"
+    )
+    parser.add_argument(
+        "--title", type=str, default=None,
+        help="Custom title for graphics output"
+    )
+    parser.add_argument(
+        "--show-sites", action="store_true", default=False,
+        help="Include recognition sequences in graphics labels"
+    )
+    parser.add_argument(
+        "--hide-overhangs", action="store_true", default=False,
+        help="Hide overhang type badges in graphics"
+    )
+    parser.add_argument(
+        "--origin", type=int, default=0,
+        help="Origin position for circular plasmid map (default: 0)"
+    )
+    parser.add_argument(
+        "--svg-width", type=int, default=None,
+        help="Override width for linear map and fragment diagram (default: 900)"
+    )
+    parser.add_argument(
+        "--svg-height", type=int, default=None,
+        help="Override height for linear map and fragment diagram"
+    )
 
     args = parser.parse_args()
 
@@ -901,6 +948,134 @@ Examples:
                 print()
             
             print(gel_output)
+        
+        # Generate graphics outputs if requested
+        if args.out_svg or args.out_svg_linear or args.out_svg_fragments:
+            # Build cut list with metadata for graphics
+            cuts_for_graphics = []
+            for pos in sorted(all_cuts):
+                enzymes_at_pos = cut_metadata.get(pos, [])
+                for enz_meta in enzymes_at_pos:
+                    cuts_for_graphics.append({
+                        'pos': pos,
+                        'enzyme': enz_meta['enzyme'],
+                        'site': enz_meta['site'],
+                        'overhang_type': enz_meta['overhang_type']
+                    })
+            
+            # Determine title
+            graphics_title = args.title if args.title else (
+                "Plasmid" if args.circular else "DNA"
+            )
+            
+            # Generate plasmid map SVG
+            if args.out_svg:
+                try:
+                    svg_content = render_plasmid_map(
+                        L=len(dna_sequence),
+                        cuts=cuts_for_graphics,
+                        title=graphics_title,
+                        origin=args.origin,
+                        show_sites=args.show_sites,
+                        show_overhangs=not args.hide_overhangs,
+                        theme=args.theme
+                    )
+                    
+                    with open(args.out_svg, 'w') as f:
+                        f.write(svg_content)
+                    print(f"\n✓ Plasmid map saved to: {args.out_svg}")
+                    
+                    # Generate PNG if requested
+                    if args.png:
+                        png_path = args.out_svg.rsplit('.', 1)[0] + '.png'
+                        try:
+                            svg_to_png(svg_content, png_path)
+                            print(f"✓ PNG saved to: {png_path}")
+                        except ImportError as e:
+                            print(f"Warning: Could not generate PNG - {e}")
+                        except Exception as e:
+                            print(f"Warning: Could not generate PNG - Cairo library not found.")
+                            print(f"  The SVG was saved successfully. To enable PNG export, install Cairo:")
+                            print(f"  macOS: brew install cairo")
+                            print(f"  Ubuntu: sudo apt-get install libcairo2-dev")
+                
+                except Exception as e:
+                    print(f"Error generating plasmid map SVG: {e}")
+            
+            # Generate linear map SVG
+            if args.out_svg_linear:
+                try:
+                    linear_title = args.title if args.title else "Restriction Map"
+                    svg_width = args.svg_width if args.svg_width else 900
+                    svg_height = args.svg_height if args.svg_height else 180
+                    
+                    svg_content = render_linear_map(
+                        L=len(dna_sequence),
+                        cuts=cuts_for_graphics,
+                        title=linear_title,
+                        width=svg_width,
+                        height=svg_height,
+                        show_sites=args.show_sites,
+                        show_overhangs=not args.hide_overhangs,
+                        theme=args.theme
+                    )
+                    
+                    with open(args.out_svg_linear, 'w') as f:
+                        f.write(svg_content)
+                    print(f"✓ Linear map saved to: {args.out_svg_linear}")
+                    
+                    # Generate PNG if requested
+                    if args.png:
+                        png_path = args.out_svg_linear.rsplit('.', 1)[0] + '.png'
+                        try:
+                            svg_to_png(svg_content, png_path)
+                            print(f"✓ PNG saved to: {png_path}")
+                        except ImportError as e:
+                            print(f"Warning: Could not generate PNG - {e}")
+                        except Exception as e:
+                            print(f"Warning: Could not generate PNG - Cairo library not found.")
+                            print(f"  The SVG was saved successfully. To enable PNG export, install Cairo:")
+                            print(f"  macOS: brew install cairo")
+                
+                except Exception as e:
+                    print(f"Error generating linear map SVG: {e}")
+            
+            # Generate fragment diagram SVG
+            if args.out_svg_fragments:
+                try:
+                    frag_title = args.title if args.title else "Fragments"
+                    svg_width = args.svg_width if args.svg_width else 900
+                    svg_height = args.svg_height if args.svg_height else 140
+                    
+                    svg_content = render_fragment_diagram(
+                        fragments=fragments,
+                        L=len(dna_sequence),
+                        title=frag_title,
+                        width=svg_width,
+                        height=svg_height,
+                        theme=args.theme,
+                        annotate_sizes=True
+                    )
+                    
+                    with open(args.out_svg_fragments, 'w') as f:
+                        f.write(svg_content)
+                    print(f"✓ Fragment diagram saved to: {args.out_svg_fragments}")
+                    
+                    # Generate PNG if requested
+                    if args.png:
+                        png_path = args.out_svg_fragments.rsplit('.', 1)[0] + '.png'
+                        try:
+                            svg_to_png(svg_content, png_path)
+                            print(f"✓ PNG saved to: {png_path}")
+                        except ImportError as e:
+                            print(f"Warning: Could not generate PNG - {e}")
+                        except Exception as e:
+                            print(f"Warning: Could not generate PNG - Cairo library not found.")
+                            print(f"  The SVG was saved successfully. To enable PNG export, install Cairo:")
+                            print(f"  macOS: brew install cairo")
+                
+                except Exception as e:
+                    print(f"Error generating fragment diagram SVG: {e}")
 
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")

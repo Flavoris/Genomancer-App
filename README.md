@@ -18,6 +18,7 @@ A comprehensive Python tool for simulating restriction enzyme cutting on **linea
 - **Clear Output**: Detailed analysis showing fragment positions, wrapping status, boundary enzymes, and validation
 - **Restriction Map Visualization**: Text-mode restriction maps showing cut sites along the sequence
 - **Gel Simulation**: ASCII agarose gel electrophoresis with multi-lane support, ladders, and circular DNA topology rendering
+- **Graphics Output (NEW!)**: Publication-ready SVG/PNG generation for plasmid maps, linear maps, and fragment diagrams
 
 ## Installation
 
@@ -482,6 +483,192 @@ python sim.py --seq sample.fasta --enz EcoRI --simulate-gel --gel-smear light
 # Heavy smear (more artifacts, overloading)
 python sim.py --seq sample.fasta --enz EcoRI --simulate-gel --gel-smear heavy
 ```
+
+## Graphics Output (SVG/PNG) (NEW!)
+
+The simulator now includes publication-ready SVG graphics generation for plasmid maps, linear restriction maps, and fragment diagrams. SVG files can be converted to high-resolution PNG images for use in presentations and publications.
+
+### Features
+
+- **Circular Plasmid Maps**: Render plasmids as circular maps with radial cut markers and labels
+- **Linear Restriction Maps**: Traditional linear maps with cut positions and enzyme labels
+- **Fragment Diagrams**: Visual representation of fragment sizes with wrap-around indication
+- **Publication Ready**: Clean, professional styling with customizable themes
+- **Deterministic Colors**: Enzyme colors are consistent across runs (hash-based coloring)
+- **Collision Avoidance**: Smart label placement to prevent overlapping text
+- **Overhang Badges**: Shows overhang type (5', 3', B for blunt) directly from enzymes.json
+- **PNG Export**: Optional high-DPI PNG conversion (requires cairosvg)
+
+### Basic Usage
+
+Generate SVG graphics by adding output path flags:
+
+```bash
+# Generate plasmid map
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII --circular --out-svg map.svg
+
+# Generate linear restriction map
+python sim.py --seq dna.fasta --enz EcoRI BamHI --out-svg-linear linear.svg
+
+# Generate fragment diagram
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII --circular --out-svg-fragments frags.svg
+
+# Generate all three graphics at once
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII --circular \
+  --out-svg map.svg \
+  --out-svg-linear linear.svg \
+  --out-svg-fragments frags.svg
+```
+
+### Graphics Options
+
+All graphics generation flags:
+
+```bash
+--out-svg <path>              # Plasmid/DNA map SVG output path
+--out-svg-linear <path>       # Linear restriction map SVG output path
+--out-svg-fragments <path>    # Fragment diagram SVG output path
+--png                         # Also generate PNG files (requires cairosvg)
+--theme {light,dark}          # Color theme (default: light)
+--title <text>                # Custom title for graphics
+--show-sites                  # Include recognition sequences on labels
+--hide-overhangs              # Hide overhang type badges (shown by default)
+--origin <position>           # Circular map origin position (default: 0)
+--svg-width <pixels>          # Override width for linear/fragment diagrams (default: 900)
+--svg-height <pixels>         # Override height for linear/fragment diagrams
+```
+
+### Examples
+
+#### Complete Example with All Options
+
+```bash
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII BamHI --circular \
+  --out-svg map.svg --out-svg-linear linear.svg --out-svg-fragments frags.svg \
+  --png --theme dark --show-sites --title "pUC19 Digest" --origin 500
+```
+
+This command:
+- Digests circular plasmid with three enzymes
+- Generates all three types of graphics
+- Creates PNG versions alongside SVG files
+- Uses dark theme
+- Shows recognition sequences
+- Uses custom title "pUC19 Digest"
+- Sets circular origin at position 500
+
+#### Dark Theme with Custom Dimensions
+
+```bash
+python sim.py --seq dna.fasta --enz EcoRI --out-svg-linear linear.svg \
+  --theme dark --svg-width 1200 --svg-height 200
+```
+
+#### Show Recognition Sites and Overhang Types
+
+```bash
+python sim.py --seq plasmid.fasta --enz EcoRI PstI NotI --circular \
+  --out-svg map.svg --show-sites
+```
+
+The labels will show:
+- Enzyme names (e.g., "EcoRI")
+- Recognition sequences (e.g., "(GAATTC)") when `--show-sites` is used
+- Overhang badges (e.g., "[5']", "[3']", "[B]") by default
+- Position (e.g., "@ 1234")
+
+### PNG Export
+
+To generate high-resolution PNG images alongside SVG files, install the `cairosvg` library:
+
+```bash
+pip install cairosvg
+```
+
+**Note:** cairosvg requires the Cairo graphics library to be installed on your system:
+
+- **macOS**: `brew install cairo`
+- **Ubuntu/Debian**: `sudo apt-get install libcairo2-dev`
+- **Windows**: Download from https://www.cairographics.org/
+
+Then use the `--png` flag:
+
+```bash
+python sim.py --seq plasmid.fasta --enz EcoRI --circular \
+  --out-svg map.svg --png
+```
+
+This creates both `map.svg` and `map.png` (at 2× resolution for high DPI displays).
+
+If cairosvg is not installed, the simulator will still save the SVG file and display a helpful message about PNG export requirements.
+
+### Plasmid Map Details
+
+Circular plasmid maps show:
+- **Main circle**: Represents the plasmid backbone
+- **Tick marks**: Major ticks every 1000 bp (labeled), minor ticks at appropriate intervals
+- **Cut markers**: Radial lines from the circle indicating restriction sites
+- **Enzyme labels**: Positioned around the circle with collision avoidance
+- **Position labels**: Show cut positions (e.g., "EcoRI @ 234")
+- **Multiple enzymes at same position**: Indicated with "×N" marker
+- **Origin handling**: Use `--origin` to rotate the map (useful for placing features at top)
+
+### Linear Map Details
+
+Linear restriction maps show:
+- **Horizontal ruler**: Scale bar with position markers
+- **Triangular markers**: Point to cut positions on the ruler (▼)
+- **Enzyme labels**: Alternate above/below ruler to avoid collisions
+- **Multi-enzyme sites**: Shows all enzymes when multiple cut at same position
+
+### Fragment Diagram Details
+
+Fragment diagrams show:
+- **Scaled blocks**: Rectangles sized proportionally to fragment length
+- **Size labels**: Fragment sizes in bp (e.g., "1,234 bp")
+- **Wrap fragments**: Split blocks with dashed connector for circular DNA wrap-around
+- **Color coding**: Different colors for normal vs. wrap fragments
+- **Scale ruler**: Position reference at bottom
+
+### Theme Comparison
+
+**Light theme** (default):
+- White background
+- Black text and borders
+- Muted colors for enzyme markers
+
+**Dark theme**:
+- Near-black background (#1a1a1a)
+- Light text (#e0e0e0)
+- High-contrast colors for better visibility
+
+Example:
+```bash
+# Light theme (default)
+python sim.py --seq dna.fasta --enz EcoRI --out-svg map_light.svg
+
+# Dark theme
+python sim.py --seq dna.fasta --enz EcoRI --out-svg map_dark.svg --theme dark
+```
+
+### Integration with Other Features
+
+Graphics output works seamlessly with other simulator features:
+
+```bash
+# Combine with text restriction map and gel simulation
+python sim.py --seq plasmid.fasta --enz EcoRI HindIII --circular \
+  --print-map --simulate-gel \
+  --out-svg map.svg --out-svg-fragments frags.svg --png
+```
+
+This command produces:
+1. Text-based restriction map (console output)
+2. ASCII gel simulation (console output)
+3. SVG plasmid map (map.svg)
+4. PNG plasmid map (map.png)
+5. SVG fragment diagram (frags.svg)
+6. PNG fragment diagram (frags.png)
 
 ## Supported Enzymes
 
