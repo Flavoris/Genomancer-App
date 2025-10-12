@@ -13,7 +13,8 @@ import unicodedata
 from typing import List, Dict, Tuple
 from fragment_calculator import (
     compute_fragments, validate_fragment_total, build_restriction_map, simulate_gel,
-    compute_fragments_with_sequences, elide_sequence, extract_fragment_ends_for_ligation
+    compute_fragments_with_sequences, elide_sequence, extract_fragment_ends_for_ligation,
+    compute_end_metadata
 )
 from gel_ladders import get_ladder
 from graphics import render_plasmid_map, render_linear_map, render_fragment_diagram, svg_to_png
@@ -243,7 +244,7 @@ def read_dna_sequence(seq_input: str) -> str:
 
 
 def find_cut_sites(
-    dna_sequence: str, enzyme_sequence: str, cut_index: int
+    dna_sequence: str, enzyme_sequence: str, cut_index: int, circular: bool = False
 ) -> List[int]:
     """
     Find all cut sites for a given enzyme in the DNA sequence using IUPAC pattern matching.
@@ -252,11 +253,13 @@ def find_cut_sites(
         dna_sequence: The DNA sequence to search
         enzyme_sequence: The recognition sequence of the enzyme (may contain IUPAC letters)
         cut_index: 0-based index within the recognition site where the enzyme cuts
+        circular: If True, wrap cut positions using modulo for circular DNA (handles Type IIS edge cases)
 
     Returns:
         List of break positions (0-based indices)
     """
     break_positions = []
+    seq_len = len(dna_sequence)
     
     # Convert IUPAC site to regex pattern and compile with lookahead for overlapping matches
     regex_pattern = f"(?={iupac_to_regex(enzyme_sequence)})"
@@ -266,6 +269,17 @@ def find_cut_sites(
     for match in pattern.finditer(dna_sequence):
         # Calculate break position using cut_index
         break_pos = match.start() + cut_index
+        
+        # For circular DNA, validate and wrap cut positions
+        # This handles Type IIS enzymes that cut outside the recognition site
+        if circular:
+            # Wrap around using modulo
+            break_pos = break_pos % seq_len
+        else:
+            # For linear DNA, ensure cut position is within valid range
+            if break_pos < 0 or break_pos > seq_len:
+                continue  # Skip invalid cut positions
+        
         break_positions.append(break_pos)
 
     return break_positions
@@ -303,14 +317,15 @@ def calculate_fragments(
     return fragments
 
 
-def find_cut_positions_linear(seq: str, enzyme_name: str, db: Dict[str, Dict[str, any]]) -> List[int]:
+def find_cut_positions_linear(seq: str, enzyme_name: str, db: Dict[str, Dict[str, any]], circular: bool = False) -> List[int]:
     """
-    Find all cut positions for a single enzyme in a linear DNA sequence.
+    Find all cut positions for a single enzyme in a DNA sequence.
     
     Args:
         seq: DNA sequence to search
         enzyme_name: Name of the enzyme
         db: Enzyme database
+        circular: If True, treat DNA as circular (wraps cut positions with modulo)
         
     Returns:
         List of break positions (0-based indices)
@@ -322,7 +337,7 @@ def find_cut_positions_linear(seq: str, enzyme_name: str, db: Dict[str, Dict[str
     enzyme_sequence = enzyme_info["sequence"]
     cut_index = enzyme_info["cut_index"]
     
-    return find_cut_sites(seq, enzyme_sequence, cut_index)
+    return find_cut_sites(seq, enzyme_sequence, cut_index, circular=circular)
 
 
 def merge_cut_positions(cuts_by_enzyme: Dict[str, List[int]], seq_len: int) -> List[int]:
@@ -895,7 +910,6 @@ Examples:
             
             # Save JSON output if requested
             if args.json_out:
-                import json
                 json_data = []
                 for a, b, directional, reason in results:
                     entry = {
@@ -930,9 +944,11 @@ Examples:
             print("For theoretical compatibility without a sequence, use --theoretical-enzymes or --theoretical-all")
             sys.exit(2)
         
-        if not args.enz:
+        # Allow --lanes-config without --enz if lanes define their own enzymes
+        if not args.enz and not args.lanes_config:
             print("Error: No enzymes specified.")
             print("Usage: python sim.py --seq <sequence> --enz <enzyme1> [enzyme2] ...")
+            print("Or use --lanes-config to define enzymes per lane")
             sys.exit(2)
 
         # Create normalized lookup dictionary for case-insensitive matching
@@ -945,32 +961,55 @@ Examples:
         
         available_names = list(ENZYMES.keys())
 
-        # Validate and normalize enzyme names
+        # Validate and normalize enzyme names, handling duplicates
         validated_enzymes = []
-        for enzyme_name in args.enz:
-            norm_name = normalize(enzyme_name)
-            if norm_name in normalized_lookup:
-                variants = normalized_lookup[norm_name]
-                if len(variants) == 1:
-                    validated_enzymes.append(variants[0])
+        validated_display_names = []
+        enzyme_count = {}  # Track how many times each enzyme appears
+        
+        # Only validate enzymes if --enz was provided
+        if args.enz:
+            for enzyme_name in args.enz:
+                norm_name = normalize(enzyme_name)
+                if norm_name in normalized_lookup:
+                    variants = normalized_lookup[norm_name]
+                    if len(variants) == 1:
+                        actual_enzyme = variants[0]
+                        validated_enzymes.append(actual_enzyme)
+                        
+                        # Track duplicate count (for display names)
+                        if actual_enzyme not in enzyme_count:
+                            enzyme_count[actual_enzyme] = 1
+                        else:
+                            enzyme_count[actual_enzyme] += 1
+                    else:
+                        # Ambiguous base name - show variants and exit
+                        print(f"Error: Multiple enzyme variants found for '{enzyme_name}':")
+                        for variant in variants:
+                            print(f"  - {variant}")
+                        print("Please specify the exact enzyme name with suffix if needed.")
+                        sys.exit(2)
                 else:
-                    # Ambiguous base name - show variants and exit
-                    print(f"Error: Multiple enzyme variants found for '{enzyme_name}':")
-                    for variant in variants:
-                        print(f"  - {variant}")
-                    print("Please specify the exact enzyme name with suffix if needed.")
+                    # Find closest matches
+                    closest = find_closest_enzyme_names(enzyme_name, available_names)
+                    print(f"Error: Enzyme '{enzyme_name}' not found in database.")
+                    if closest:
+                        print(f"Did you mean one of these? {', '.join(closest)}")
+                    else:
+                        print("No similar enzyme names found.")
+                    print(f"Available enzymes: {', '.join(sorted(available_names))}")
+                    print(f"Total enzymes available: {len(available_names)}")
                     sys.exit(2)
-            else:
-                # Find closest matches
-                closest = find_closest_enzyme_names(enzyme_name, available_names)
-                print(f"Error: Enzyme '{enzyme_name}' not found in database.")
-                if closest:
-                    print(f"Did you mean one of these? {', '.join(closest)}")
+            
+            # Build a list of display names in order
+            validated_display_names = []
+            current_counts = {}
+            for enz in validated_enzymes:
+                if enz not in current_counts:
+                    current_counts[enz] = 1
+                    validated_display_names.append(enz)
                 else:
-                    print("No similar enzyme names found.")
-                print(f"Available enzymes: {', '.join(sorted(available_names))}")
-                print(f"Total enzymes available: {len(available_names)}")
-                sys.exit(2)
+                    current_counts[enz] += 1
+                    validated_display_names.append(f"{enz}#{current_counts[enz]}")
 
         # Read DNA sequence
         print(f"Reading DNA sequence from: {args.seq}")
@@ -996,37 +1035,40 @@ Examples:
         cuts_by_enzyme = {}
         cut_metadata = {}  # Maps cut position -> list of enzyme metadata
         
-        for enzyme_name in validated_enzymes:
-            enzyme_info = ENZYMES[enzyme_name]
-            recognition_seq = enzyme_info["sequence"]
-            cut_index = enzyme_info["cut_index"]
-            overhang_type = enzyme_info["overhang_type"]
-            
-            print(f"Enzyme: {enzyme_name}")
-            print(f"Site:   {recognition_seq}")
-            print(f"Cut @:  index {cut_index}")
-            print(f"Overhang: {overhang_type}")
-            
-            # Find cut positions for this enzyme
-            break_positions = find_cut_positions_linear(dna_sequence, enzyme_name, ENZYMES)
-            cuts_by_enzyme[enzyme_name] = break_positions
-            
-            # Store metadata for each cut position
-            for pos in break_positions:
-                if pos not in cut_metadata:
-                    cut_metadata[pos] = []
-                cut_metadata[pos].append({
-                    'enzyme': enzyme_name,
-                    'site': recognition_seq,
-                    'cut_index': cut_index,
-                    'overhang_type': overhang_type
-                })
-            
-            if break_positions:
-                print(f"Matches at positions: {', '.join(map(str, break_positions))}")
-            else:
-                print("No cut sites found.")
-            print()
+        # Only process enzymes if --enz was provided (not using lanes-config only)
+        if validated_enzymes:
+            for enzyme_name, display_name in zip(validated_enzymes, validated_display_names):
+                enzyme_info = ENZYMES[enzyme_name]
+                recognition_seq = enzyme_info["sequence"]
+                cut_index = enzyme_info["cut_index"]
+                overhang_type = enzyme_info["overhang_type"]
+                
+                print(f"Enzyme: {display_name}")
+                print(f"Site:   {recognition_seq}")
+                print(f"Cut @:  index {cut_index}")
+                print(f"Overhang: {overhang_type}")
+                
+                # Find cut positions for this enzyme
+                break_positions = find_cut_positions_linear(dna_sequence, enzyme_name, ENZYMES, circular=args.circular)
+                cuts_by_enzyme[display_name] = break_positions
+                
+                # Store metadata for each cut position with display name
+                for pos in break_positions:
+                    if pos not in cut_metadata:
+                        cut_metadata[pos] = []
+                    cut_metadata[pos].append({
+                        'enzyme': display_name,  # Use display name for output
+                        'actual_enzyme': enzyme_name,  # Keep actual enzyme for lookups
+                        'site': recognition_seq,
+                        'cut_index': cut_index,
+                        'overhang_type': overhang_type
+                    })
+                
+                if break_positions:
+                    print(f"Matches at positions: {', '.join(map(str, break_positions))}")
+                else:
+                    print("No cut sites found.")
+                print()
 
         # Merge all cut positions
         all_cuts = merge_cut_positions(cuts_by_enzyme, len(dna_sequence))
@@ -1213,20 +1255,38 @@ Examples:
                 try:
                     # Try to parse as JSON string first
                     if args.lanes_config.strip().startswith('[') or args.lanes_config.strip().startswith('{'):
-                        lanes_data = json.loads(args.lanes_config)
+                        lanes_cfg_data = json.loads(args.lanes_config)
                     else:
                         # Try to load from file
                         with open(args.lanes_config, 'r') as f:
-                            lanes_data = json.load(f)
+                            lanes_cfg_data = json.load(f)
                     
                     # Ensure it's a list
-                    if isinstance(lanes_data, dict):
-                        lanes_data = [lanes_data]
+                    if isinstance(lanes_cfg_data, dict):
+                        lanes_cfg_data = [lanes_cfg_data]
+                    
+                    # Validate schema
+                    if not isinstance(lanes_cfg_data, list):
+                        raise ValueError("lanes-config must be a JSON array of lane objects")
+                    
+                    lanes_data = lanes_cfg_data
                     
                     # Process each lane configuration
-                    for lane_config in lanes_data:
-                        lane_enzymes = lane_config.get('enzymes', [])
-                        lane_label = lane_config.get('label', '+'.join(lane_enzymes))
+                    for lane_idx, lane_config in enumerate(lanes_data):
+                        # Validate lane object
+                        if not isinstance(lane_config, dict):
+                            print(f"Warning: Lane {lane_idx} is not a valid object, skipping")
+                            continue
+                        
+                        # Validate required fields
+                        if 'enzymes' not in lane_config:
+                            raise ValueError(f"Lane {lane_idx} is missing required field 'enzymes'")
+                        if not isinstance(lane_config['enzymes'], list):
+                            raise ValueError(f"Lane {lane_idx}: 'enzymes' must be an array of enzyme names")
+                        
+                        # Get lane parameters with fallback to global settings
+                        lane_enzymes = lane_config.get('enzymes', args.enz if args.enz else [])
+                        lane_label = lane_config.get('label', '+'.join(lane_enzymes) if lane_enzymes else f'Lane{lane_idx+1}')
                         lane_circular = lane_config.get('circular', args.circular)
                         lane_notes = lane_config.get('notes', '')
                         
@@ -1240,7 +1300,7 @@ Examples:
                                 continue
                             
                             enz_info = ENZYMES[enz_name]
-                            enz_cuts = find_cut_positions_linear(dna_sequence, enz_name, ENZYMES)
+                            enz_cuts = find_cut_positions_linear(dna_sequence, enz_name, ENZYMES, circular=lane_circular)
                             lane_cuts_by_enzyme[enz_name] = enz_cuts
                             
                             for pos in enz_cuts:
@@ -1289,14 +1349,33 @@ Examples:
                             'notes': lane_notes
                         })
                 
-                except (json.JSONDecodeError, FileNotFoundError) as e:
-                    print(f"Error loading lanes config: {e}")
+                except json.JSONDecodeError as e:
+                    print("Error: Invalid JSON format in lanes-config")
+                    print(f"  Details: {e}")
+                    print()
+                    print("Expected format: [{'label': 'Lane1', 'enzymes': ['EcoRI']}, {'label': 'Lane2', 'enzymes': ['HindIII']}]")
+                    print()
+                    print("Required fields:")
+                    print("  - label: string (lane name)")
+                    print("  - enzymes: array of enzyme names")
+                    print()
+                    print("Optional fields:")
+                    print("  - circular: boolean (default: false)")
+                    print("  - notes: string (additional information)")
+                    sys.exit(1)
+                except FileNotFoundError:
+                    print(f"Error: Could not find lanes-config file: {args.lanes_config}")
+                    sys.exit(1)
+                except ValueError as e:
+                    print(f"Error: {e}")
+                    print()
+                    print("Expected format: [{'label': 'Lane1', 'enzymes': ['EcoRI']}]")
                     sys.exit(1)
             
             else:
                 # Use current digest as single lane
                 fragment_sizes = [f['length'] for f in fragments]
-                lane_label = '+'.join(validated_enzymes)
+                lane_label = '+'.join(validated_display_names)
                 
                 # Determine topology for gel rendering
                 gel_topology = args.gel_topology
@@ -1574,23 +1653,16 @@ Examples:
                 for pos in sorted(all_cuts):
                     enzymes_at_pos = cut_metadata.get(pos, [])
                     for enz_meta in enzymes_at_pos:
-                        # Calculate overhang length
-                        site_len = len(enz_meta['site'])
-                        cut_idx = enz_meta['cut_index']
-                        
-                        if enz_meta['overhang_type'] == "Blunt":
-                            overhang_len = 0
-                        elif enz_meta['overhang_type'] == "5' overhang":
-                            # Cut index is where top strand cuts
-                            # For 5' overhang, bottom strand cuts further right
-                            # Overhang length = site_len - cut_idx
-                            overhang_len = site_len - cut_idx
-                        elif enz_meta['overhang_type'] == "3' overhang":
-                            # For 3' overhang, bottom strand cuts further left
-                            # Overhang length = cut_idx
-                            overhang_len = cut_idx
-                        else:
-                            overhang_len = 0
+                        # Use centralized function to compute overhang metadata
+                        end_meta = compute_end_metadata(
+                            dna=dna_sequence,
+                            cut_pos=pos,
+                            recognition_site=enz_meta['site'],
+                            cut_index=enz_meta['cut_index'],
+                            overhang_type=enz_meta['overhang_type'],
+                            is_left_end=True,  # Doesn't matter for just getting length
+                            circular=args.circular
+                        )
                         
                         export_cuts.append({
                             'pos': pos,
@@ -1598,7 +1670,7 @@ Examples:
                             'recognition_site': enz_meta['site'],
                             'cut_index': enz_meta['cut_index'],
                             'overhang_type': enz_meta['overhang_type'],
-                            'overhang_len': overhang_len
+                            'overhang_len': end_meta['overhang_len']
                         })
                 
                 # Determine topology for export
@@ -1625,23 +1697,21 @@ Examples:
         # Export to CSV if requested
         if args.export_csv:
             try:
-                # Build cuts list for export (same as GenBank)
+                # Build cuts list for export (using centralized function)
                 export_cuts = []
                 for pos in sorted(all_cuts):
                     enzymes_at_pos = cut_metadata.get(pos, [])
                     for enz_meta in enzymes_at_pos:
-                        # Calculate overhang length
-                        site_len = len(enz_meta['site'])
-                        cut_idx = enz_meta['cut_index']
-                        
-                        if enz_meta['overhang_type'] == "Blunt":
-                            overhang_len = 0
-                        elif enz_meta['overhang_type'] == "5' overhang":
-                            overhang_len = site_len - cut_idx
-                        elif enz_meta['overhang_type'] == "3' overhang":
-                            overhang_len = cut_idx
-                        else:
-                            overhang_len = 0
+                        # Use centralized function to compute overhang metadata
+                        end_meta = compute_end_metadata(
+                            dna=dna_sequence,
+                            cut_pos=pos,
+                            recognition_site=enz_meta['site'],
+                            cut_index=enz_meta['cut_index'],
+                            overhang_type=enz_meta['overhang_type'],
+                            is_left_end=True,  # Doesn't matter for just getting length
+                            circular=args.circular
+                        )
                         
                         export_cuts.append({
                             'pos': pos,
@@ -1649,7 +1719,7 @@ Examples:
                             'recognition_site': enz_meta['site'],
                             'cut_index': enz_meta['cut_index'],
                             'overhang_type': enz_meta['overhang_type'],
-                            'overhang_len': overhang_len
+                            'overhang_len': end_meta['overhang_len']
                         })
                 
                 # Determine topology for export

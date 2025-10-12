@@ -754,6 +754,7 @@ def format_theoretical_pairs(
     lines.append("=" * 80)
     lines.append("")
     
+    has_n_bases = False
     for a, b, directional, reason in results:
         lines.append(f"{a.enzyme}  | {a.overhang_type} k={a.k} | tpl={a.sticky_template} | palindromic: {'YES' if a.is_palindromic else 'NO'}")
         lines.append(f"{b.enzyme}  | {b.overhang_type} k={b.k} | tpl={b.sticky_template} | palindromic: {'YES' if b.is_palindromic else 'NO'}")
@@ -763,6 +764,17 @@ def format_theoretical_pairs(
         else:
             lines.append("  ✔ Compatible (non-directional)")
         
+        lines.append("")
+        
+        # Check if any templates contain 'N'
+        if 'N' in a.sticky_template or 'N' in b.sticky_template:
+            has_n_bases = True
+    
+    # Add note about 'N' bases if present
+    if has_n_bases:
+        lines.append("")
+        lines.append("Note: 'N' in templates indicates bases outside the recognition site")
+        lines.append("      (typically from Type IIS enzymes that cut outside their recognition sequence)")
         lines.append("")
     
     lines.append(f"Total compatible pairs: {len(results)}")
@@ -854,6 +866,10 @@ def format_theoretical_detailed(
         
     Returns:
         Formatted string (JSON-like)
+    
+    Note:
+        'N' in templates indicates bases outside the recognition site,
+        typically from Type IIS enzymes that cut outside their recognition sequence.
     """
     if not results:
         return "[]"

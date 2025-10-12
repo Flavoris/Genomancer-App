@@ -8,6 +8,7 @@ import datetime
 import csv
 import re
 from typing import List, Dict, Optional
+from fragment_calculator import compute_end_metadata
 
 
 # ============================================================================
@@ -343,31 +344,55 @@ def export_csv(prefix: str, cuts: List[Dict], fragments: List[Dict],
             else:
                 seq = dna_sequence[start:end]
             
-            # Get end information
+            # Get end information using centralized function
             left_cut = frag['boundaries'].get('left_cut')
             right_cut = frag['boundaries'].get('right_cut')
             
             left_enz = ""
             left_oh_type = ""
-            left_oh_len = ""
+            left_oh_len = 0
             left_bases = ""
             
             if left_cut and left_cut.get('enzymes'):
-                left_enz = left_cut['enzymes'][0]['enzyme']
-                left_oh_type = left_cut['enzymes'][0].get('overhang_type', '')
-                left_oh_len = left_cut['enzymes'][0].get('overhang_len', 0)
-                left_bases = ""  # TODO: extract from sequence if needed
+                enz_meta = left_cut['enzymes'][0]
+                left_enz = enz_meta['enzyme']
+                left_oh_type = enz_meta.get('overhang_type', '')
+                
+                # Use centralized function to compute end metadata
+                end_meta = compute_end_metadata(
+                    dna=dna_sequence,
+                    cut_pos=left_cut['pos'],
+                    recognition_site=enz_meta.get('site', ''),
+                    cut_index=enz_meta.get('cut_index', 0),
+                    overhang_type=left_oh_type,
+                    is_left_end=True,
+                    circular=(topology == "circular")
+                )
+                left_oh_len = end_meta['overhang_len']
+                left_bases = end_meta['end_bases']
             
             right_enz = ""
             right_oh_type = ""
-            right_oh_len = ""
+            right_oh_len = 0
             right_bases = ""
             
             if right_cut and right_cut.get('enzymes'):
-                right_enz = right_cut['enzymes'][0]['enzyme']
-                right_oh_type = right_cut['enzymes'][0].get('overhang_type', '')
-                right_oh_len = right_cut['enzymes'][0].get('overhang_len', 0)
-                right_bases = ""  # TODO: extract from sequence if needed
+                enz_meta = right_cut['enzymes'][0]
+                right_enz = enz_meta['enzyme']
+                right_oh_type = enz_meta.get('overhang_type', '')
+                
+                # Use centralized function to compute end metadata
+                end_meta = compute_end_metadata(
+                    dna=dna_sequence,
+                    cut_pos=right_cut['pos'],
+                    recognition_site=enz_meta.get('site', ''),
+                    cut_index=enz_meta.get('cut_index', 0),
+                    overhang_type=right_oh_type,
+                    is_left_end=False,
+                    circular=(topology == "circular")
+                )
+                right_oh_len = end_meta['overhang_len']
+                right_bases = end_meta['end_bases']
             
             writer.writerow({
                 'fragment_id': frag_idx,

@@ -7,6 +7,7 @@ cloning, Golden Gate assembly, and PCR-based methods.
 
 import heapq
 import json
+import hashlib
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Set, FrozenSet
 from copy import deepcopy
@@ -16,6 +17,32 @@ from ligation_compatibility import (
     are_compatible, is_directional, EndInfo, 
     calculate_gc_percent, calculate_tm, revcomp
 )
+
+
+# ============================================================================
+# HELPER FUNCTIONS FOR STATE HASHING
+# ============================================================================
+
+def construct_signature(constructs):
+    """
+    Build a stable, hashable signature for a set of Construct objects.
+    
+    Uses name, length, circular flag, origin, and a short hash of seq.
+    This allows state deduplication based on available constructs without
+    requiring Step objects to be hashable.
+    
+    Args:
+        constructs: FrozenSet or iterable of Construct objects
+        
+    Returns:
+        frozenset of tuples representing construct signatures
+    """
+    items = []
+    for c in constructs:
+        h = hashlib.sha1(c.seq.encode('utf-8')).hexdigest()[:12]
+        items.append((c.name, len(c.seq), c.circular, c.origin, h))
+    # frozenset since order doesn't matter
+    return frozenset(items)
 
 
 # ============================================================================
@@ -76,8 +103,38 @@ class SearchState:
         """For priority queue ordering (A* uses f = g + h)."""
         return (self.cost + self.heuristic) < (other.cost + other.heuristic)
     
+    def signature(self):
+        """
+        Return a hashable signature representing the current state.
+        
+        The signature is based solely on the available constructs, not on
+        the path taken to reach this state. This allows proper deduplication
+        without requiring Step objects to be hashable.
+        
+        Returns:
+            frozenset of construct signatures
+        """
+        return construct_signature(self.constructs)
+    
     def __hash__(self):
-        return hash((self.constructs, self.steps_taken))
+        """
+        Hash based on structural state only, not on step objects.
+        
+        This prevents "unhashable type: Step" errors since Step contains
+        mutable lists/dicts.
+        """
+        return hash(self.signature())
+    
+    def __eq__(self, other):
+        """
+        Equality based on available constructs, not path taken.
+        
+        Two states are equal if they have the same set of available constructs,
+        regardless of how we arrived at that state.
+        """
+        if not isinstance(other, SearchState):
+            return False
+        return self.signature() == other.signature()
 
 
 # ============================================================================
@@ -777,7 +834,8 @@ def beam_search(initial_state: SearchState, target_spec: Dict,
         
         for state in current_beam:
             # Check if already visited
-            state_key = (state.constructs, state.steps_taken)
+            # Use signature() instead of state tuple to avoid hashing Step objects
+            state_key = state.signature()
             if state_key in visited:
                 continue
             visited.add(state_key)
