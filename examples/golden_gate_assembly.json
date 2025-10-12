@@ -1,0 +1,52 @@
+{
+  "vector": {
+    "name": "pVector",
+    "fasta": "plasmid.fasta",
+    "circular": true
+  },
+  "inserts": [
+    {
+      "name": "Part1",
+      "fasta": "sample_dna.fasta",
+      "features": []
+    },
+    {
+      "name": "Part2",
+      "fasta": "sample.fasta",
+      "features": []
+    }
+  ],
+  "target": {
+    "order": ["pVector", "Part1", "Part2"],
+    "junctions": [
+      {
+        "left": "pVector",
+        "right": "Part1",
+        "directional": true,
+        "scar": "AATG",
+        "keep_frame": false
+      },
+      {
+        "left": "Part1",
+        "right": "Part2",
+        "directional": true,
+        "scar": "AGGT",
+        "keep_frame": false
+      },
+      {
+        "left": "Part2",
+        "right": "pVector",
+        "directional": true,
+        "scar": "GCTT",
+        "keep_frame": false
+      }
+    ]
+  },
+  "constraints": {
+    "avoid_internal_cuts": true,
+    "dephosphorylate_backbone": false,
+    "min_overhang": 4
+  },
+  "notes": "Golden Gate assembly with BsaI, designed 4-nt overhangs for directional assembly"
+}
+
