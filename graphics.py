@@ -28,14 +28,20 @@ def _hash_color(text: str) -> str:
 
 def _avoid_label_collision(
     labels: List[Dict],
-    min_distance: float = 10.0
+    min_distance: float = 10.0,
+    max_iterations: int = 10
 ) -> List[Dict]:
     """
-    Adjust label positions to avoid collisions.
+    Adjust label positions to avoid collisions using an iterative approach.
+    
+    When multiple labels collide in sequence, this function uses an iterative
+    algorithm to re-check all labels after each adjustment, preventing cascading
+    collision issues.
     
     Args:
         labels: List of label dicts with 'x', 'y', 'text' keys
         min_distance: Minimum distance between labels
+        max_iterations: Maximum number of adjustment passes
         
     Returns:
         List of adjusted labels with updated positions
@@ -43,22 +49,47 @@ def _avoid_label_collision(
     if len(labels) <= 1:
         return labels
     
-    adjusted = []
-    for i, label in enumerate(labels):
-        x, y = label['x'], label['y']
+    # Copy labels to avoid modifying originals
+    adjusted = [dict(label) for label in labels]
+    
+    # Iteratively resolve collisions
+    for iteration in range(max_iterations):
+        collision_found = False
         
-        # Check against all previous labels
-        for prev in adjusted:
-            dx = x - prev['x']
-            dy = y - prev['y']
-            dist = math.sqrt(dx*dx + dy*dy)
-            
-            if dist < min_distance:
-                # Push this label outward radially
-                y += 12
-                label = dict(label, y=y, needs_leader=True)
+        for i in range(len(adjusted)):
+            # Check this label against ALL other labels
+            for j in range(len(adjusted)):
+                if i == j:
+                    continue
+                
+                dx = adjusted[i]['x'] - adjusted[j]['x']
+                dy = adjusted[i]['y'] - adjusted[j]['y']
+                dist = math.sqrt(dx*dx + dy*dy)
+                
+                if dist < min_distance:
+                    # Push this label outward radially
+                    adjusted[i]['y'] += 12
+                    adjusted[i]['needs_leader'] = True
+                    collision_found = True
+                    break  # Re-check in next iteration
         
-        adjusted.append(label)
+        # If no collisions found, we're done
+        if not collision_found:
+            break
+    
+    # Fallback: If still colliding after max iterations, abbreviate overlapping labels
+    if iteration == max_iterations - 1:
+        for i in range(len(adjusted)):
+            for j in range(i + 1, len(adjusted)):
+                dx = adjusted[i]['x'] - adjusted[j]['x']
+                dy = adjusted[i]['y'] - adjusted[j]['y']
+                dist = math.sqrt(dx*dx + dy*dy)
+                
+                if dist < min_distance:
+                    # Abbreviate labels as last resort
+                    text = adjusted[i].get('text', '')
+                    if len(text) > 5:
+                        adjusted[i]['text'] = text[:4] + '…'
     
     return adjusted
 

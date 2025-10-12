@@ -234,9 +234,10 @@ def test_frame_preservation_3bp_scar():
 
 def test_frame_preservation_stop_codon():
     """Test detection of stop codons in junction."""
-    left_seq = "ATGATGAT"
-    right_seq = "AATGATG"
-    scar = "TAG"  # Stop codon
+    # Use 9-base sequences (multiples of 3) so scar aligns with frame 0
+    left_seq = "ATGATGATG"  # 9 bases, ends in frame
+    right_seq = "AATGATGAT"  # 9 bases, starts in frame
+    scar = "TAG"  # Stop codon - should be detected in-frame
     
     ok, reason = check_frame_preservation(left_seq, right_seq, scar, 0, 0)
     

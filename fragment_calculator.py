@@ -130,6 +130,120 @@ def calculate_overhang_length(recognition_site: str, cut_index: int) -> int:
     return overhang
 
 
+def compute_end_metadata(
+    dna: str,
+    cut_pos: int,
+    recognition_site: str,
+    cut_index: int,
+    overhang_type: str,
+    is_left_end: bool,
+    circular: bool = False
+) -> Dict[str, any]:
+    """
+    SINGLE SOURCE OF TRUTH for overhang metadata computation.
+    
+    This function computes all end-related metadata for a fragment end created by
+    an enzyme cut. All output functions (console, CSV, GenBank, JSON, graphics)
+    MUST use this function to ensure consistency.
+    
+    Args:
+        dna: Full DNA sequence
+        cut_pos: Position where the enzyme cuts (0-based)
+        recognition_site: Recognition sequence (e.g., "GAATTC" for EcoRI)
+        cut_index: Cut position within the site (0-based)
+        overhang_type: "5' overhang" | "3' overhang" | "Blunt"
+        is_left_end: True if this is the left (5') end of a fragment
+        circular: True if the sequence is circular
+        
+    Returns:
+        Dictionary with keys:
+            - overhang_len: int (length of overhang in bp)
+            - sticky_seq: str (5'→3' sequence of protruding nucleotides)
+            - polarity: str ("left" | "right")
+            - end_bases: str (same as sticky_seq, for display)
+            - overhang_type: str (passed through)
+    
+    Examples:
+        >>> # EcoRI cuts G^AATTC to produce 5' AATT overhang (4 bp)
+        >>> # Both left and right ends show the same canonical sticky sequence: AATT
+        >>> compute_end_metadata("AAAGAATTCGGG", 4, "GAATTC", 1, "5' overhang", is_left_end=True)
+        {'overhang_len': 4, 'sticky_seq': 'AATT', 'polarity': 'left', 'end_bases': 'AATT', 'overhang_type': "5' overhang"}
+        
+        >>> compute_end_metadata("AAAGAATTCGGG", 4, "GAATTC", 1, "5' overhang", is_left_end=False)
+        {'overhang_len': 4, 'sticky_seq': 'AATT', 'polarity': 'right', 'end_bases': 'AATT', 'overhang_type': "5' overhang"}
+        
+        >>> # PstI cuts CTGCA^G to produce 3' TGCA overhang (4 bp)
+        >>> # Both ends show the canonical sticky sequence: TGCA
+        >>> compute_end_metadata("AAACTGCAGTTT", 8, "CTGCAG", 5, "3' overhang", is_left_end=True)
+        {'overhang_len': 4, 'sticky_seq': 'TGCA', 'polarity': 'left', 'end_bases': 'TGCA', 'overhang_type': "3' overhang"}
+        
+        >>> # SmaI cuts CCC^GGG to produce blunt end (0 bp)
+        >>> compute_end_metadata("AAACCCGGGAAA", 6, "CCCGGG", 3, "Blunt", is_left_end=True)
+        {'overhang_len': 0, 'sticky_seq': '', 'polarity': 'left', 'end_bases': '', 'overhang_type': 'Blunt'}
+    """
+    # Calculate overhang length
+    overhang_len = calculate_overhang_length(recognition_site, cut_index)
+    
+    # Determine polarity based on fragment end
+    polarity = "left" if is_left_end else "right"
+    
+    # Handle blunt ends
+    if overhang_type == "Blunt" or overhang_len == 0:
+        return {
+            'overhang_len': 0,
+            'sticky_seq': '',
+            'polarity': polarity,
+            'end_bases': '',
+            'overhang_type': overhang_type
+        }
+    
+    # Extract the CANONICAL sticky sequence (the protruding nucleotides)
+    # This is the same for both left and right ends - we always report
+    # the actual sticky overhang sequence that protrudes, not the recessed part.
+    #
+    # For 5' overhang (e.g., EcoRI: G^AATTC):
+    #   Top strand:    5'---G AATT---3'
+    #   Bottom strand: 3'---CTTAA G---5'
+    #   Canonical sticky sequence: AATT (the 4 bases after the cut)
+    #   Both left and right fragment ends show: AATT
+    #
+    # For 3' overhang (e.g., PstI: CTGCA^G):
+    #   Top strand:    5'---CTGCA G---3'
+    #   Bottom strand: 3'---G ACGTC---5'
+    #   Canonical sticky sequence: TGCA (the 4 bases before the cut)
+    #   Both left and right fragment ends show: TGCA
+    
+    seq_len = len(dna)
+    
+    if overhang_type == "5' overhang":
+        # For 5' overhang: use dna[cut_pos:cut_pos + overhang_len]
+        # This gets the protruding nucleotides (AATT for EcoRI)
+        start = cut_pos
+        end = cut_pos + overhang_len
+    else:  # 3' overhang
+        # For 3' overhang: use dna[cut_pos - overhang_len:cut_pos]
+        # This gets the protruding nucleotides (TGCA for PstI)
+        start = cut_pos - overhang_len
+        end = cut_pos
+    
+    # Extract the sequence (handle circular wrapping if needed)
+    if circular:
+        sticky_seq = slice_circular(dna, start, end)
+    else:
+        # Clamp to sequence boundaries
+        start = max(0, min(start, seq_len))
+        end = max(0, min(end, seq_len))
+        sticky_seq = dna[start:end]
+    
+    return {
+        'overhang_len': overhang_len,
+        'sticky_seq': sticky_seq,
+        'polarity': polarity,
+        'end_bases': sticky_seq,  # Same as sticky_seq for display
+        'overhang_type': overhang_type
+    }
+
+
 def extract_end_bases(
     seq: str,
     cut_pos: int,
@@ -140,6 +254,10 @@ def extract_end_bases(
     """
     Extract the bases at a fragment end based on the overhang type.
     
+    IMPORTANT: Returns the CANONICAL sticky sequence that is the same for both
+    left and right fragment ends created by the same cut. This ensures consistency
+    with compute_end_metadata().
+    
     Args:
         seq: Full DNA sequence
         cut_pos: Position of the cut
@@ -148,7 +266,7 @@ def extract_end_bases(
         circular: True if sequence is circular
         
     Returns:
-        String of bases at the end (5'->3' orientation)
+        String of bases at the end (5'->3' orientation) - canonical sticky sequence
     """
     overhang_type = enzyme_meta.get('overhang_type', 'Blunt')
     recognition_site = enzyme_meta.get('site', '')
@@ -160,30 +278,20 @@ def extract_end_bases(
     if overhang_type == "Blunt" or overhang_len == 0:
         return ""
     
-    # Extract the overhang bases
-    # For 5' overhang: left fragment has overhang, right fragment has recess
-    # For 3' overhang: left fragment has recess, right fragment has overhang
-    
+    # Extract the CANONICAL sticky sequence (same for both left and right ends)
+    # This matches the behavior of compute_end_metadata()
     seq_len = len(seq)
     
     if overhang_type == "5' overhang":
-        if is_left_end:
-            # Left end of fragment - has the 5' overhang (trailing bases)
-            start = cut_pos - overhang_len
-            end = cut_pos
-        else:
-            # Right end of fragment - has recessed end
-            start = cut_pos
-            end = cut_pos + overhang_len
+        # For 5' overhang: canonical sequence is after the cut
+        # Example: EcoRI G^AATTC produces "AATT" for both ends
+        start = cut_pos
+        end = cut_pos + overhang_len
     else:  # 3' overhang
-        if is_left_end:
-            # Left end of fragment - has recessed end
-            start = cut_pos
-            end = cut_pos + overhang_len
-        else:
-            # Right end of fragment - has the 3' overhang
-            start = cut_pos - overhang_len
-            end = cut_pos
+        # For 3' overhang: canonical sequence is before the cut
+        # Example: PstI CTGCA^G produces "TGCA" for both ends
+        start = cut_pos - overhang_len
+        end = cut_pos
     
     # Handle circular wrapping
     if circular:
@@ -205,18 +313,18 @@ def extract_sticky_seq(
     """
     Extract the sticky sequence for ligation compatibility analysis.
     
-    This represents the single-stranded overhang sequence in 5'→3' orientation
-    on the fragment strand that will anneal with a complementary overhang.
+    IMPORTANT: Returns the CANONICAL sticky sequence (the protruding nucleotides)
+    that is the same for both left and right fragment ends created by the same cut.
+    This ensures consistency with compute_end_metadata().
     
-    For 5' overhangs:
-      - The top strand extends past the bottom strand at the 5' end
-      - Left fragment end: the overhanging bases are at the 3' end (trailing)
-      - Right fragment end: the overhanging bases are at the 5' end (leading)
+    The sticky sequence represents the single-stranded overhang in 5'→3' orientation.
+    For ligation compatibility, two ends are compatible if their sticky sequences
+    are reverse complements of each other.
     
-    For 3' overhangs:
-      - The bottom strand extends past the top strand at the 3' end
-      - Left fragment end: the overhanging bases are at the 5' end (leading)
-      - Right fragment end: the overhanging bases are at the 3' end (trailing)
+    Examples:
+      - EcoRI (G^AATTC): produces "AATT" for both left and right ends (5' overhang)
+      - PstI (CTGCA^G): produces "TGCA" for both left and right ends (3' overhang)
+      - SmaI (CCC^GGG): produces "" for both ends (blunt)
     
     Args:
         seq: Full DNA sequence
@@ -226,7 +334,7 @@ def extract_sticky_seq(
         circular: True if sequence is circular
         
     Returns:
-        String representing the sticky overhang sequence (5'→3')
+        String representing the canonical sticky overhang sequence (5'→3')
     """
     overhang_type = enzyme_meta.get('overhang_type', 'Blunt')
     recognition_site = enzyme_meta.get('site', '')
@@ -240,41 +348,26 @@ def extract_sticky_seq(
     
     seq_len = len(seq)
     
-    # For ligation compatibility, we need the single-stranded overhang
-    # that will be available for annealing
+    # Extract the CANONICAL sticky sequence (same for both left and right ends)
+    # This matches the behavior of compute_end_metadata()
     
     if overhang_type == "5' overhang":
-        # 5' overhang: top strand extends beyond bottom strand
-        # The recognition site is cut asymmetrically
-        # Example: EcoRI cuts G^AATTC, producing ...G and AATTC...
-        
-        if is_left_end:
-            # Left end of a fragment after a 5' overhang cut
-            # The fragment ends with bases that stick out on the 5' side
-            # These are the last bases before the cut
-            start = cut_pos - overhang_len
-            end = cut_pos
-        else:
-            # Right end of a fragment after a 5' overhang cut
-            # The fragment starts with bases that are recessed
-            # The sticky sequence is the complement of what's missing
-            start = cut_pos
-            end = cut_pos + overhang_len
+        # For 5' overhang: canonical sequence is after the cut
+        # Example: EcoRI G^AATTC produces "AATT" for both ends
+        #   Top strand:    5'---G AATT---3'
+        #   Bottom strand: 3'---CTTAA G---5'
+        #   Canonical sticky sequence: AATT
+        start = cut_pos
+        end = cut_pos + overhang_len
     
     else:  # 3' overhang
-        # 3' overhang: bottom strand extends beyond top strand
-        # Example: PstI cuts CTGCA^G, producing CTGCA and G...
-        
-        if is_left_end:
-            # Left end of a fragment after a 3' overhang cut
-            # The fragment starts with recessed top strand
-            start = cut_pos
-            end = cut_pos + overhang_len
-        else:
-            # Right end of a fragment after a 3' overhang cut
-            # The fragment ends with sticky 3' overhang
-            start = cut_pos - overhang_len
-            end = cut_pos
+        # For 3' overhang: canonical sequence is before the cut
+        # Example: PstI CTGCA^G produces "TGCA" for both ends
+        #   Top strand:    5'---CTGCA G---3'
+        #   Bottom strand: 3'---G ACGTC---5'
+        #   Canonical sticky sequence: TGCA
+        start = cut_pos - overhang_len
+        end = cut_pos
     
     # Handle circular wrapping
     if circular:
@@ -294,7 +387,11 @@ def build_end_info(
     circular: bool = False
 ) -> EndInfo:
     """
-    Build EndInfo object for a fragment end.
+    Build EndInfo object for a fragment end using the centralized compute_end_metadata function.
+    
+    IMPORTANT: This function uses compute_end_metadata() as the single source of truth
+    for all overhang calculations. All other functions (extract_end_bases, extract_sticky_seq)
+    have been synchronized to use the same logic.
     
     Args:
         enzyme_meta: Dictionary with enzyme metadata
@@ -311,8 +408,16 @@ def build_end_info(
     cut_index = enzyme_meta['cut_index']
     overhang_type = enzyme_meta['overhang_type']
     
-    overhang_len = calculate_overhang_length(recognition_site, cut_index)
-    end_bases = extract_end_bases(seq, cut_pos, enzyme_meta, is_left_end, circular)
+    # Use the centralized function for consistency
+    metadata = compute_end_metadata(
+        dna=seq,
+        cut_pos=cut_pos,
+        recognition_site=recognition_site,
+        cut_index=cut_index,
+        overhang_type=overhang_type,
+        is_left_end=is_left_end,
+        circular=circular
+    )
     
     return EndInfo(
         enzyme=enzyme,
@@ -320,8 +425,8 @@ def build_end_info(
         cut_index=cut_index,
         overhang_type=overhang_type,
         end_type=overhang_type,
-        overhang_len=overhang_len,
-        end_bases=end_bases
+        overhang_len=metadata['overhang_len'],
+        end_bases=metadata['end_bases']
     )
 
 

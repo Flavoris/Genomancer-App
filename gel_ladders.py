@@ -14,10 +14,10 @@ LADDER_PRESETS = {
 
 def get_ladder(name: str) -> list:
     """
-    Get ladder fragment sizes by name.
+    Get ladder fragment sizes by name (case-insensitive).
     
     Args:
-        name: Name of the ladder preset ("100bp", "1kb", "broad")
+        name: Name of the ladder preset ("100bp", "1kb", "broad") - case insensitive
         
     Returns:
         List of fragment sizes in base pairs
@@ -27,8 +27,9 @@ def get_ladder(name: str) -> list:
     """
     name_lower = name.lower()
     if name_lower not in LADDER_PRESETS:
-        available = ", ".join(LADDER_PRESETS.keys())
-        raise ValueError(f"Unknown ladder '{name}'. Available ladders: {available}")
+        # Show lowercase options to make clear input is case-insensitive
+        available = ", ".join(sorted(LADDER_PRESETS.keys()))
+        raise ValueError(f"Unknown ladder '{name_lower}'. Available ladders (case-insensitive): {available}")
     
     return LADDER_PRESETS[name_lower]
 

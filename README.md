@@ -26,7 +26,7 @@ A comprehensive Python tool for simulating restriction enzyme cutting on **linea
 
 ## Installation
 
-**No additional dependencies required!** This simulator uses only Python standard library modules:
+**Core functionality requires no dependencies!** This simulator uses only Python standard library modules:
 - `argparse` for command-line arguments
 - `json` for loading enzyme database
 - `re` for pattern matching and IUPAC expansion
@@ -34,7 +34,16 @@ A comprehensive Python tool for simulating restriction enzyme cutting on **linea
 - `unicodedata` for name normalization
 - `typing` for type hints
 
-**Optional:** For PNG export from SVG graphics, you can install `cairo` and `cairosvg` (see Graphics Output section below).
+All main features (digest, analysis, SVG output) work out of the box with Python 3.7+.
+
+### Optional Dependencies
+
+For **PNG export** from SVG graphics (when using `--png` flag):
+```bash
+pip install cairosvg
+```
+
+Note: PNG export requires both `cairo` system library and `cairosvg` Python package. SVG output works without any installation.
 
 ## Enzyme Database
 
@@ -61,7 +70,12 @@ The `enzymes.json` file should contain a JSON array of enzyme objects with the f
 - `cut_index`: 0-based position where the enzyme cuts within the recognition sequence
 - `overhang_type`: The type of overhang produced ("5' overhang", "3' overhang", "Blunt", or "Unknown")
 
-**Note:** Overhang Type is imported directly from Restriction Enzymes.csv and displayed verbatim (normalized) in output.
+**Field validation:**
+- `cut_index` must satisfy: `0 ≤ cut_index ≤ len(site)` (cuts within or at boundaries of recognition site)
+- `overhang_type` must be one of: `"5' overhang"`, `"3' overhang"`, `"Blunt"`, or `"Unknown"`
+- `site` must contain only valid IUPAC nucleotide codes (case-insensitive)
+
+**Note:** The simulator validates `enzymes.json` on load and will skip invalid entries with a warning. Overhang type is displayed verbatim (normalized) in output.
 
 **Examples:**
 - AatII recognizes "GACGTC" and cuts after position 5, producing a 3' overhang
@@ -102,6 +116,37 @@ python sim.py --seq "ATCGAATTCGGGATCCAAA" --enz ecori bamhi hindiii  # Case-inse
 ```bash
 python sim.py --seq sample_dna.fasta --enz BamHI HindIII
 ```
+
+##### Duplicate enzyme handling:
+
+When you specify the same enzyme multiple times, the simulator automatically assigns unique display labels with `#2`, `#3` suffixes for clarity:
+
+```bash
+# Specify EcoRI twice to track different recognition sites separately
+python sim.py --seq "GAATTCGGGGGAATTC" --enz EcoRI EcoRI --print-map
+```
+
+**Output will show:**
+```
+Enzyme: EcoRI
+Site:   GAATTC
+...
+
+Enzyme: EcoRI#2
+Site:   GAATTC
+...
+
+Cut Site Details:
+  Position 1: EcoRI ...
+  Position 12: EcoRI#2 ...
+```
+
+This is particularly useful when:
+- Tracking multiple instances of the same enzyme in restriction maps
+- Distinguishing between different cut sites in the same sequence
+- Creating complex multi-enzyme digestion strategies
+
+**Note:** The actual enzyme behavior is identical (same recognition site and cut pattern), but the display labels help you identify which occurrence you're looking at in the output.
 
 #### Circular DNA Digestion (NEW!)
 
@@ -260,27 +305,95 @@ seq: CTGCAGATCG...ATCGGAATTC
 Note: This fragment wraps around the origin (position 0)
 ```
 
-### Overhang Type Examples
+### Overhang Semantics and Calculation
 
-The simulator calculates overhang lengths and displays end bases for each fragment:
+The simulator uses a **centralized overhang calculation function** (`compute_end_metadata`) to ensure consistency across all outputs (console, CSV, GenBank, JSON). This function is the single source of truth for overhang metadata.
+
+#### How Overhang Length is Calculated
+
+For standard Type II restriction enzymes with palindromic recognition sites, the overhang length is calculated as:
+
+```
+overhang_length = |2 × cut_index - site_length|
+```
+
+**Examples:**
+- **EcoRI** (GAATTC, cut_index=1): |2×1 - 6| = |2-6| = **4 bp** ✓
+- **HindIII** (AAGCTT, cut_index=1): |2×1 - 6| = **4 bp** ✓
+- **PstI** (CTGCAG, cut_index=5): |2×5 - 6| = |10-6| = **4 bp** ✓
+- **SmaI** (CCCGGG, cut_index=3): |2×3 - 6| = |6-6| = **0 bp** (blunt) ✓
+
+#### Overhang Orientation and Reporting
+
+All sticky end sequences are reported in **5'→3' orientation** relative to the fragment strand:
 
 #### 5' Overhang (EcoRI)
 ```
 Recognition site: GAATTC
-Cut position: G^AATTC (after position 1)
-Overhang: 4 bp, 5' type
-Left fragment end: ...XXXG (trailing 4 bp form 5' overhang)
-Right fragment end: AATTCXXX... (recessed end)
+Cut position: G^AATTC (cuts after position 1)
+Overhang type: 5' overhang
+Overhang length: 4 bp
+
+Top strand:    5'---G AATT---3'
+Bottom strand: 3'---CTTAA G---5'
+                      ^^^^
+                    4 bp 5' overhang
+
+Reported sticky sequence: AATT (5'→3')
 ```
+
+**In output:**
+- Console: "5' overhang, 4 bp: AATT"
+- CSV: `left_overhang_len=4, left_end_bases=AATT`
+- GenBank: `/note="overhang=5' overhang; k=4"`
 
 #### 3' Overhang (PstI)
 ```
 Recognition site: CTGCAG
-Cut position: CTGCA^G (after position 5)
-Overhang: 4 bp, 3' type
-Left fragment end: ...CTGCA (recessed end)
-Right fragment end: GXXXX... (3' overhang on complementary strand)
+Cut position: CTGCA^G (cuts after position 5)
+Overhang type: 3' overhang
+Overhang length: 4 bp
+
+Top strand:    5'---CTGCA G---3'
+Bottom strand: 3'---G ACGTC---5'
+                    ^^^^
+                  4 bp 3' overhang
+
+Reported sticky sequence: TGCA (5'→3' on the protruding strand)
 ```
+
+**In output:**
+- Console: "3' overhang, 4 bp: TGCA"
+- CSV: `right_overhang_len=4, right_end_bases=TGCA`
+- GenBank: `/note="overhang=3' overhang; k=4"`
+
+#### Blunt Ends (SmaI)
+```
+Recognition site: CCCGGG
+Cut position: CCC^GGG (cuts at position 3, middle)
+Overhang type: Blunt
+Overhang length: 0 bp
+
+Top strand:    5'---CCC GGG---3'
+Bottom strand: 3'---GGG CCC---5'
+                    ^
+                  No overhang
+
+Reported sticky sequence: "" (empty)
+```
+
+**In output:**
+- Console: "Blunt, 0 bp"
+- CSV: `overhang_len=0, end_bases=""`
+- GenBank: `/note="overhang=Blunt; k=0"`
+
+#### Output Consistency Guarantee
+
+The centralized `compute_end_metadata()` function ensures that:
+- Overhang lengths are **always** calculated correctly (EcoRI = 4 bp, not 5 or 0)
+- Sticky sequences are **always** reported in the same orientation
+- Console, CSV, GenBank, and JSON outputs **always** match
+- Left and right fragment ends use the **same** calculation logic
 
 #### Blunt End (EcoRV)
 ```
@@ -482,7 +595,60 @@ Available ladders:
 - `--gel-topology {auto,linearized,native}`: How to render circular DNA (default: auto)
 
 #### Multi-Lane Configuration
-- `--lanes-config <json>`: JSON file or string defining multiple lanes
+
+The `--lanes-config` option allows you to define multiple lanes with different enzyme combinations in a single gel simulation. This is useful for comparing different digestion strategies side-by-side.
+
+**Option:**
+- `--lanes-config <json>`: Path to JSON file or inline JSON string defining multiple lanes
+
+**Lane Configuration Format:**
+
+Each lane in the configuration is a JSON object with the following optional fields:
+
+```json
+{
+  "label": "Lane Label",           // Display name for the lane
+  "enzymes": ["EcoRI", "HindIII"], // List of enzymes (optional, uses global --enz if omitted)
+  "circular": true,                // Override global topology for this lane (optional)
+  "notes": "Optional description"  // Additional notes (optional)
+}
+```
+
+**Example lanes.json file:**
+
+```json
+[
+  {"label": "Uncut", "enzymes": [], "circular": true},
+  {"label": "EcoRI", "enzymes": ["EcoRI"], "circular": true},
+  {"label": "EcoRI+HindIII", "enzymes": ["EcoRI", "HindIII"], "circular": true}
+]
+```
+
+**Usage:**
+
+```bash
+# Using a JSON file
+python sim.py --seq plasmid.fasta --lanes-config lanes.json --gel-only
+
+# Using inline JSON (single lane example)
+python sim.py --seq plasmid.fasta --lanes-config '[{"label":"Test","enzymes":["EcoRI"]}]' --gel-only
+
+# Multiple lanes comparing different enzyme combinations
+cat > lanes.json <<'JSON'
+[
+  {"label":"Uncut","enzymes":[],"circular":true},
+  {"label":"EcoRI","enzymes":["EcoRI"],"circular":true},
+  {"label":"EcoRI+HindIII","enzymes":["EcoRI","HindIII"],"circular":true}
+]
+JSON
+
+python sim.py --seq "ATCGAATTCGGGATCCAAA" --lanes-config lanes.json --gel-only
+```
+
+**Notes:**
+- If `enzymes` is omitted from a lane configuration, it will use the enzymes specified via `--enz`
+- The `circular` field in a lane config overrides the global `--circular` flag for that specific lane
+- Each lane is processed independently and fragments are calculated for each enzyme combination
 
 ### Example Output - Linear DNA
 

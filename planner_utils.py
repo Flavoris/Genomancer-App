@@ -293,9 +293,12 @@ def check_frame_preservation(left_seq: str, right_seq: str, scar: str,
     """
     Check if a junction preserves reading frame and provides details.
     
+    Note: For accurate stop codon detection, context sequences should ideally be at least
+    9 bases. If shorter sequences are provided, analysis will use available sequence.
+    
     Args:
-        left_seq: Last 12 bases of left sequence
-        right_seq: First 12 bases of right sequence
+        left_seq: Last 12 bases of left sequence (minimum: 3 bases recommended)
+        right_seq: First 12 bases of right sequence (minimum: 3 bases recommended)
         scar: Scar sequence at junction
         left_frame: Reading frame of left sequence (0, 1, or 2)
         right_frame: Reading frame of right sequence (0, 1, or 2)
@@ -303,6 +306,11 @@ def check_frame_preservation(left_seq: str, right_seq: str, scar: str,
     Returns:
         Tuple of (frame_ok, reason)
     """
+    # Validate minimum context length (soft requirement)
+    min_context_len = 3  # Minimum needed for one codon
+    if len(left_seq) < min_context_len or len(right_seq) < min_context_len:
+        return True, f"Insufficient context for frame analysis (left={len(left_seq)}bp, right={len(right_seq)}bp, need >={min_context_len}bp)"
+    
     # Calculate frame offset from scar
     scar_len = len(scar)
     
@@ -312,17 +320,25 @@ def check_frame_preservation(left_seq: str, right_seq: str, scar: str,
     if expected_right_frame != right_frame:
         return False, f"Frame shift: scar adds {scar_len} bp, shifting frame from {left_frame} to {expected_right_frame}, but right expects {right_frame}"
     
-    # Check for stop codons in junction
+    # Check for stop codons in junction (only check IN-FRAME codons)
     stop_codons = {'TAA', 'TAG', 'TGA'}
     
-    # Build junction context
-    context_left = left_seq[-9:] if len(left_seq) >= 9 else left_seq
-    context_right = right_seq[:9] if len(right_seq) >= 9 else right_seq
+    # Build junction context - use available sequence length (up to 9 bases)
+    context_len = min(9, len(left_seq), len(right_seq))
+    context_left = left_seq[-context_len:] if len(left_seq) >= context_len else left_seq
+    context_right = right_seq[:context_len] if len(right_seq) >= context_len else right_seq
     junction_context = context_left + scar + context_right
     
-    # Scan for stop codons
+    # Determine the reading frame offset for the start of junction_context
+    # We assume context_left is from a sequence with reading frame left_frame
+    # and has been trimmed to align with codon boundaries
+    # The start of junction_context is at frame offset based on context_left length
+    frame_offset = (left_frame) % 3
+    
+    # Scan for stop codons (only at in-frame positions)
     stops_found = []
-    for i in range(0, len(junction_context) - 2):
+    # Start at frame_offset and check every 3rd position (in-frame codons)
+    for i in range(frame_offset, len(junction_context) - 2, 3):
         codon = junction_context[i:i+3].upper()
         if len(codon) == 3 and codon in stop_codons:
             stops_found.append((i, codon))
