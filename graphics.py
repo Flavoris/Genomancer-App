@@ -6,7 +6,7 @@ Generates SVG/PNG visualizations of plasmid maps, linear maps, and fragment diag
 
 import math
 import hashlib
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict
 
 
 def _hash_color(text: str) -> str:
@@ -153,13 +153,13 @@ def render_plasmid_map(
     svg_lines.append(f'  <rect width="{svg_size}" height="{svg_size}" fill="{bg_color}"/>')
     
     # Style
-    svg_lines.append(f'  <style>')
+    svg_lines.append('  <style>')
     svg_lines.append(f'    text {{ font-family: Inter, "Segoe UI", Arial, sans-serif; fill: {fg_color}; }}')
-    svg_lines.append(f'    .title {{ font-size: 16px; font-weight: bold; }}')
-    svg_lines.append(f'    .label {{ font-size: 11px; }}')
+    svg_lines.append('    .title { font-size: 16px; font-weight: bold; }')
+    svg_lines.append('    .label { font-size: 11px; }')
     svg_lines.append(f'    .size {{ font-size: 10px; fill: {tick_color}; }}')
-    svg_lines.append(f'    .badge {{ font-size: 9px; }}')
-    svg_lines.append(f'  </style>')
+    svg_lines.append('    .badge { font-size: 9px; }')
+    svg_lines.append('  </style>')
     
     # Title
     svg_lines.append(f'  <text x="{center}" y="{margin}" '
@@ -321,7 +321,6 @@ def render_linear_map(
         axis_color = "#333333"
     
     margin_x = 60
-    margin_y = 40
     ruler_y = height / 2
     ruler_width = width - 2 * margin_x
     
@@ -335,12 +334,12 @@ def render_linear_map(
     svg_lines.append(f'  <rect width="{width}" height="{height}" fill="{bg_color}"/>')
     
     # Style
-    svg_lines.append(f'  <style>')
+    svg_lines.append('  <style>')
     svg_lines.append(f'    text {{ font-family: Inter, "Segoe UI", Arial, sans-serif; fill: {fg_color}; }}')
-    svg_lines.append(f'    .title {{ font-size: 14px; font-weight: bold; }}')
-    svg_lines.append(f'    .label {{ font-size: 10px; }}')
-    svg_lines.append(f'    .tick-label {{ font-size: 9px; }}')
-    svg_lines.append(f'  </style>')
+    svg_lines.append('    .title { font-size: 14px; font-weight: bold; }')
+    svg_lines.append('    .label { font-size: 10px; }')
+    svg_lines.append('    .tick-label { font-size: 9px; }')
+    svg_lines.append('  </style>')
     
     # Title
     svg_lines.append(f'  <text x="{width/2}" y="20" text-anchor="middle" class="title">{title}</text>')
@@ -464,7 +463,6 @@ def render_fragment_diagram(
         wrap_color = "#e87c7c"
     
     margin_x = 60
-    margin_y = 40
     bar_height = 30
     bar_y = height / 2 - bar_height / 2
     ruler_width = width - 2 * margin_x
@@ -479,11 +477,11 @@ def render_fragment_diagram(
     svg_lines.append(f'  <rect width="{width}" height="{height}" fill="{bg_color}"/>')
     
     # Style
-    svg_lines.append(f'  <style>')
+    svg_lines.append('  <style>')
     svg_lines.append(f'    text {{ font-family: Inter, "Segoe UI", Arial, sans-serif; fill: {fg_color}; }}')
-    svg_lines.append(f'    .title {{ font-size: 14px; font-weight: bold; }}')
-    svg_lines.append(f'    .size-label {{ font-size: 10px; }}')
-    svg_lines.append(f'  </style>')
+    svg_lines.append('    .title { font-size: 14px; font-weight: bold; }')
+    svg_lines.append('    .size-label { font-size: 10px; }')
+    svg_lines.append('  </style>')
     
     # Title
     svg_lines.append(f'  <text x="{width/2}" y="20" text-anchor="middle" class="title">{title}</text>')

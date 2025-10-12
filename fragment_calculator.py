@@ -994,7 +994,6 @@ def extract_fragment_ends_for_ligation(
         pos_to_enzymes[pos] = unique_enzymes
     
     ends = []
-    fragment_id = 0
     
     if not circular:
         # ========== LINEAR MODE ==========

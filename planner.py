@@ -6,16 +6,13 @@ cloning, Golden Gate assembly, and PCR-based methods.
 """
 
 import heapq
-import json
 import hashlib
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional, Set, FrozenSet
-from copy import deepcopy
+from typing import List, Dict, Tuple, Optional, FrozenSet
 
 from fragment_calculator import compute_fragments_with_sequences, Fragment
 from ligation_compatibility import (
-    are_compatible, is_directional, EndInfo, 
-    calculate_gc_percent, calculate_tm, revcomp
+    are_compatible, EndInfo
 )
 
 
@@ -359,7 +356,6 @@ def fragments_compatible_for_ligation(frag_a: Fragment, frag_b: Fragment,
         return False
     
     # Convert to EndInfo for compatibility check
-    from fragment_calculator import extract_sticky_seq
     
     end_info_a = EndInfo(
         enzyme=end_a.enzyme,
@@ -1084,14 +1080,13 @@ def export_plan_to_files(plan: Plan, output_dir: str, enzyme_db: Dict) -> None:
         enzyme_db: Enzyme database
     """
     import os
-    from exporters import export_genbank, export_csv
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
     # Export each step
     for i, step in enumerate(plan.steps, 1):
-        step_prefix = os.path.join(output_dir, f"step_{i:02d}_{step.action}")
+        os.path.join(output_dir, f"step_{i:02d}_{step.action}")
         
         # For digest steps, export fragments
         if step.action == "digest" and step.predicted_fragments:
@@ -1100,7 +1095,7 @@ def export_plan_to_files(plan: Plan, output_dir: str, enzyme_db: Dict) -> None:
     
     # Export final construct
     if plan.final:
-        final_path = os.path.join(output_dir, "final.gb")
+        os.path.join(output_dir, "final.gb")
         # Placeholder: would export final construct
         print(f"  Exporting final construct: {plan.final.name}")
     

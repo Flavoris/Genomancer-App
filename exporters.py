@@ -7,7 +7,7 @@ Provides functions to export restriction digest results to GenBank and CSV forma
 import datetime
 import csv
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict
 from fragment_calculator import compute_end_metadata
 
 
