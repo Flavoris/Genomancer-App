@@ -484,13 +484,13 @@ def format_plan_detailed(plan, export_dir: Optional[str] = None) -> str:
             deP = step.params.get('dephosphorylate', False)
             
             lines.append("Protocol:")
-            lines.append(f"  1. Set up restriction digest:")
+            lines.append("  1. Set up restriction digest:")
             for enz in enzymes:
                 lines.append(f"     - Add {enz}")
-            lines.append(f"  2. Incubate at 37°C for 1-2 hours")
+            lines.append("  2. Incubate at 37°C for 1-2 hours")
             if deP:
-                lines.append(f"  3. Add Antarctic Phosphatase (dephosphorylation)")
-                lines.append(f"  4. Incubate at 37°C for 30 minutes")
+                lines.append("  3. Add Antarctic Phosphatase (dephosphorylation)")
+                lines.append("  4. Incubate at 37°C for 30 minutes")
             lines.append(f"  {4 if deP else 3}. Purify by gel extraction or column")
             lines.append("")
             
@@ -506,12 +506,12 @@ def format_plan_detailed(plan, export_dir: Optional[str] = None) -> str:
             scar = step.params.get('scar', '')
             
             lines.append("Protocol:")
-            lines.append(f"  1. Set up ligation reaction:")
-            lines.append(f"     - Add vector (50 ng)")
-            lines.append(f"     - Add insert (3:1 molar ratio)")
-            lines.append(f"     - Add T4 DNA Ligase")
-            lines.append(f"  2. Incubate at 16°C overnight (or room temp 1 hour)")
-            lines.append(f"  3. Transform into competent cells")
+            lines.append("  1. Set up ligation reaction:")
+            lines.append("     - Add vector (50 ng)")
+            lines.append("     - Add insert (3:1 molar ratio)")
+            lines.append("     - Add T4 DNA Ligase")
+            lines.append("  2. Incubate at 16°C overnight (or room temp 1 hour)")
+            lines.append("  3. Transform into competent cells")
             lines.append("")
             
             lines.append(f"Directionality: {'Yes ✓' if directional else 'No (screen colonies)'}")
@@ -524,18 +524,20 @@ def format_plan_detailed(plan, export_dir: Optional[str] = None) -> str:
             overhangs = step.params.get('overhangs', [])
             
             lines.append("Protocol (Golden Gate):")
-            lines.append(f"  1. Set up one-pot reaction:")
-            lines.append(f"     - Add all parts (equimolar, 50 ng each)")
+            lines.append("  1. Set up one-pot reaction:")
+            lines.append("     - Add all parts (equimolar, 50 ng each)")
             lines.append(f"     - Add {enzyme}")
-            lines.append(f"     - Add T4 DNA Ligase")
-            lines.append(f"  2. Run thermocycler protocol:")
-            lines.append(f"     - 26 cycles: [37°C 2 min, 16°C 5 min]")
-            lines.append(f"     - Final: 50°C 5 min, 80°C 10 min")
-            lines.append(f"  3. Transform into competent cells")
+            lines.append("     - Add T4 DNA Ligase")
+            lines.append(
+                
+            )
+            lines.append("     - 26 cycles: [37°C 2 min, 16°C 5 min]")
+            lines.append("     - Final: 50°C 5 min, 80°C 10 min")
+            lines.append("  3. Transform into competent cells")
             lines.append("")
             
             if overhangs:
-                lines.append(f"Designed overhangs:")
+                lines.append("Designed overhangs:")
                 for i, oh in enumerate(overhangs):
                     lines.append(f"  Junction {i+1}: {oh}")
                 lines.append("")
@@ -544,13 +546,13 @@ def format_plan_detailed(plan, export_dir: Optional[str] = None) -> str:
             primers = step.params.get('primers', {})
             
             lines.append("Protocol:")
-            lines.append(f"  1. Set up PCR reaction:")
-            lines.append(f"     - Template DNA")
-            lines.append(f"     - Forward primer (see below)")
-            lines.append(f"     - Reverse primer (see below)")
-            lines.append(f"     - High-fidelity polymerase")
-            lines.append(f"  2. Run PCR with appropriate conditions")
-            lines.append(f"  3. Purify PCR product")
+            lines.append("  1. Set up PCR reaction:")
+            lines.append("     - Template DNA")
+            lines.append("     - Forward primer (see below)")
+            lines.append("     - Reverse primer (see below)")
+            lines.append("     - High-fidelity polymerase")
+            lines.append("  2. Run PCR with appropriate conditions")
+            lines.append("  3. Purify PCR product")
             lines.append("")
             
             if primers:
