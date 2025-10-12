@@ -5,7 +5,7 @@ Analyzes sticky-end compatibility between fragment ends produced by restriction 
 Supports theoretical analysis based on enzyme metadata without sequence digests.
 """
 
-from typing import List, Tuple, Dict, Optional, NamedTuple, Any
+from typing import List, Tuple, Dict, NamedTuple, Any
 import json
 
 
@@ -354,7 +354,7 @@ def format_pairs_output(results: List[CompatibilityResult]) -> str:
         else:
             lines.append(f"Compatible pair #{i} (blunt ends):")
             lines.append(f"  {a_label} ↔ {b_label}")
-            lines.append(f"  Note: Blunt-blunt ligation (requires ligase, not sticky)")
+            lines.append("  Note: Blunt-blunt ligation (requires ligase, not sticky)")
         
         lines.append("")
     
