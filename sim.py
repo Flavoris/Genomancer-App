@@ -666,12 +666,164 @@ Examples:
         "--topology", type=str, choices=["linear", "circular"], default=None,
         help="Override topology for export (defaults to current run mode)"
     )
+    
+    # Cloning planner options
+    parser.add_argument(
+        "--plan-cloning", type=str, default=None,
+        help="Run multi-step cloning planner with spec file (JSON or YAML)"
+    )
+    parser.add_argument(
+        "--max-steps", type=int, default=3,
+        help="Maximum number of cloning steps to search (default: 3)"
+    )
+    parser.add_argument(
+        "--prefer-typeIIS", action="store_true", default=False,
+        help="Prefer Type IIS (Golden Gate) one-pot assemblies"
+    )
+    parser.add_argument(
+        "--avoid-enzymes", type=str, default=None,
+        help="Comma-separated list of enzymes to avoid in planning"
+    )
+    parser.add_argument(
+        "--allow-enzymes", type=str, default=None,
+        help="Comma-separated list of allowed enzymes (restrict search space)"
+    )
+    parser.add_argument(
+        "--frame-check", action="store_true", default=False,
+        help="Enforce reading-frame continuity across junctions"
+    )
+    parser.add_argument(
+        "--export-plan", type=str, default=None,
+        help="Export plan to directory (creates GenBank/CSV for each step)"
+    )
+    parser.add_argument(
+        "--print-gels", action="store_true", default=False,
+        help="Include simulated gels for each step in plan output"
+    )
 
     args = parser.parse_args()
 
     try:
-        # Load enzyme database first (needed for both modes)
+        # Load enzyme database first (needed for all modes)
         ENZYMES = load_enzyme_database()
+        
+        # ====================================================================
+        # CLONING PLANNER MODE
+        # ====================================================================
+        if args.plan_cloning:
+            print("=" * 80)
+            print("MULTI-STEP CLONING PLANNER")
+            print("=" * 80)
+            print()
+            
+            # Import planner modules
+            try:
+                from planner import plan_from_spec
+                from planner_utils import (
+                    load_json_or_yaml, validate_spec, 
+                    format_plan_detailed, format_plan_json
+                )
+            except ImportError as e:
+                print(f"Error: Could not import planner modules: {e}")
+                sys.exit(1)
+            
+            # Load specification
+            print(f"Loading cloning specification: {args.plan_cloning}")
+            try:
+                spec = load_json_or_yaml(args.plan_cloning)
+            except (FileNotFoundError, ValueError) as e:
+                print(f"Error loading spec: {e}")
+                sys.exit(1)
+            
+            # Validate specification
+            valid, error_msg = validate_spec(spec)
+            if not valid:
+                print(f"Error: Invalid specification - {error_msg}")
+                sys.exit(1)
+            
+            print("✓ Specification loaded and validated")
+            print()
+            
+            # Parse options
+            planner_options = {}
+            
+            if args.avoid_enzymes:
+                planner_options['avoid_enzymes'] = [e.strip() for e in args.avoid_enzymes.split(',')]
+                print(f"Avoiding enzymes: {', '.join(planner_options['avoid_enzymes'])}")
+            
+            if args.allow_enzymes:
+                planner_options['allow_enzymes'] = [e.strip() for e in args.allow_enzymes.split(',')]
+                print(f"Allowed enzymes: {', '.join(planner_options['allow_enzymes'])}")
+            
+            planner_options['prefer_typeIIS'] = args.prefer_typeIIS
+            if args.prefer_typeIIS:
+                print("Preference: Type IIS (Golden Gate) assemblies")
+            
+            planner_options['frame_check'] = args.frame_check
+            if args.frame_check:
+                print("Frame checking: Enabled")
+            
+            planner_options['avoid_internal_cuts'] = spec.get('constraints', {}).get('avoid_internal_cuts', True)
+            planner_options['min_overhang'] = spec.get('constraints', {}).get('min_overhang', 4)
+            planner_options['beam_width'] = 10  # Can be made configurable
+            
+            print(f"Max steps: {args.max_steps}")
+            print()
+            
+            # Run planner
+            print("Searching for optimal cloning plan...")
+            print()
+            
+            plan = plan_from_spec(
+                spec=spec,
+                enzyme_db=ENZYMES,
+                max_steps=args.max_steps,
+                options=planner_options
+            )
+            
+            # Display results
+            if not plan.feasible:
+                print("⚠ No feasible plan found")
+                print(f"Reason: {plan.reason}")
+                print()
+                print("Suggestions:")
+                print("  - Increase --max-steps to allow more complex strategies")
+                print("  - Relax constraints in the specification")
+                print("  - Check that enzymes cut at appropriate sites")
+                sys.exit(1)
+            
+            print("✓ Plan found!")
+            print()
+            
+            # Format and display plan
+            from planner import format_plan_summary
+            
+            summary = format_plan_summary(plan, show_gels=args.print_gels)
+            print(summary)
+            
+            # Show detailed protocol if requested
+            if args.export_plan or args.print_gels:
+                detailed = format_plan_detailed(plan, export_dir=args.export_plan)
+                print()
+                print(detailed)
+            
+            # Export plan if requested
+            if args.export_plan:
+                print()
+                print(f"Exporting plan to: {args.export_plan}")
+                
+                from planner import export_plan_to_files
+                export_plan_to_files(plan, args.export_plan, ENZYMES)
+                
+                # Also export JSON representation
+                import os
+                json_path = os.path.join(args.export_plan, "plan.json")
+                with open(json_path, 'w') as f:
+                    f.write(format_plan_json(plan))
+                print(f"✓ Plan JSON saved to: {json_path}")
+            
+            # Exit after planning
+            sys.exit(0)
         
         # ====================================================================
         # THEORETICAL COMPATIBILITY MODE (no sequence required)
