@@ -301,4 +301,289 @@ final class DigestCoreTests: XCTestCase {
         XCTAssertEqual(sortedFrags[1].leftEnd.overhangType, .fivePrime)
         XCTAssertEqual(sortedFrags[1].rightEnd.overhangType, .fivePrime)
     }
+    
+    // MARK: - Task 12.1: Golden Parity Tests (Generated from Python simulator)
+    
+    func test_golden_linear_1_Set_1_EcoRI_BamHI() {
+        // Golden test: Linear DNA 1 (500bp)
+        // Enzymes: EcoRI, BamHI
+        // Expected from Python simulator
+        
+        let sequence = "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGGAATTCCGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTAGGATCCTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGAAGCTTGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA"
+        let circular = false
+        
+        // Define enzymes (using actual enzyme data from database)
+        let ecoRI = Enzyme(name: "EcoRI", site: "GAATTC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil)
+        let bamHI = Enzyme(name: "BamHI", site: "GGATCC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil)
+        let enzymes = [ecoRI, bamHI]
+        
+        // Run digest
+        let engine = DigestEngine(sequence: sequence, enzymes: enzymes)
+        let frags = engine.digest(options: .init(circular: circular, returnSequences: true))
+        
+        // GOLDEN EXPECTATIONS from Python simulator:
+        
+        // 1. Boundary positions (sorted cut positions)
+        let expectedBoundaries = [101, 207]
+        
+        // Extract actual cut positions from fragments
+        var actualCuts = Set<Int>()
+        for frag in frags {
+            if frag.start != 0 && !circular {
+                actualCuts.insert(frag.start)
+            }
+            if frag.end != sequence.count && !circular {
+                actualCuts.insert(frag.end)
+            }
+            if circular {
+                actualCuts.insert(frag.start)
+                if frag.end != frag.start {
+                    actualCuts.insert(frag.end)
+                }
+            }
+        }
+        let actualBoundaries = Array(actualCuts).sorted()
+        
+        XCTAssertEqual(actualBoundaries, expectedBoundaries,
+                      "Boundary positions should match Python simulator")
+        
+        // 2. Fragment lengths
+        let expectedLengths = [101, 106, 211]
+        let actualLengths = frags.map { $0.length }.sorted()
+        
+        XCTAssertEqual(actualLengths, expectedLengths,
+                      "Fragment lengths should match Python simulator")
+        
+        // 3. Fragment count
+        XCTAssertEqual(frags.count, 3,
+                      "Fragment count should match Python simulator")
+        
+        // 4. Overhang types verification
+        let sortedFrags = frags.sorted { $0.start < $1.start }
+        XCTAssertEqual(sortedFrags[0].rightEnd.overhangType, .fivePrime,
+                      "Fragment 0 right end should be 5' overhang")
+        XCTAssertEqual(sortedFrags[1].leftEnd.overhangType, .fivePrime,
+                      "Fragment 1 left end should be 5' overhang")
+        XCTAssertEqual(sortedFrags[1].rightEnd.overhangType, .fivePrime,
+                      "Fragment 1 right end should be 5' overhang")
+        XCTAssertEqual(sortedFrags[2].leftEnd.overhangType, .fivePrime,
+                      "Fragment 2 left end should be 5' overhang")
+    }
+    
+    func test_golden_linear_2_Set_2_PstI_NheI() {
+        // Golden test: Linear DNA 2 (400bp)
+        // Enzymes: PstI, NheI
+        // Expected from Python simulator
+        
+        let sequence = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACTGCAGTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTGCTAGCGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGTCTAGACCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+        let circular = false
+        
+        // Define enzymes (using actual enzyme data from database)
+        let pstI = Enzyme(name: "PstI", site: "CTGCAG", cutIndexTop: 5, cutIndexBottom: 1, overhangType: .threePrime, notes: nil)
+        let nheI = Enzyme(name: "NheI", site: "GCTAGC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil)
+        let enzymes = [pstI, nheI]
+        
+        // Run digest
+        let engine = DigestEngine(sequence: sequence, enzymes: enzymes)
+        let frags = engine.digest(options: .init(circular: circular, returnSequences: true))
+        
+        // GOLDEN EXPECTATIONS from Python simulator:
+        
+        // 1. Boundary positions (sorted cut positions)
+        let expectedBoundaries = [85, 167]
+        
+        // Extract actual cut positions from fragments
+        var actualCuts = Set<Int>()
+        for frag in frags {
+            if frag.start != 0 && !circular {
+                actualCuts.insert(frag.start)
+            }
+            if frag.end != sequence.count && !circular {
+                actualCuts.insert(frag.end)
+            }
+            if circular {
+                actualCuts.insert(frag.start)
+                if frag.end != frag.start {
+                    actualCuts.insert(frag.end)
+                }
+            }
+        }
+        let actualBoundaries = Array(actualCuts).sorted()
+        
+        XCTAssertEqual(actualBoundaries, expectedBoundaries,
+                      "Boundary positions should match Python simulator")
+        
+        // 2. Fragment lengths
+        let expectedLengths = [82, 85, 171]
+        let actualLengths = frags.map { $0.length }.sorted()
+        
+        XCTAssertEqual(actualLengths, expectedLengths,
+                      "Fragment lengths should match Python simulator")
+        
+        // 3. Fragment count
+        XCTAssertEqual(frags.count, 3,
+                      "Fragment count should match Python simulator")
+        
+        // 4. Overhang types verification
+        let sortedFrags = frags.sorted { $0.start < $1.start }
+        XCTAssertEqual(sortedFrags[0].rightEnd.overhangType, .threePrime,
+                      "Fragment 0 right end should be 3' overhang")
+        XCTAssertEqual(sortedFrags[1].leftEnd.overhangType, .threePrime,
+                      "Fragment 1 left end should be 3' overhang")
+        XCTAssertEqual(sortedFrags[1].rightEnd.overhangType, .fivePrime,
+                      "Fragment 1 right end should be 5' overhang")
+        XCTAssertEqual(sortedFrags[2].leftEnd.overhangType, .fivePrime,
+                      "Fragment 2 left end should be 5' overhang")
+    }
+    
+    func test_golden_circular_1_Set_1_EcoRI_BamHI() {
+        // Golden test: Circular Plasmid (600bp)
+        // Enzymes: EcoRI, BamHI
+        // Expected from Python simulator
+        
+        let sequence = "ATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCGAATTCCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATGGATCCTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGCTGCAGGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA"
+        let circular = true
+        
+        // Define enzymes (using actual enzyme data from database)
+        let ecoRI = Enzyme(name: "EcoRI", site: "GAATTC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil)
+        let bamHI = Enzyme(name: "BamHI", site: "GGATCC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil)
+        let enzymes = [ecoRI, bamHI]
+        
+        // Run digest
+        let engine = DigestEngine(sequence: sequence, enzymes: enzymes)
+        let frags = engine.digest(options: .init(circular: circular, returnSequences: true))
+        
+        // GOLDEN EXPECTATIONS from Python simulator:
+        
+        // 1. Boundary positions (sorted cut positions)
+        let expectedBoundaries = [121, 247]
+        
+        // Extract actual cut positions from fragments
+        var actualCuts = Set<Int>()
+        for frag in frags {
+            if frag.start != 0 && !circular {
+                actualCuts.insert(frag.start)
+            }
+            if frag.end != sequence.count && !circular {
+                actualCuts.insert(frag.end)
+            }
+            if circular {
+                actualCuts.insert(frag.start)
+                if frag.end != frag.start {
+                    actualCuts.insert(frag.end)
+                }
+            }
+        }
+        let actualBoundaries = Array(actualCuts).sorted()
+        
+        XCTAssertEqual(actualBoundaries, expectedBoundaries,
+                      "Boundary positions should match Python simulator")
+        
+        // 2. Fragment lengths
+        let expectedLengths = [126, 352]
+        let actualLengths = frags.map { $0.length }.sorted()
+        
+        XCTAssertEqual(actualLengths, expectedLengths,
+                      "Fragment lengths should match Python simulator")
+        
+        // 3. Fragment count
+        XCTAssertEqual(frags.count, 2,
+                      "Fragment count should match Python simulator")
+        
+        // 4. Overhang types verification
+        let sortedFrags = frags.sorted { $0.start < $1.start }
+        XCTAssertEqual(sortedFrags[0].leftEnd.overhangType, .fivePrime,
+                      "Fragment 0 left end should be 5' overhang")
+        XCTAssertEqual(sortedFrags[0].rightEnd.overhangType, .fivePrime,
+                      "Fragment 0 right end should be 5' overhang")
+        XCTAssertEqual(sortedFrags[1].leftEnd.overhangType, .fivePrime,
+                      "Fragment 1 left end should be 5' overhang")
+        XCTAssertEqual(sortedFrags[1].rightEnd.overhangType, .fivePrime,
+                      "Fragment 1 right end should be 5' overhang")
+    }
+    
+    func test_performance_benchmark_10kb_50enzymes() {
+        // Generate a 10kb random DNA sequence
+        let bases = ["A", "C", "G", "T"]
+        let sequence = (0..<10_000).map { _ in bases.randomElement()! }.joined()
+        
+        // Create 50 common restriction enzymes
+        let enzymes: [Enzyme] = [
+            Enzyme(name: "EcoRI", site: "GAATTC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "BamHI", site: "GGATCC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "PstI", site: "CTGCAG", cutIndexTop: 5, cutIndexBottom: 1, overhangType: .threePrime, notes: nil),
+            Enzyme(name: "HindIII", site: "AAGCTT", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "SalI", site: "GTCGAC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "SmaI", site: "CCCGGG", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "XbaI", site: "TCTAGA", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "KpnI", site: "GGTACC", cutIndexTop: 5, cutIndexBottom: 1, overhangType: .threePrime, notes: nil),
+            Enzyme(name: "SacI", site: "GAGCTC", cutIndexTop: 5, cutIndexBottom: 1, overhangType: .threePrime, notes: nil),
+            Enzyme(name: "XhoI", site: "CTCGAG", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "NcoI", site: "CCATGG", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "NdeI", site: "CATATG", cutIndexTop: 2, cutIndexBottom: 4, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "NotI", site: "GCGGCCGC", cutIndexTop: 2, cutIndexBottom: 6, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "SpeI", site: "ACTAGT", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "ApaI", site: "GGGCCC", cutIndexTop: 5, cutIndexBottom: 1, overhangType: .threePrime, notes: nil),
+            Enzyme(name: "BglII", site: "AGATCT", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "EcoRV", site: "GATATC", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "PvuII", site: "CAGCTG", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "AgeI", site: "ACCGGT", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "AflII", site: "CTTAAG", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "AscI", site: "GGCGCGCC", cutIndexTop: 2, cutIndexBottom: 6, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "BsrGI", site: "TGTACA", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "ClaI", site: "ATCGAT", cutIndexTop: 2, cutIndexBottom: 4, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "HpaI", site: "GTTAAC", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "MluI", site: "ACGCGT", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "NheI", site: "GCTAGC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "NruI", site: "TCGCGA", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "PmeI", site: "GTTTAAAC", cutIndexTop: 4, cutIndexBottom: 4, overhangType: .blunt, notes: nil),
+            Enzyme(name: "SacII", site: "CCGCGG", cutIndexTop: 4, cutIndexBottom: 2, overhangType: .threePrime, notes: nil),
+            Enzyme(name: "SbfI", site: "CCTGCAGG", cutIndexTop: 6, cutIndexBottom: 2, overhangType: .threePrime, notes: nil),
+            Enzyme(name: "SphI", site: "GCATGC", cutIndexTop: 5, cutIndexBottom: 1, overhangType: .threePrime, notes: nil),
+            Enzyme(name: "StuI", site: "AGGCCT", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "AvrII", site: "CCTAGG", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "BsiWI", site: "CGTACG", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "BstEII", site: "GGTNACC", cutIndexTop: 1, cutIndexBottom: 6, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "MfeI", site: "CAATTG", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "NarI", site: "GGCGCC", cutIndexTop: 2, cutIndexBottom: 4, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "PacI", site: "TTAATTAA", cutIndexTop: 5, cutIndexBottom: 3, overhangType: .threePrime, notes: nil),
+            Enzyme(name: "PmlI", site: "CACGTG", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "PshAI", site: "GACNNNNGTC", cutIndexTop: 10, cutIndexBottom: 0, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "PvuI", site: "CGATCG", cutIndexTop: 4, cutIndexBottom: 2, overhangType: .threePrime, notes: nil),
+            Enzyme(name: "RsrII", site: "CGGWCCG", cutIndexTop: 2, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "SalI", site: "GTCGAC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "ScaI", site: "AGTACT", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "SfoI", site: "GGCGCC", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "SgrAI", site: "CRCCGGYG", cutIndexTop: 2, cutIndexBottom: 6, overhangType: .fivePrime, notes: nil),
+            Enzyme(name: "SnaBI", site: "TACGTA", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "SspI", site: "AATATT", cutIndexTop: 3, cutIndexBottom: 3, overhangType: .blunt, notes: nil),
+            Enzyme(name: "SwaI", site: "ATTTAAAT", cutIndexTop: 4, cutIndexBottom: 4, overhangType: .blunt, notes: nil),
+            Enzyme(name: "XmnI", site: "GAANNNNTTC", cutIndexTop: 5, cutIndexBottom: 5, overhangType: .blunt, notes: nil)
+        ]
+        
+        // Measure performance
+        let startTime = Date()
+        let engine = DigestEngine(sequence: sequence, enzymes: enzymes)
+        let frags = engine.digest(options: .init(circular: false, returnSequences: false))
+        let endTime = Date()
+        
+        let elapsedMs = endTime.timeIntervalSince(startTime) * 1000
+        
+        // Verify we got some results
+        XCTAssertGreaterThan(frags.count, 0, "Should produce at least one fragment")
+        
+        // Performance assertion: should complete in under 100ms in Release builds
+        // Note: This threshold is aggressive and may need adjustment based on hardware
+        // In debug builds this will be much slower (5-10x), so we use a relaxed threshold
+        #if DEBUG
+        let threshold = 1000.0 // 1 second for debug builds
+        #else
+        let threshold = 100.0  // 100ms for release builds
+        #endif
+        
+        print("Performance benchmark: 10kb sequence with 50 enzymes digested in \(String(format: "%.2f", elapsedMs))ms")
+        
+        XCTAssertLessThan(elapsedMs, threshold,
+                         "Digest should complete under \(threshold)ms in Release (actual: \(String(format: "%.2f", elapsedMs))ms)")
+    }
 }

@@ -7,6 +7,14 @@ public enum IUPAC {
         "M":["A","C"], "K":["G","T"], "B":["C","G","T"], "D":["A","G","T"],
         "H":["A","C","T"], "V":["A","C","G"], "N":["A","C","G","T"]
     ]
+    
+    /// Optimized version: assumes inputs are already uppercased
+    public static func matchesFast(iupac: Character, base: Character) -> Bool {
+        guard let set = map[iupac] else { return false }
+        return set.contains(base)
+    }
+    
+    /// Legacy version: handles any case
     public static func matches(iupac: Character, base: Character) -> Bool {
         guard let set = map[Character(iupac.uppercased())] else { return false }
         return set.contains(Character(base.uppercased()))

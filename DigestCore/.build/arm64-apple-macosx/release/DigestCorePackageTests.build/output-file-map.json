@@ -1,0 +1,13 @@
+{
+  "": {
+    "dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/release/DigestCorePackageTests.build/DigestCorePackageTests.d",
+    "object": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/release/DigestCorePackageTests.build/DigestCorePackageTests.o",
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/release/DigestCorePackageTests.build/master.swiftdeps"
+  },
+  "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/release/DigestCorePackageTests.derived/runner.swift": {
+    "object": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/release/DigestCorePackageTests.build/runner.swift.o",
+    "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/release/DigestCorePackageTests.build/runner~partial.swiftmodule",
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/release/DigestCorePackageTests.build/runner.swiftdeps",
+    "diagnostics": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/release/DigestCorePackageTests.build/runner.dia"
+  }
+}
