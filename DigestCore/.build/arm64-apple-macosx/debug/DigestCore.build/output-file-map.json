@@ -1,0 +1,11 @@
+{
+  "": {
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/master.swiftdeps"
+  },
+  "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestCore.swift": {
+    "dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore.d",
+    "object": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore.swift.o",
+    "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore~partial.swiftmodule",
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore.swiftdeps"
+  }
+}

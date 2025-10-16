@@ -1,0 +1,20 @@
+Goal: One workspace with a Swift package (DigestCore) + iOS app (Genomancer).
+
+Create an Xcode workspace named `Genomancer`.
+Inside it, add:
+- A Swift Package named `DigestCore` (iOS 16+, Swift 5.9+).
+- An iOS app target named `Genomancer` using SwiftUI, iOS 16+.
+Make the app target depend on the package `DigestCore`.
+
+Project structure:
+DigestCore/
+  Sources/DigestCore/ (source files go here)
+  Tests/DigestCoreTests/
+Genomancer/
+  App/ (SwiftUI files)
+  Resources/ (assets and bundled JSON)
+
+Ensure the app builds (it can be a blank ContentView initially).
+
+
+Checkpoint: Clean build succeeds.

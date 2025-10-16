@@ -1,0 +1,4 @@
+module DigestCore {
+    header "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore-Swift.h"
+    requires objc
+}
