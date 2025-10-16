@@ -21,11 +21,16 @@ public struct EndInfo: Hashable {
     public let overhangType: OverhangType
     public let overhangSeq5to3: String?
     public let sourceEnzyme: String?
+    public let overhangLen: Int
     
-    public init(overhangType: OverhangType, overhangSeq5to3: String?, sourceEnzyme: String?) {
+    public init(overhangType: OverhangType, 
+                overhangSeq5to3: String?, 
+                sourceEnzyme: String?,
+                overhangLen: Int = 0) {
         self.overhangType = overhangType
         self.overhangSeq5to3 = overhangSeq5to3
         self.sourceEnzyme = sourceEnzyme
+        self.overhangLen = overhangLen
     }
 }
 

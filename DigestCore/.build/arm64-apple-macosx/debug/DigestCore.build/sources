@@ -1,3 +1,4 @@
+/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Compat.swift
 /Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestCore.swift
 /Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestEngine.swift
 /Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/EnzymeLoader.swift
@@ -8,4 +9,6 @@
 /Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Match.swift
 /Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/DigestModels.swift
 /Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/Enzyme.swift
+/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Overhangs.swift
 /Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Render.swift
+/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Theoretical.swift

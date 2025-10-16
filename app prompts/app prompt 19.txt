@@ -1,0 +1,51 @@
+Task 9.5 — Unit tests (EcoRI & PstI parity)
+Edit `DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift`:
+- Add tests that assert overhang seqs, types, lengths, and concrete compatibility.
+
+func test_EcoRI_overhangs_and_compat() {
+    // EcoRI: GAATTC with top cut at 1, bottom 5 → 5' overhang length 4 (AATT)
+    let ecoRI = Enzyme(name: "EcoRI", site: "GAATTC",
+                       cutIndexTop: 1, cutIndexBottom: 5,
+                       overhangType: .fivePrime, notes: nil)
+
+    let seq = "AAGAATTCTT" // ...GAATTC...
+    let engine = DigestEngine(sequence: seq, enzymes: [ecoRI])
+    let frags = engine.digest(options: .init(circular: false, returnSequences: false))
+    // Expect 2 fragments: left end from natural terminus (blunt), then a cut, then a cut, then terminus.
+    XCTAssertEqual(frags.map(\.length).sorted(), [2,8])
+
+    // Find the fragment whose left or right end was created by EcoRI cut
+    let ends = frags.flatMap { [$0.leftEnd, $0.rightEnd] }
+    // Sticky ends should have AATT, len 4, 5' type
+    let stickies = ends.filter { $0.overhangLen > 0 }
+    XCTAssertFalse(stickies.isEmpty)
+    for e in stickies {
+        XCTAssertEqual(e.overhangType, .fivePrime)
+        XCTAssertEqual(e.overhangLen, 4)
+        XCTAssertEqual(e.overhangSeq5to3, "AATT")
+    }
+    // Compatibility: two EcoRI ends should be mutually compatible (revcomp(AATT) == AATT' on the other end)
+    XCTAssertTrue(stickies.count >= 2)
+    XCTAssertTrue(compatibleConcrete(a: stickies[0], b: stickies[1]))
+}
+
+func test_PstI_overhangs() {
+    // PstI: CTGCAG with top cut at 5, bottom at 1 → 3' overhang length 4 ("TGCA")
+    let pstI = Enzyme(name: "PstI", site: "CTGCAG",
+                      cutIndexTop: 5, cutIndexBottom: 1,
+                      overhangType: .threePrime, notes: nil)
+    let seq = "AAACTGCAGTT" // ...CTGCAG...
+    let engine = DigestEngine(sequence: seq, enzymes: [pstI])
+    let frags = engine.digest(options: .init(circular: false))
+    let ends = frags.flatMap { [$0.leftEnd, $0.rightEnd] }
+    let stickies = ends.filter { $0.overhangLen > 0 }
+    XCTAssertFalse(stickies.isEmpty)
+    for e in stickies {
+        XCTAssertEqual(e.overhangType, .threePrime)
+        XCTAssertEqual(e.overhangLen, 4)
+        XCTAssertEqual(e.overhangSeq5to3, "TGCA")
+    }
+}
+
+
+Checkpoint: Tests pass; app builds.

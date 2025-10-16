@@ -1,0 +1,30 @@
+Task 9.4 — Concrete ligation compatibility (actual digests)
+Create `DigestCore/Sources/DigestCore/Compat.swift`:
+
+- `compatibleConcrete(a:b:includeBlunt:minOverhang:)` — concrete sequence rule:
+  1) both blunt (if allowed) or both sticky
+  2) same overhang type (both 5' or both 3')
+  3) same length ≥ minOverhang
+  4) `a.overhangSeq5to3 == revcomp(b.overhangSeq5to3)`
+
+import Foundation
+
+public func compatibleConcrete(a: EndInfo, b: EndInfo,
+                               includeBlunt: Bool = false,
+                               minOverhang: Int = 1) -> Bool {
+    // sticky↔blunt always false
+    let aSticky = (a.overhangLen > 0 && a.overhangSeq5to3?.isEmpty == false)
+    let bSticky = (b.overhangLen > 0 && b.overhangSeq5to3?.isEmpty == false)
+    if aSticky != bSticky { return false }
+    if !aSticky && !bSticky { return includeBlunt } // blunt↔blunt
+
+    if a.overhangType != b.overhangType { return false }
+    if a.overhangLen < minOverhang || b.overhangLen < minOverhang { return false }
+    if a.overhangLen != b.overhangLen { return false }
+
+    guard let sa = a.overhangSeq5to3, let sb = b.overhangSeq5to3 else { return false }
+    return sa.uppercased() == revcomp(sb).uppercased()
+}
+
+
+Checkpoint: Build.
