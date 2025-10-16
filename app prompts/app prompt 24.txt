@@ -1,0 +1,8 @@
+Task 11.1 — Share sheets
+In `HomeView`:
+- Add buttons to export CSV (using `exportCSV`) and GenBank (using `exportGenBank`) from current digest results + sequence.
+- Present a `ShareLink` or `UIDocumentInteractionController` wrapper to save the file to Files.
+Ensure filenames include locus/time.
+
+
+Checkpoint: Can export CSV and minimal GenBank.

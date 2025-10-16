@@ -12,16 +12,19 @@ public struct DigestOptions {
 public final class DigestEngine {
     let sequence: String
     let enzymes: [Enzyme]
+    // Performance optimization: cached sequence as character array
+    let sequenceChars: [Character]
     
     public init(sequence: String, enzymes: [Enzyme]) {
         self.sequence = sequence.uppercased()
         self.enzymes = enzymes
+        self.sequenceChars = Array(self.sequence)
     }
 
     public func cutSites() -> [CutSite] {
         var sites: [CutSite] = []
         for e in enzymes {
-            let hits = findAllMatches(sequence: sequence, motifIUPAC: e.site)
+            let hits = findAllMatches(sequenceChars: sequenceChars, motifChars: e.siteChars)
             for start in hits {
                 // Use only cutIndexTop for the cut position
                 // cutIndexBottom is used only for overhang calculation
@@ -73,7 +76,7 @@ public final class DigestEngine {
                 frags.append(Fragment(
                     start: start, end: end, length: len,
                     leftEnd: left, rightEnd: right,
-                    sequence: options.returnSequences ? sliceCircular(sequence, start, len) : nil
+                    sequence: options.returnSequences ? sliceCircular(sequenceChars, start, len) : nil
                 ))
             }
         } else {
@@ -92,7 +95,7 @@ public final class DigestEngine {
                 frags.append(Fragment(
                     start: start, end: end, length: end - start,
                     leftEnd: left, rightEnd: right,
-                    sequence: options.returnSequences ? String(Array(sequence)[start..<end]) : nil
+                    sequence: options.returnSequences ? String(sequenceChars[start..<end]) : nil
                 ))
             }
         }
@@ -139,9 +142,8 @@ public final class DigestEngine {
     }
 }
 
-private func sliceCircular(_ s: String, _ start: Int, _ length: Int) -> String {
-    let n = s.count
-    let arr = Array(s)
+private func sliceCircular(_ arr: [Character], _ start: Int, _ length: Int) -> String {
+    let n = arr.count
     return String((0..<length).map { arr[(start + $0) % n] })
 }
 
