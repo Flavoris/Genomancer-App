@@ -1,0 +1,24 @@
+Task 8.1 — Add tests
+Create `DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift` with:
+- IUPAC basic test
+- EcoRI linear digest sanity
+
+import XCTest
+@testable import DigestCore
+
+final class DigestCoreTests: XCTestCase {
+    func test_IUPAC_match() {
+        XCTAssertTrue(IUPAC.matches(iupac: "R", base: "A"))
+        XCTAssertFalse(IUPAC.matches(iupac: "R", base: "C"))
+    }
+
+    func test_EcoRI_linear_digest() {
+        let ecoRI = Enzyme(name: "EcoRI", site: "GAATTC", cutIndexTop: 1, cutIndexBottom: 5, overhangType: .fivePrime, notes: nil)
+        let engine = DigestEngine(sequence: "AAGAATTCTT", enzymes: [ecoRI])
+        let frags = engine.digest(options: .init(circular: false))
+        XCTAssertEqual(frags.map(\.length).sorted(), [2,8]) // adjust if needed
+    }
+}
+
+
+Checkpoint: swift test passes in the package; app still builds.

@@ -1,0 +1,93 @@
+Task 9.3 — Compute EndInfo using single-source-of-truth
+Edit `DigestCore/Sources/DigestCore/DigestEngine.swift`:
+
+- Change `cutSites()` to keep the full `CutSite` list (we already do).
+- In `digest(options:)`, when emitting fragments, compute the **left** and **right** end metadata:
+
+  • For CIRCULAR:
+    - For fragment k spanning cut[k-1]→cut[k], the left end is made by the cut at `a = extended[k]`, the right by the cut at `b = extended[k+1]` (mod n). Use the `CutSite` at those absolute positions to build `EndInfo`.
+
+  • For LINEAR:
+    - For fragment i spanning indices[i]→indices[i+1], the left end is made by the cut at `indices[i]` **iff i>0**; otherwise it’s a natural terminus (set blunt, len 0, seq "").
+    - The right end is made by the cut at `indices[i+1]` **iff i < last-1**; otherwise natural terminus (blunt).
+
+private func endInfoForBoundary(boundaryPos: Int,
+                                cutAtPos: CutSite?,
+                                circular: Bool) -> EndInfo {
+    guard let cs = cutAtPos else {
+        return EndInfo(overhangType: .blunt, overhangSeq5to3: "", sourceEnzyme: nil, overhangLen: 0)
+    }
+    let e = cs.enzyme
+    let typ = e.overhangType ?? .unknown
+    // fall back: infer type if missing
+    let overhangType: OverhangType = (typ == .unknown)
+        ? inferType(siteLen: e.site.count, cutIndexTop: e.cutIndexTop)
+        : typ
+
+    let k = (e.cutIndexTop == nil) ? 0 : overhangLength(site: e.site, cutIndexTop: e.cutIndexTop!)
+    let sticky = (e.cutIndexTop == nil) ? "" :
+        canonicalSticky(seq: sequence,
+                        cutPos: boundaryPos,
+                        recognitionSite: e.site,
+                        cutIndexTop: e.cutIndexTop!,
+                        overhangType: overhangType,
+                        circular: circular)
+    return EndInfo(overhangType: overhangType,
+                   overhangSeq5to3: sticky.isEmpty ? nil : sticky,
+                   sourceEnzyme: e.name,
+                   overhangLen: k)
+}
+
+private func inferType(siteLen: Int, cutIndexTop: Int?) -> OverhangType {
+    guard let c = cutIndexTop else { return .blunt }
+    let d = 2*c - siteLen
+    if d == 0 { return .blunt }
+    // sign convention: positive → 5' overhang (matches Python’s examples like EcoRI)
+    return d > 0 ? .fivePrime : .threePrime
+}
+
+
+Now wire it inside digest(options:) to pass real ends:
+
+// Replace fragment construction blocks to compute ends:
+
+if options.circular {
+    let extended = sitesSorted + [ (sitesSorted.first!.position + n) ]
+    let siteByPos = Dictionary(grouping: cutSites()).mapValues { $0.first } // unique per pos
+    for k in 0..<extended.count-1 {
+        let a = extended[k]
+        let b = extended[k+1]
+        let start = a % n
+        let end   = b % n
+        let len   = end >= start ? (end - start) : (n - start + end)
+
+        let left  = endInfoForBoundary(boundaryPos: start,
+                                       cutAtPos: siteByPos[a % n],
+                                       circular: true)
+        let right = endInfoForBoundary(boundaryPos: end,
+                                       cutAtPos: siteByPos[b % n],
+                                       circular: true)
+
+        frags.append(Fragment(start: start, end: end, length: len,
+                              leftEnd: left, rightEnd: right,
+                              sequence: options.returnSequences ? sliceCircular(sequence, start, len) : nil))
+    }
+} else {
+    let indices = [0] + sitesSorted.map(\.position) + [n]
+    let siteByPos = Dictionary(uniqueKeysWithValues: cutSites().map { ($0.position, $0) })
+    for i in 0..<indices.count-1 {
+        let start = indices[i]
+        let end   = indices[i+1]
+        let leftCut  = (i == 0) ? nil : siteByPos[start]
+        let rightCut = (i == indices.count-2) ? nil : siteByPos[end]
+        let left  = endInfoForBoundary(boundaryPos: start, cutAtPos: leftCut,  circular: false)
+        let right = endInfoForBoundary(boundaryPos: end,   cutAtPos: rightCut, circular: false)
+
+        frags.append(Fragment(start: start, end: end, length: end - start,
+                              leftEnd: left, rightEnd: right,
+                              sequence: options.returnSequences ? String(Array(sequence)[start..<end]) : nil))
+    }
+}
+
+
+Checkpoint: Build. The app still runs.
