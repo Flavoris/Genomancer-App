@@ -127,17 +127,17 @@ def render_plasmid_map(
     Returns:
         SVG string
     """
-    # Theme colors
+    # Theme colors - matching new logo design
     if theme == "dark":
-        bg_color = "#1a1a1a"
-        fg_color = "#e0e0e0"
-        circle_color = "#555555"
-        tick_color = "#888888"
+        bg_color = "#1F4059"  # genomancerPrimary - deep navy
+        fg_color = "#E6F3FF"  # genomancerText - off-white
+        circle_color = "#336699"  # genomancerSecondary - medium blue
+        tick_color = "#40A6D9"  # genomancerDNABase1 - bright blue
     else:
-        bg_color = "#ffffff"
-        fg_color = "#000000"
-        circle_color = "#cccccc"
-        tick_color = "#999999"
+        bg_color = "#F5F8FA"  # Light background
+        fg_color = "#1F4059"  # genomancerPrimary - deep navy
+        circle_color = "#336699"  # genomancerSecondary - medium blue
+        tick_color = "#40A6D9"  # genomancerDNABase1 - bright blue
     
     # Calculate SVG dimensions
     svg_size = 2 * (radius + margin + 80)  # Extra space for labels
@@ -310,15 +310,15 @@ def render_linear_map(
     Returns:
         SVG string
     """
-    # Theme colors
+    # Theme colors - matching new logo design
     if theme == "dark":
-        bg_color = "#1a1a1a"
-        fg_color = "#e0e0e0"
-        axis_color = "#555555"
+        bg_color = "#1F4059"  # genomancerPrimary - deep navy
+        fg_color = "#E6F3FF"  # genomancerText - off-white
+        axis_color = "#336699"  # genomancerSecondary - medium blue
     else:
-        bg_color = "#ffffff"
-        fg_color = "#000000"
-        axis_color = "#333333"
+        bg_color = "#F5F8FA"  # Light background
+        fg_color = "#1F4059"  # genomancerPrimary - deep navy
+        axis_color = "#336699"  # genomancerSecondary - medium blue
     
     margin_x = 60
     ruler_y = height / 2
@@ -450,17 +450,17 @@ def render_fragment_diagram(
     Returns:
         SVG string
     """
-    # Theme colors
+    # Theme colors - matching new logo design
     if theme == "dark":
-        bg_color = "#1a1a1a"
-        fg_color = "#e0e0e0"
-        frag_color = "#4a90e2"
-        wrap_color = "#e24a4a"
+        bg_color = "#1F4059"  # genomancerPrimary - deep navy
+        fg_color = "#E6F3FF"  # genomancerText - off-white
+        frag_color = "#40A6D9"  # genomancerDNABase1 - bright blue
+        wrap_color = "#D97326"  # genomancerAccent - warm orange
     else:
-        bg_color = "#ffffff"
-        fg_color = "#000000"
-        frag_color = "#6ba3e8"
-        wrap_color = "#e87c7c"
+        bg_color = "#F5F8FA"  # Light background
+        fg_color = "#1F4059"  # genomancerPrimary - deep navy
+        frag_color = "#40A6D9"  # genomancerDNABase1 - bright blue
+        wrap_color = "#D97326"  # genomancerAccent - warm orange
     
     margin_x = 60
     bar_height = 30

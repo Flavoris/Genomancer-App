@@ -8,24 +8,54 @@ struct MapView: View {
     let circular: Bool
     
     @State private var svgContent: String = ""
+    @State private var showCopiedAlert = false
     
     var body: some View {
         VStack {
             if svgContent.isEmpty {
                 ProgressView("Generating map...")
+                    .foregroundColor(.genomancerText)
                     .onAppear(perform: generateMap)
             } else {
                 SVGWebView(svgContent: svgContent)
                     .navigationTitle("Plasmid Map")
                     .navigationBarTitleDisplayMode(.inline)
+                    .accessibilityLabel("Plasmid map visualization")
+                    .accessibilityHint(mapAccessibilityDescription)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button(action: copySVG) {
+                                Label("Copy SVG", systemImage: "doc.on.doc")
+                            }
+                            .accessibilityLabel("Copy SVG to clipboard")
+                        }
+                    }
+                    .alert("SVG Copied", isPresented: $showCopiedAlert) {
+                        Button("OK", role: .cancel) { }
+                    } message: {
+                        Text("SVG code copied to clipboard")
+                    }
             }
         }
+        .background(Color.genomancerBackground)
+    }
+    
+    private func copySVG() {
+        UIPasteboard.general.string = svgContent
+        showCopiedAlert = true
     }
     
     private func generateMap() {
         let engine = DigestEngine(sequence: sequence, enzymes: enzymes)
         let sites = engine.cutSites()
         svgContent = plasmidSVG(dnaLength: sequence.count, sites: sites)
+    }
+    
+    private var mapAccessibilityDescription: String {
+        let engine = DigestEngine(sequence: sequence, enzymes: enzymes)
+        let sites = engine.cutSites()
+        let enzymeNames = Set(sites.map { $0.enzyme.name })
+        return "Plasmid map for \(circular ? "circular" : "linear") DNA, \(sequence.count) base pairs, showing \(sites.count) cut sites from \(enzymeNames.count) enzymes: \(enzymeNames.sorted().joined(separator: ", "))"
     }
 }
 

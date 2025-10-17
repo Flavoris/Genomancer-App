@@ -10,20 +10,80 @@ struct HomeView: View {
     @State private var results: [Fragment] = []
     @State private var csvExportData: ExportData?
     @State private var genbankExportData: ExportData?
+    @State private var showValidationAlert = false
+    @State private var validationMessage = ""
+    @State private var showCopyAlert = false
+    @State private var copyMessage = ""
 
     var body: some View {
         NavigationStack {
-            Form {
+            VStack(spacing: 0) {
+                logoHeader
+                mainForm
+            }
+            .background(Color.genomancerBackground)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear(perform: loadEnzymes)
+            .alert("Validation Warning", isPresented: $showValidationAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(validationMessage)
+            }
+            .alert("Copied", isPresented: $showCopyAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(copyMessage)
+            }
+        }
+    }
+    
+    private var logoHeader: some View {
+        VStack(spacing: 8) {
+            Image("Logo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 60, height: 60)
+                .accessibilityLabel("Genomancer logo - wizard hat with DNA helix")
+            
+            Text("DNA Restriction Analysis")
+                .font(.caption)
+                .foregroundColor(.genomancerSecondaryText)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
+        .background(Color.genomancerBackground)
+    }
+    
+    private var mainForm: some View {
+        Form {
                 Section("Sequence (FASTA or raw)") {
                     TextEditor(text: $sequence)
                         .frame(minHeight: 140)
                         .font(.system(.body, design: .monospaced))
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                        .onChange(of: sequence) { newValue in
+                            validateSequence(newValue)
+                        }
+                        .accessibilityLabel("DNA sequence input")
+                        .accessibilityHint("Enter DNA sequence in FASTA or raw format")
+                    
+                    if isFASTAFormat {
+                        Label("FASTA format detected", systemImage: "doc.text")
+                            .font(.caption)
+                            .foregroundColor(.genomancerSecondaryText)
+                            .accessibilityLabel("FASTA format detected in sequence")
+                    }
                 }
                 Section("Options") {
                     Toggle("Circular (plasmid)", isOn: $circular)
                     NavigationLink("Choose Enzymes") { EnzymePicker(all: allEnzymes, selected: $selected) }
                 }
-                Button("Digest") { runDigest() }.buttonStyle(.borderedProminent)
+                Button("Digest") { runDigest() }
+                    .buttonStyle(GenomancerProminentButtonStyle())
+                    .disabled(!canDigest)
                 if !results.isEmpty {
                     NavigationLink("View Fragments") { FragmentList(fragments: results) }
                     NavigationLink("View Map") { 
@@ -33,28 +93,50 @@ struct HomeView: View {
                     
                     Section("Export") {
                         if let csvData = csvExportData {
-                            ShareLink(
-                                item: csvData.data,
-                                preview: SharePreview(csvData.filename, image: Image(systemName: "doc.text"))
-                            ) {
-                                Label("Export CSV", systemImage: "tablecells")
+                            HStack {
+                                ShareLink(
+                                    item: csvData.data,
+                                    preview: SharePreview(csvData.filename, image: Image(systemName: "doc.text"))
+                                ) {
+                                    Label("Export CSV", systemImage: "tablecells")
+                                }
+                                Spacer()
+                                Button(action: { copyToClipboard(csvData.data, format: "CSV") }) {
+                                    Image(systemName: "doc.on.doc")
+                                        .foregroundColor(.genomancerAccent)
+                                }
+                                .buttonStyle(.borderless)
                             }
                         }
                         
                         if let gbData = genbankExportData {
-                            ShareLink(
-                                item: gbData.data,
-                                preview: SharePreview(gbData.filename, image: Image(systemName: "doc.text"))
-                            ) {
-                                Label("Export GenBank", systemImage: "doc.text")
+                            HStack {
+                                ShareLink(
+                                    item: gbData.data,
+                                    preview: SharePreview(gbData.filename, image: Image(systemName: "doc.text"))
+                                ) {
+                                    Label("Export GenBank", systemImage: "doc.text")
+                                }
+                                Spacer()
+                                Button(action: { copyToClipboard(gbData.data, format: "GenBank") }) {
+                                    Image(systemName: "doc.on.doc")
+                                        .foregroundColor(.genomancerAccent)
+                                }
+                                .buttonStyle(.borderless)
                             }
                         }
                     }
                 }
-            }
-            .navigationTitle("Genomancer")
-            .onAppear(perform: loadEnzymes)
         }
+    }
+    
+    var isFASTAFormat: Bool {
+        sequence.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(">")
+    }
+    
+    var canDigest: Bool {
+        let dna = parseFASTA(sequence)
+        return !dna.isEmpty && !selected.isEmpty
     }
 
     func loadEnzymes() {
@@ -64,6 +146,20 @@ struct HomeView: View {
 
     func runDigest() {
         let dna = parseFASTA(sequence)
+        
+        // Guard against empty input
+        guard !dna.isEmpty else {
+            validationMessage = "Please enter a DNA sequence."
+            showValidationAlert = true
+            return
+        }
+        
+        guard !selected.isEmpty else {
+            validationMessage = "Please select at least one restriction enzyme."
+            showValidationAlert = true
+            return
+        }
+        
         let engine = DigestEngine(sequence: dna, enzymes: Array(selected))
         results = engine.digest(options: .init(circular: circular, returnSequences: false))
         
@@ -118,6 +214,25 @@ struct HomeView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd_HHmmss"
         return formatter.string(from: Date())
+    }
+    
+    func validateSequence(_ input: String) {
+        let dna = parseFASTA(input)
+        guard !dna.isEmpty else { return }
+        
+        let validChars = CharacterSet(charactersIn: "ATCGNRYSWKMBDHVatcgryswkmbdhv")
+        let inputChars = CharacterSet(charactersIn: dna)
+        
+        if !inputChars.isSubset(of: validChars) {
+            validationMessage = "Warning: Sequence contains illegal characters. Only IUPAC DNA codes (A,T,C,G,N,R,Y,S,W,K,M,B,D,H,V) are valid."
+            showValidationAlert = true
+        }
+    }
+    
+    func copyToClipboard(_ content: String, format: String) {
+        UIPasteboard.general.string = content
+        copyMessage = "\(format) data copied to clipboard"
+        showCopyAlert = true
     }
 }
 

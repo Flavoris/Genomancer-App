@@ -42,7 +42,7 @@ struct ContentView: View {
                         
                         Text(analysisResult)
                             .padding()
-                            .background(Color.gray.opacity(0.1))
+                            .background(Color.genomancerCardBackground)
                             .cornerRadius(8)
                     }
                     .padding()
