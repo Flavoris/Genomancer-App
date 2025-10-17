@@ -66,6 +66,7 @@ struct EnzymePicker: View {
             .accessibilityAddTraits(selected.contains(e) ? [.isSelected] : [])
         }
         .searchable(text: $query)
+        .scrollContentBackground(.hidden)
         }
         .background(Color.genomancerBackground)
         .navigationTitle("Enzymes")
