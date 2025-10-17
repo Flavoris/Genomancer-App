@@ -12,15 +12,17 @@ struct ContentView: View {
                 Text("Genomancer")
                     .font(.largeTitle)
                     .fontWeight(.bold)
+                    .foregroundColor(.genomancerText)
                     .padding()
                 
                 Text("DNA Digestion Analysis Tool")
                     .font(.headline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.genomancerText)
                 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("DNA Sequence:")
                         .font(.headline)
+                        .foregroundColor(.genomancerText)
                     
                     TextField("Enter DNA sequence", text: $sequence)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -39,6 +41,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Analysis Result:")
                             .font(.headline)
+                            .foregroundColor(.genomancerText)
                         
                         Text(analysisResult)
                             .padding()
@@ -50,6 +53,7 @@ struct ContentView: View {
                 
                 Spacer()
             }
+            .background(Color.genomancerBackground)
             .navigationTitle("Genomancer")
             .navigationBarTitleDisplayMode(.inline)
         }

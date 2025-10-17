@@ -20,6 +20,7 @@ struct FragmentList: View {
             .accessibilityValue("\(f.length) base pairs, from position \(f.start) to \(f.end)")
             .accessibilityHint("Left overhang: \(overhangDescription(f.leftEnd)), Right overhang: \(overhangDescription(f.rightEnd))")
         }
+        .scrollContentBackground(.hidden)
         .background(Color.genomancerBackground)
         .navigationTitle("Fragments")
     }

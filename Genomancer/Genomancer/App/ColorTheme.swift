@@ -56,11 +56,11 @@ struct GenomancerButtonStyle: ButtonStyle {
 struct GenomancerProminentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundColor(.genomancerText)
+            .foregroundColor(.white)
             .padding()
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.genomancerAccent)
+                    .fill(Color(red: 0.2, green: 0.65, blue: 0.3))
                     .opacity(configuration.isPressed ? 0.8 : 1.0)
             )
             .scaleEffect(configuration.isPressed ? 0.95 : 1.0)

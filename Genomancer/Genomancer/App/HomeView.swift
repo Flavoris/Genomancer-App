@@ -48,7 +48,7 @@ struct HomeView: View {
             
             Text("DNA Restriction Analysis")
                 .font(.caption)
-                .foregroundColor(.genomancerSecondaryText)
+                .foregroundColor(.genomancerText)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal)
@@ -59,7 +59,7 @@ struct HomeView: View {
     
     private var mainForm: some View {
         Form {
-                Section("Sequence (FASTA or raw)") {
+                Section {
                     TextEditor(text: $sequence)
                         .frame(minHeight: 140)
                         .font(.system(.body, design: .monospaced))
@@ -76,14 +76,22 @@ struct HomeView: View {
                             .foregroundColor(.genomancerSecondaryText)
                             .accessibilityLabel("FASTA format detected in sequence")
                     }
+                } header: {
+                    Text("Sequence (FASTA or raw)")
+                        .foregroundColor(.genomancerText)
                 }
-                Section("Options") {
+                Section {
                     Toggle("Circular (plasmid)", isOn: $circular)
                     NavigationLink("Choose Enzymes") { EnzymePicker(all: allEnzymes, selected: $selected) }
+                } header: {
+                    Text("Options")
+                        .foregroundColor(.genomancerText)
                 }
                 Button("Digest") { runDigest() }
                     .buttonStyle(GenomancerProminentButtonStyle())
                     .disabled(!canDigest)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .listRowBackground(Color.clear)
                 if !results.isEmpty {
                     NavigationLink("View Fragments") { FragmentList(fragments: results) }
                     NavigationLink("View Map") { 
@@ -91,7 +99,7 @@ struct HomeView: View {
                     }
                     NavigationLink("View Gel") { GelView(fragments: results) }
                     
-                    Section("Export") {
+                    Section {
                         if let csvData = csvExportData {
                             HStack {
                                 ShareLink(
@@ -125,9 +133,13 @@ struct HomeView: View {
                                 .buttonStyle(.borderless)
                             }
                         }
+                    } header: {
+                        Text("Export")
+                            .foregroundColor(.genomancerText)
                     }
                 }
         }
+        .scrollContentBackground(.hidden)
     }
     
     var isFASTAFormat: Bool {
