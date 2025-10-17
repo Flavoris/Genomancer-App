@@ -1,0 +1,9 @@
+Final polish cards
+
+Validation: FASTA detection, illegal characters warning.
+
+UX niceties: enzyme filter chips (by overhang/blunt), “copy SVG/CSV/GenBank”.
+
+Accessibility: Dynamic Type + VO labels for fragment rows and map ticks.
+
+Crashproofing: guard empty enzyme set / empty sequence gracefully.

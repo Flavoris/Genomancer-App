@@ -18,6 +18,7 @@
 		1A000024 /* FragmentList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000025 /* FragmentList.swift */; };
 		1A000026 /* MapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000027 /* MapView.swift */; };
 		1A000028 /* GelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000029 /* GelView.swift */; };
+		1A00002A /* ColorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00002B /* ColorTheme.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +34,7 @@
 		1A000025 /* FragmentList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FragmentList.swift; sourceTree = "<group>"; };
 		1A000027 /* MapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapView.swift; sourceTree = "<group>"; };
 		1A000029 /* GelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GelView.swift; sourceTree = "<group>"; };
+		1A00002B /* ColorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorTheme.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -91,6 +93,7 @@
 				1A000025 /* FragmentList.swift */,
 				1A000027 /* MapView.swift */,
 				1A000029 /* GelView.swift */,
+				1A00002B /* ColorTheme.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -189,6 +192,7 @@
 				1A000024 /* FragmentList.swift in Sources */,
 				1A000026 /* MapView.swift in Sources */,
 				1A000028 /* GelView.swift in Sources */,
+				1A00002A /* ColorTheme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
