@@ -54,13 +54,15 @@ struct GenomancerButtonStyle: ButtonStyle {
 }
 
 struct GenomancerProminentButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundColor(.white)
+            .foregroundColor(isEnabled ? .white : Color.white.opacity(0.5))
             .padding()
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(red: 0.2, green: 0.65, blue: 0.3))
+                    .fill(isEnabled ? Color(red: 0.2, green: 0.65, blue: 0.3) : Color.gray.opacity(0.4))
                     .opacity(configuration.isPressed ? 0.8 : 1.0)
             )
             .scaleEffect(configuration.isPressed ? 0.95 : 1.0)

@@ -14,6 +14,9 @@ struct HomeView: View {
     @State private var validationMessage = ""
     @State private var showCopyAlert = false
     @State private var copyMessage = ""
+    @State private var showFileImporter = false
+    @State private var showFileImportError = false
+    @State private var fileImportErrorMessage = ""
 
     var body: some View {
         NavigationStack {
@@ -34,6 +37,18 @@ struct HomeView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(copyMessage)
+            }
+            .alert("Import Error", isPresented: $showFileImportError) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(fileImportErrorMessage)
+            }
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [.plainText, .text, UTType(filenameExtension: "fasta") ?? .plainText, UTType(filenameExtension: "fa") ?? .plainText, UTType(filenameExtension: "fna") ?? .plainText],
+                allowsMultipleSelection: false
+            ) { result in
+                handleFileImport(result: result)
             }
         }
     }
@@ -76,17 +91,34 @@ struct HomeView: View {
                             .foregroundColor(.genomancerSecondaryText)
                             .accessibilityLabel("FASTA format detected in sequence")
                     }
+                    
+                    Button(action: { showFileImporter = true }) {
+                        Label("Import FASTA File", systemImage: "doc.badge.plus")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Import FASTA file")
+                    .accessibilityHint("Opens file picker to select a FASTA file")
                 } header: {
-                    Text("Sequence (FASTA or raw)")
+                    Text("DNA Sequence:")
                         .foregroundColor(.genomancerText)
                 }
                 Section {
-                    Toggle("Circular (plasmid)", isOn: $circular)
-                    NavigationLink("Choose Enzymes") { EnzymePicker(all: allEnzymes, selected: $selected) }
+                    HStack(spacing: 8) {
+                        Text("Circular (plasmid)")
+                        Spacer()
+                        Toggle("", isOn: $circular)
+                            .labelsHidden()
+                    }
+                    .padding(.vertical, -4)
+                    
+                    NavigationLink("Choose Enzyme(s)") { EnzymePicker(all: allEnzymes, selected: $selected) }
+                        .padding(.vertical, -4)
                 } header: {
-                    Text("Options")
+                    Text("")
                         .foregroundColor(.genomancerText)
                 }
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                 Button("Digest") { runDigest() }
                     .buttonStyle(GenomancerProminentButtonStyle())
                     .disabled(!canDigest)
@@ -245,6 +277,49 @@ struct HomeView: View {
         UIPasteboard.general.string = content
         copyMessage = "\(format) data copied to clipboard"
         showCopyAlert = true
+    }
+    
+    func handleFileImport(result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let selectedFile = urls.first else {
+                fileImportErrorMessage = "No file was selected."
+                showFileImportError = true
+                return
+            }
+            
+            // Start accessing the security-scoped resource
+            guard selectedFile.startAccessingSecurityScopedResource() else {
+                fileImportErrorMessage = "Unable to access the selected file."
+                showFileImportError = true
+                return
+            }
+            
+            defer { selectedFile.stopAccessingSecurityScopedResource() }
+            
+            do {
+                let fileContent = try String(contentsOf: selectedFile, encoding: .utf8)
+                
+                // Validate that it's a valid FASTA or plain sequence
+                let trimmedContent = fileContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmedContent.isEmpty {
+                    fileImportErrorMessage = "The selected file is empty."
+                    showFileImportError = true
+                    return
+                }
+                
+                // Update the sequence field with the file content
+                sequence = fileContent
+                
+            } catch {
+                fileImportErrorMessage = "Failed to read file: \(error.localizedDescription)"
+                showFileImportError = true
+            }
+            
+        case .failure(let error):
+            fileImportErrorMessage = "Failed to import file: \(error.localizedDescription)"
+            showFileImportError = true
+        }
     }
 }
 
