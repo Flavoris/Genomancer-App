@@ -54,21 +54,24 @@ struct HomeView: View {
     }
     
     private var logoHeader: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: -8) {
             Image("Logo")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 60, height: 60)
+                .frame(width: 100, height: 100)
                 .accessibilityLabel("Genomancer logo - wizard hat with DNA helix")
             
-            Text("DNA Restriction Analysis")
-                .font(.caption)
-                .foregroundColor(.genomancerText)
+            Image("genomancer-font")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(height: 160)
+                .padding(.horizontal, 10)
+                .accessibilityLabel("Genomancer DNA Restriction Analysis")
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal)
-        .padding(.top, 8)
-        .padding(.bottom, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 8)
         .background(Color.genomancerBackground)
     }
     
