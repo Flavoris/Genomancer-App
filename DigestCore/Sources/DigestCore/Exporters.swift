@@ -30,7 +30,7 @@ private func formatFASTAStyle(_ s: String) -> String {
     var lines: [String] = []
     var i = 0; var idx = 1
     while i < arr.count {
-        let chunk = arr[i..<min(i+60, arr.count)]
+        let chunk = Array(arr[i..<min(i+60, arr.count)])
         let groups = stride(from: 0, to: chunk.count, by: 10).map { String(chunk[$0..<min($0+10, chunk.count)]) }
         lines.append(String(format:"%9d %@", idx, groups.joined(separator: " ")))
         i += 60; idx += 60
