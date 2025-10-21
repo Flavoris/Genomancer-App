@@ -139,6 +139,11 @@ struct HomeView: View {
                             .font(.system(size: 14, weight: .semibold))
                     }
                 }
+                
+                // Display selected enzymes
+                if !selected.isEmpty {
+                    selectedEnzymesView
+                }
             }
             .padding()
             .background(Color(.systemBackground))
@@ -231,6 +236,39 @@ struct HomeView: View {
             }
         }
         .padding(.vertical)
+    }
+    
+    private var selectedEnzymesView: some View {
+        let maxDisplay = 6
+        let sortedSelected = Array(selected).sorted { $0.name < $1.name }
+        let displayedEnzymes = sortedSelected.prefix(maxDisplay)
+        let remainingCount = selected.count - maxDisplay
+        
+        return VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            
+            Text("Selected Enzymes:")
+                .font(.caption)
+                .foregroundColor(.genomancerSecondaryText)
+            
+            FlowLayout(spacing: 8) {
+                ForEach(Array(displayedEnzymes), id: \.self) { enzyme in
+                    EnzymeChip(enzyme: enzyme, onRemove: {
+                        selected.remove(enzyme)
+                    })
+                }
+                
+                if remainingCount > 0 {
+                    Text("+\(remainingCount) more")
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.genomancerSecondaryBackground)
+                        .foregroundColor(.genomancerSecondaryText)
+                        .cornerRadius(12)
+                }
+            }
+        }
     }
     
     var isFASTAFormat: Bool {
@@ -395,5 +433,85 @@ struct ExportData: Identifiable, Transferable {
     }
     
     var suggestedName: String { filename }
+}
+
+// MARK: - Enzyme Chip Component
+struct EnzymeChip: View {
+    let enzyme: Enzyme
+    let onRemove: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(enzyme.name)
+                .font(.caption)
+                .lineLimit(1)
+            
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.genomancerSecondary)
+        .foregroundColor(.genomancerText)
+        .cornerRadius(12)
+    }
+}
+
+// MARK: - Flow Layout
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+    
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = FlowResult(
+            in: proposal.replacingUnspecifiedDimensions().width,
+            subviews: subviews,
+            spacing: spacing
+        )
+        return result.size
+    }
+    
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = FlowResult(
+            in: bounds.width,
+            subviews: subviews,
+            spacing: spacing
+        )
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x, y: bounds.minY + result.positions[index].y), proposal: .unspecified)
+        }
+    }
+    
+    struct FlowResult {
+        var size: CGSize = .zero
+        var positions: [CGPoint] = []
+        
+        init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
+            var currentX: CGFloat = 0
+            var currentY: CGFloat = 0
+            var lineHeight: CGFloat = 0
+            
+            for subview in subviews {
+                let subviewSize = subview.sizeThatFits(.unspecified)
+                
+                if currentX + subviewSize.width > maxWidth && currentX > 0 {
+                    // Move to next line
+                    currentX = 0
+                    currentY += lineHeight + spacing
+                    lineHeight = 0
+                }
+                
+                positions.append(CGPoint(x: currentX, y: currentY))
+                lineHeight = max(lineHeight, subviewSize.height)
+                currentX += subviewSize.width + spacing
+                size.width = max(size.width, currentX - spacing)
+            }
+            
+            size.height = currentY + lineHeight
+        }
+    }
 }
 
