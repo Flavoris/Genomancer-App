@@ -14,7 +14,9 @@ struct GelView: View {
                 .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                 .minimumScaleFactor(0.5)
                 .lineLimit(nil)
+                .frame(maxWidth: .infinity)
                 .padding()
+                .background(Color.genomancerBackground)
                 .accessibilityLabel("Gel electrophoresis visualization")
                 .accessibilityValue(gelAccessibilityDescription)
         }
