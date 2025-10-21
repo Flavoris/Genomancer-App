@@ -70,8 +70,6 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal)
-        .padding(.top, 16)
-        .padding(.bottom, 8)
         .background(Color.genomancerBackground)
     }
     
@@ -175,6 +173,7 @@ struct HomeView: View {
                 }
         }
         .scrollContentBackground(.hidden)
+        .padding(.top, -30)
     }
     
     var isFASTAFormat: Bool {

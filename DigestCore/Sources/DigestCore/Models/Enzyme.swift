@@ -37,7 +37,7 @@ public struct Enzyme: Codable, Hashable {
     
     // Codable conformance with custom decoding
     enum CodingKeys: String, CodingKey {
-        case name, site, cutIndexTop, cutIndexBottom, overhangType, notes
+        case name, site, cutIndexTop, cutIndexBottom, overhangType, notes, cutIndex
     }
     
     public init(from decoder: Decoder) throws {
@@ -45,9 +45,36 @@ public struct Enzyme: Codable, Hashable {
         name = try container.decode(String.self, forKey: .name)
         let rawSite = try container.decode(String.self, forKey: .site)
         site = rawSite.uppercased()
-        cutIndexTop = try container.decodeIfPresent(Int.self, forKey: .cutIndexTop)
-        cutIndexBottom = try container.decodeIfPresent(Int.self, forKey: .cutIndexBottom)
-        overhangType = try container.decodeIfPresent(OverhangType.self, forKey: .overhangType)
+        
+        // Handle both old format (cutIndexTop/cutIndexBottom) and new format (cutIndex)
+        // New format from JSON with snake_case conversion: cut_index -> cutIndex
+        if let cutIdx = try container.decodeIfPresent(Int.self, forKey: .cutIndex) {
+            // For the simplified JSON format, use cutIndex for the top strand
+            cutIndexTop = cutIdx
+            // Calculate bottom based on site length for compatibility
+            cutIndexBottom = site.count - cutIdx
+        } else {
+            // Old format with separate top and bottom indices
+            cutIndexTop = try container.decodeIfPresent(Int.self, forKey: .cutIndexTop)
+            cutIndexBottom = try container.decodeIfPresent(Int.self, forKey: .cutIndexBottom)
+        }
+        
+        // Custom decoding for overhangType to handle JSON format
+        if let overhangString = try container.decodeIfPresent(String.self, forKey: .overhangType) {
+            switch overhangString.lowercased() {
+            case "5' overhang", "5'":
+                overhangType = .fivePrime
+            case "3' overhang", "3'":
+                overhangType = .threePrime
+            case "blunt":
+                overhangType = .blunt
+            default:
+                overhangType = .unknown
+            }
+        } else {
+            overhangType = nil
+        }
+        
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         siteChars = Array(site)
     }
