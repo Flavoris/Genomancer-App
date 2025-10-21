@@ -86,14 +86,14 @@ struct HomeView: View {
                 
                 VStack(spacing: 12) {
                     TextEditor(text: $sequence)
-                        .frame(minHeight: 140)
+                        .frame(height: 120)
                         .font(.system(.body, design: .monospaced))
                         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
                         .onChange(of: sequence) { newValue in
                             validateSequence(newValue)
                         }
                         .accessibilityLabel("DNA sequence input")
-                        .accessibilityHint("Enter DNA sequence in FASTA or raw format")
+                        .accessibilityHint("Enter DNA sequence in FASTA or raw format. Scrollable for longer sequences.")
                         .padding(8)
                         .background(Color(.systemBackground))
                         .cornerRadius(8)
