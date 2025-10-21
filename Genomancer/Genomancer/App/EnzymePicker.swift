@@ -46,7 +46,7 @@ struct EnzymePicker: View {
                         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
                     Text(e.site)
                         .font(.caption)
-                        .foregroundColor(.genomancerSecondaryText)
+                        .foregroundColor(.secondary)
                         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
                 }
                 Spacer()
