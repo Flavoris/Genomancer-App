@@ -20,9 +20,11 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                logoHeader
-                mainForm
+            ScrollView {
+                VStack(spacing: 0) {
+                    logoHeader
+                    formContent
+                }
             }
             .background(Color.genomancerBackground)
             .navigationTitle("")
@@ -73,9 +75,16 @@ struct HomeView: View {
         .background(Color.genomancerBackground)
     }
     
-    private var mainForm: some View {
-        Form {
-                Section {
+    private var formContent: some View {
+        VStack(spacing: 20) {
+            // DNA Sequence Section
+            VStack(alignment: .leading, spacing: 12) {
+                Text("DNA Sequence:")
+                    .foregroundColor(.genomancerText)
+                    .font(.headline)
+                    .padding(.horizontal)
+                
+                VStack(spacing: 12) {
                     TextEditor(text: $sequence)
                         .frame(minHeight: 140)
                         .font(.system(.body, design: .monospaced))
@@ -85,12 +94,16 @@ struct HomeView: View {
                         }
                         .accessibilityLabel("DNA sequence input")
                         .accessibilityHint("Enter DNA sequence in FASTA or raw format")
+                        .padding(8)
+                        .background(Color(.systemBackground))
+                        .cornerRadius(8)
                     
                     if isFASTAFormat {
                         Label("FASTA format detected", systemImage: "doc.text")
                             .font(.caption)
                             .foregroundColor(.genomancerSecondaryText)
                             .accessibilityLabel("FASTA format detected in sequence")
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     
                     Button(action: { showFileImporter = true }) {
@@ -100,39 +113,79 @@ struct HomeView: View {
                     .buttonStyle(.bordered)
                     .accessibilityLabel("Import FASTA file")
                     .accessibilityHint("Opens file picker to select a FASTA file")
-                } header: {
-                    Text("DNA Sequence:")
-                        .foregroundColor(.genomancerText)
                 }
-                Section {
-                    HStack(spacing: 8) {
-                        Text("Circular (plasmid)")
+                .padding(.horizontal)
+            }
+            
+            // Enzyme Selection Section
+            VStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Text("Circular (plasmid)")
+                    Spacer()
+                    Toggle("", isOn: $circular)
+                        .labelsHidden()
+                }
+                
+                
+                NavigationLink {
+                    EnzymePicker(all: allEnzymes, selected: $selected)
+                } label: {
+                    HStack {
+                        Text("Choose Enzyme(s)")
+                            .foregroundColor(.primary)
                         Spacer()
-                        Toggle("", isOn: $circular)
-                            .labelsHidden()
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 14, weight: .semibold))
                     }
-                    .padding(.vertical, -4)
-                    
-                    NavigationLink("Choose Enzyme(s)") { EnzymePicker(all: allEnzymes, selected: $selected) }
-                        .padding(.vertical, -4)
-                } header: {
-                    Text("")
-                        .foregroundColor(.genomancerText)
                 }
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                Button("Digest") { runDigest() }
-                    .buttonStyle(GenomancerProminentButtonStyle())
-                    .disabled(!canDigest)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .listRowBackground(Color.clear)
-                if !results.isEmpty {
-                    NavigationLink("View Fragments") { FragmentList(fragments: results) }
+            }
+            .padding()
+            .background(Color(.systemBackground))
+            .cornerRadius(8)
+            .padding(.horizontal)
+            
+            // Digest Button
+            Button("Digest") { runDigest() }
+                .buttonStyle(GenomancerProminentButtonStyle())
+                .disabled(!canDigest)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal)
+            
+            // Results Section
+            if !results.isEmpty {
+                VStack(spacing: 12) {
+                    NavigationLink("View Fragments") { 
+                        FragmentList(fragments: results) 
+                    }
+                    .padding()
+                    .background(Color(.systemBackground))
+                    .cornerRadius(8)
+                    
                     NavigationLink("View Map") { 
                         MapView(sequence: parseFASTA(sequence), enzymes: Array(selected), circular: circular) 
                     }
-                    NavigationLink("View Gel") { GelView(fragments: results) }
+                    .padding()
+                    .background(Color(.systemBackground))
+                    .cornerRadius(8)
                     
-                    Section {
+                    NavigationLink("View Gel") { 
+                        GelView(fragments: results) 
+                    }
+                    .padding()
+                    .background(Color(.systemBackground))
+                    .cornerRadius(8)
+                }
+                .padding(.horizontal)
+                
+                // Export Section
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Export")
+                        .foregroundColor(.genomancerText)
+                        .font(.headline)
+                        .padding(.horizontal)
+                    
+                    VStack(spacing: 12) {
                         if let csvData = csvExportData {
                             HStack {
                                 ShareLink(
@@ -148,6 +201,9 @@ struct HomeView: View {
                                 }
                                 .buttonStyle(.borderless)
                             }
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .cornerRadius(8)
                         }
                         
                         if let gbData = genbankExportData {
@@ -165,15 +221,16 @@ struct HomeView: View {
                                 }
                                 .buttonStyle(.borderless)
                             }
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .cornerRadius(8)
                         }
-                    } header: {
-                        Text("Export")
-                            .foregroundColor(.genomancerText)
                     }
+                    .padding(.horizontal)
                 }
+            }
         }
-        .scrollContentBackground(.hidden)
-        .padding(.top, -30)
+        .padding(.vertical)
     }
     
     var isFASTAFormat: Bool {
