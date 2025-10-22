@@ -28,8 +28,9 @@ struct GelRenderView: View {
                     let laneWidth: CGFloat = 110
 
                     let laneHeight = max(0, size.height - (verticalPadding * 2))
-                    // Center the lane in the view
-                    let laneX = (size.width - laneWidth) / 2
+                    // Center the lane in the view (accounting for label space on left)
+                    let labelSpace: CGFloat = 80
+                    let laneX = labelSpace + (size.width - labelSpace - laneWidth) / 2
                     let laneY = verticalPadding
                     let laneRect = CGRect(x: laneX, y: laneY, width: laneWidth, height: laneHeight)
 
@@ -76,8 +77,9 @@ struct GelRenderView: View {
             let laneWidth: CGFloat = 110
             
             let laneHeight = max(0, size.height - (verticalPadding * 2))
-            // Center the lane in the view
-            let laneX = (size.width - laneWidth) / 2
+            // Center the lane in the view (accounting for label space on left)
+            let labelSpace: CGFloat = 80
+            let laneX = labelSpace + (size.width - labelSpace - laneWidth) / 2
             let laneY = verticalPadding
             let laneRect = CGRect(x: laneX, y: laneY, width: laneWidth, height: laneHeight)
             
@@ -85,7 +87,7 @@ struct GelRenderView: View {
             let mappingTop = laneRect.minY + maxCoreHeight / 2
             let mappingHeight = max(0, laneRect.height - maxCoreHeight)
             
-            let labelX = laneRect.maxX + 30
+            let labelX = laneRect.minX - 20
             let labelColor = Color.white.opacity(0.6)
             
             // Get unique fragment sizes, sorted descending

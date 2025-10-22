@@ -6,53 +6,58 @@ struct GelView: View {
     @State private var gelPercent: Double = 2.0
     
     var body: some View {
-        VStack(spacing: 16) {
-            // Gel percentage controls
+        HStack(spacing: 0) {
+            // Gel render view
+            GelRenderView(fragments: fragments, gelPercent: gelPercent, style: .photo)
+            
+            // Gel percentage controls on the right
             VStack(spacing: 12) {
-                HStack {
-                    Text("Gel %:")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8))
-                    Spacer()
+                // Percentage display
+                VStack(spacing: 4) {
+                    Text("Gel %")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(0.6))
                     Text(String(format: "%.1f%%", gelPercent))
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
                         .foregroundColor(.white)
                         .monospacedDigit()
                 }
-                .padding(.horizontal, 20)
+                .padding(.top, 8)
                 
                 // Slider
-                Slider(value: $gelPercent, in: 0.8...3.0, step: 0.1)
-                    .tint(.blue)
-                    .padding(.horizontal, 20)
-                    .accessibilityLabel("Gel percentage")
-                    .accessibilityValue(String(format: "%.1f percent", gelPercent))
+                VStack {
+                    Slider(value: $gelPercent, in: 0.8...3.0, step: 0.1)
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 200)
+                        .tint(.blue)
+                        .accessibilityLabel("Gel percentage")
+                        .accessibilityValue(String(format: "%.1f percent", gelPercent))
+                }
+                .frame(width: 40, height: 200)
+                .padding(.vertical, 16)
                 
-                // Quick preset buttons
-                HStack(spacing: 12) {
-                    ForEach([1.0, 1.5, 2.0, 2.5, 3.0], id: \.self) { preset in
+                // Quick preset buttons (vertical)
+                VStack(spacing: 8) {
+                    ForEach([3.0, 2.5, 2.0, 1.5, 1.0], id: \.self) { preset in
                         Button(action: {
                             gelPercent = preset
                         }) {
                             Text(String(format: "%.1f%%", preset))
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
                                 .foregroundColor(gelPercent == preset ? .black : .white.opacity(0.7))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
+                                .frame(width: 50, height: 32)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 8)
+                                    RoundedRectangle(cornerRadius: 6)
                                         .fill(gelPercent == preset ? Color.white : Color.white.opacity(0.1))
                                 )
                         }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+                
+                Spacer()
             }
-            .padding(.vertical, 12)
-            .background(Color.black.opacity(0.2))
-            
-            // Gel render view
-            GelRenderView(fragments: fragments, gelPercent: gelPercent, style: .photo)
+            .frame(width: 80)
         }
         .background(Color.genomancerBackground)
         .navigationTitle("Gel Electrophoresis")
