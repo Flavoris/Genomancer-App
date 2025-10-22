@@ -20,6 +20,7 @@ struct MapView: View {
                 SVGWebView(svgContent: svgContent)
                     .navigationTitle("Plasmid Map")
                     .navigationBarTitleDisplayMode(.inline)
+                    .toolbarColorScheme(.dark, for: .navigationBar)
                     .accessibilityLabel("Plasmid map visualization")
                     .accessibilityHint(mapAccessibilityDescription)
                     .toolbar {

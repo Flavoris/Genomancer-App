@@ -126,6 +126,7 @@ struct HomeView: View {
                         .labelsHidden()
                 }
                 
+                Divider()
                 
                 NavigationLink {
                     EnzymePicker(all: allEnzymes, selected: $selected)
@@ -167,12 +168,14 @@ struct HomeView: View {
                     .background(Color(.systemBackground))
                     .cornerRadius(8)
                     
-                    NavigationLink("View Map") { 
-                        MapView(sequence: parseFASTA(sequence), enzymes: Array(selected), circular: circular) 
+                    if circular {
+                        NavigationLink("View Map") { 
+                            MapView(sequence: parseFASTA(sequence), enzymes: Array(selected), circular: circular) 
+                        }
+                        .padding()
+                        .background(Color(.systemBackground))
+                        .cornerRadius(8)
                     }
-                    .padding()
-                    .background(Color(.systemBackground))
-                    .cornerRadius(8)
                     
                     NavigationLink("View Gel") { 
                         GelView(fragments: results) 
