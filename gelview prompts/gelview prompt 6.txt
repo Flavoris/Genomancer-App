@@ -1,0 +1,38 @@
+Goal: Make the renderer tunable and test the mapping math.
+
+Actions:
+
+1. Add
+
+enum GelStyle { case photo, cartoon }
+
+
+to GelRenderView with a style: GelStyle = .photo property.
+
+.photo: stronger halo, higher core opacity.
+
+.cartoon: lower halo radius, slightly thicker bands, slightly higher label contrast.
+Use switch style to tweak the constants used in Prompts 3–5.
+
+2. Keep (or improve) accessibility: expose a summary of top bands via accessibilityValue. Reuse the summary logic from your current GelView for consistency. 
+
+GelView
+
+3. Create a tiny pure-Swift helper GelLayout.swift with:
+
+struct GelLayout {
+    static func y(bp: Int, minBP: Int, maxBP: Int, top: CGFloat, height: CGFloat) -> CGFloat { /* semi-log */ }
+}
+
+
+so we can unit-test the math without SwiftUI.
+
+4. In the test target, add GelLayoutTests.swift with XCTest cases:
+
+y(maxBP) ≈ top
+
+y(minBP) ≈ top + height
+
+Monotonicity for a few bp values.
+
+Deliverable: tunable look + verified mapping.

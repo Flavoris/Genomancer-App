@@ -1,4 +1,0 @@
-Task 7.1 — Bundle enzymes.json & sample
-Add your existing `enzymes.json` to `Genomancer/Resources/`.
-Ensure the app target's Build Phases copies this resource.
-

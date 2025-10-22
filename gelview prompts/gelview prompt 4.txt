@@ -1,0 +1,15 @@
+Goal: Give each band a soft halo without overdoing performance.
+
+Actions:
+
+1. Wrap the Canvas in .compositingGroup().drawingGroup().
+
+2. For each band, do two passes:
+
+Halo pass: context.addFilter(.shadow(color: .white.opacity(0.25), radius: 10, x: 0, y: 0)), then fill band path with .white.opacity(0.30–0.40).
+
+Core pass: context.addFilter(.shadow(color: .white.opacity(0.6), radius: 2, x: 0, y: 0)), fill with .white.
+
+3. Optionally, after drawing all bands, lightly blur the lane area with a small Gaussian blur (radius: 0.75–1.0) using an offscreen render of the lane rect if needed (skip if perf dips).
+
+Deliverable: subtle bloom/halo reminiscent of real gels.

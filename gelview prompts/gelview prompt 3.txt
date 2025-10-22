@@ -1,0 +1,15 @@
+Goal: Make bands look more realistic: thickness and brightness vary.
+
+Actions:
+
+Sort fragments descending by length before drawing (bigger fragments appear higher).
+
+Band thickness rule of thumb:
+
+coreHeight = max(4, 8 - sqrt(bp)/30) (smaller bp → slightly thinner).
+
+If your Fragment includes any mass/quantity field, scale opacity linearly into [0.25, 0.9]. If not, approximate intensity by min(0.9, 0.25 + log10(bp)/6).
+
+Draw bands as rounded rects with cornerRadius = coreHeight/2.
+
+Deliverable: visually varied bands with plausible thickness and intensity.

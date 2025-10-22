@@ -1,5 +1,0 @@
-Task 12.2 — Micro-optimizations
-- Cache `Array<Character>` of `sequence`.
-- Precompute `Array<Character>` for each motif.
-- Avoid repeated `uppercased()` in hot paths.
-- Add a simple benchmark test to ensure digest of 10kb with 50 enzymes completes under ~100ms in Release.

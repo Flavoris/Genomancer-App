@@ -1,5 +1,0 @@
-Task 10.1 — Show SVG map
-Add a view `MapView.swift` in app:
-- Call `plasmidSVG(dnaLength:sites:)` with `DigestEngine().cutSites()`.
-- Render SVG using WKWebView (load as `data:` URL).
-Add a NavigationLink from `HomeView` to `MapView` after a successful digest.
