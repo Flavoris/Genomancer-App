@@ -1,12 +1,20 @@
-import Foundation
-import CoreGraphics
+Goal: Centralize the physics-ish mapping and make it respond to gel %. We’ll use a practical approximation:
 
-/// Pure layout utilities for mapping DNA fragment sizes to y-coordinates.
-/// Kept free of SwiftUI for easy unit testing.
-public enum GelLayout {
+Relative mobility follows a semi-log relation: Rf = a - b * log10(bp)
+
+b grows with agarose% (higher% = stronger size separation & slower migration).
+
+Actions:
+
+1. Add a new file Sources/Features/Gel/GelLayout.swift with:
+
+import CoreGraphics
+import Foundation
+
+enum GelLayout {
     /// Empirical slope adjustment: higher % agarose -> steeper log slope (bands stay higher).
     /// Tuned to be gentle and visually plausible without real calibration curves.
-    public static func slope(forGelPercent p: Double) -> Double {
+    static func slope(forGelPercent p: Double) -> Double {
         // Baseline 1.5% ≈ 1.0 slope. Each +0.5% adds ~0.12.
         // Clamp to avoid absurd values in UI.
         let clamped = max(0.5, min(4.0, p))
@@ -15,15 +23,7 @@ public enum GelLayout {
 
     /// Semi-log bp -> y mapping with gel% slope.
     /// yTop at largest bp, yTop+height at smallest bp.
-    /// - Parameters:
-    ///   - bp: Fragment length in base pairs
-    ///   - minBP: Minimum bp in the lane
-    ///   - maxBP: Maximum bp in the lane
-    ///   - top: The y position representing the largest fragment
-    ///   - height: The drawable height from top to bottom
-    ///   - gelPercent: Agarose gel percentage (0.5-4.0%)
-    /// - Returns: A y coordinate where larger bp values are closer to `top`
-    public static func y(bp: Int, minBP: Int, maxBP: Int, top: CGFloat, height: CGFloat, gelPercent: Double) -> CGFloat {
+    static func y(bp: Int, minBP: Int, maxBP: Int, yTop: CGFloat, height: CGFloat, gelPercent: Double) -> CGFloat {
         let bpv = max(1, bp)
         let loMin = log10(Double(max(1, minBP)))
         let loMax = log10(Double(max(maxBP, minBP + 1)))
@@ -32,8 +32,11 @@ public enum GelLayout {
         // Apply slope: raise t to a power >1 for steeper compression at top
         let s = slope(forGelPercent: gelPercent)
         let ts = pow(t, s)
-        return top + CGFloat(1 - ts) * height
+        return yTop + (1 - ts) * height
     }
 }
 
 
+2. In GelRenderView, replace the inline y-math with a call to GelLayout.y(...).
+
+3. Minor polish: make thin bands at higher gel% (e.g., multiply your coreHeight by max(0.8, 1.1 - 0.08*(gelPercent-1.5))).
