@@ -7,11 +7,13 @@ struct GelRenderView: View {
     enum GelStyle { case photo, cartoon }
 
     let fragments: [Fragment]
+    let gelPercent: Double
     let showTicks: Bool
     let style: GelStyle
 
-    init(fragments: [Fragment], showTicks: Bool = true, style: GelStyle = .photo) {
+    init(fragments: [Fragment], gelPercent: Double = 2.0, showTicks: Bool = true, style: GelStyle = .photo) {
         self.fragments = fragments
+        self.gelPercent = gelPercent
         self.showTicks = showTicks
         self.style = style
     }
@@ -38,7 +40,7 @@ struct GelRenderView: View {
                     let path = Path(roundedRect: laneRect, cornerRadius: 6)
                     context.fill(path, with: .color(laneBackground))
                     // Draw fragment bands using semi-log size→y mapping
-                    drawBands(context: context, size: size, laneRect: laneRect)
+                    drawBands(context: context, size: size, laneRect: laneRect, gelPercent: gelPercent)
                     context.stroke(path, with: .color(laneBorder), lineWidth: 1)
                 }
                 .compositingGroup()
@@ -90,7 +92,7 @@ struct GelRenderView: View {
             let uniqueLengths = Array(Set(lengths)).sorted(by: >)
             
             ForEach(uniqueLengths, id: \.self) { bp in
-                let y = GelLayout.y(bp: bp, minBP: minLength, maxBP: maxLength, top: mappingTop, height: mappingHeight)
+                let y = GelLayout.y(bp: bp, minBP: minLength, maxBP: maxLength, top: mappingTop, height: mappingHeight, gelPercent: gelPercent)
                 if y >= laneRect.minY && y <= laneRect.maxY {
                     Text("\(bp) bp")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -102,7 +104,7 @@ struct GelRenderView: View {
     }
 
     /// Draws fragment bands within the provided lane rectangle using a semi-log mapping.
-    private func drawBands(context: GraphicsContext, size: CGSize, laneRect: CGRect) {
+    private func drawBands(context: GraphicsContext, size: CGSize, laneRect: CGRect, gelPercent: Double) {
         guard !fragments.isEmpty else { return }
 
         // Compute min and max base-pair sizes from fragments
@@ -135,8 +137,8 @@ struct GelRenderView: View {
             for fragment in sortedFragments {
                 let bp = max(1, fragment.length)
 
-                // y-center using semi-log mapping
-                let yCenter = GelLayout.y(bp: bp, minBP: minLength, maxBP: maxLength, top: mappingTop, height: mappingHeight)
+                // y-center using semi-log mapping with gel percentage
+                let yCenter = GelLayout.y(bp: bp, minBP: minLength, maxBP: maxLength, top: mappingTop, height: mappingHeight, gelPercent: gelPercent)
 
                 // Band thickness heuristic
                 var coreHeight = max(4.0, 8.0 - CGFloat(sqrt(Double(bp))) / 30.0)
