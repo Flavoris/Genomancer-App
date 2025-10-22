@@ -8,5 +8,12 @@
     "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests~partial.swiftmodule",
     "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swiftdeps",
     "diagnostics": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.dia"
+  },
+  "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift": {
+    "dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.d",
+    "object": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swift.o",
+    "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests~partial.swiftmodule",
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swiftdeps",
+    "diagnostics": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.dia"
   }
 }

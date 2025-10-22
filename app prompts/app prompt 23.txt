@@ -1,6 +1,0 @@
-Task 10.2 — Show ASCII gel
-Add `GelView.swift`:
-- Convert fragments to `[Int]` lengths
-- Call `asciiGel`
-- Display in monospaced `Text` with horizontal scroll.
-Link from HomeView.

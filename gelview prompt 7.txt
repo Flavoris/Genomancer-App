@@ -1,0 +1,11 @@
+Goal: Make the new renderer the default and retire ASCII.
+
+Actions:
+
+1. In GelView.swift, delete gelText state, generateGel(), and .onAppear(perform: generateGel). Replace the ScrollView + Text with GelRenderView(fragments: fragments, style: .photo) (or .cartoon). Keep title and background the same.
+
+2. Remove any unused helpers/constants related to the ASCII gel.
+
+3. Build & run; fix warnings.
+
+Deliverable: clean, modern gel view with the glow bands.

@@ -1,5 +1,0 @@
-Task 9.7 — QA: real-world regression assertions
-Add more tests:
-- Mixed digest: EcoRI + PstI on a 1.5–3 kb toy sequence.
-- Assert boundary positions, overhang lengths, and that incompatible pairs fail `compatibleConcrete`.
-- Assert theoretical compatibility for known pairs (e.g., NheI/XbaI 5'-CTAG overhang).

@@ -1,7 +1,0 @@
-Task 12.1 — Golden parity tests
-From your Python simulator, generate golden outputs for:
-- 2 linear sequences × 3 enzyme sets
-- 1 circular plasmid × 3 enzyme sets
-For each, assert: fragment lengths, boundary positions (sorted), overhang types, and a sticky-end compatibility matrix for 2–3 representative pairs.
-
-Add these as XCTests in `DigestCoreTests`.
