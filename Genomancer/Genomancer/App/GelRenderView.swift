@@ -180,6 +180,11 @@ struct GelRenderView: View {
         let mappingTop = laneRect.minY + maxCoreHeight / 2
         let mappingHeight = max(0, laneRect.height - maxCoreHeight)
 
+        // Local helper to compute y position for a given bp value
+        func y(_ bp: Int) -> CGFloat {
+            GelLayout.y(bp: bp, minBP: theoreticalMinBP, maxBP: theoreticalMaxBP, top: mappingTop, height: mappingHeight, gelPercent: gelPercent)
+        }
+
         // Sort descending by length so larger fragments (higher on gel) draw first
         let sortedFragments = fragments.sorted { $0.length > $1.length }
 
@@ -197,12 +202,12 @@ struct GelRenderView: View {
                 let bp = max(1, fragment.length)
 
                 // y-center using semi-log mapping with gel percentage against theoretical range
-                let yCenter = GelLayout.y(bp: bp, minBP: theoreticalMinBP, maxBP: theoreticalMaxBP, top: mappingTop, height: mappingHeight, gelPercent: gelPercent)
+                let yCenter = y(bp)
 
                 // Band thickness heuristic with gel% adjustment
                 // Minor polish: make thin bands at higher gel% 
-                let gelThicknessFactor = max(0.8, 1.1 - 0.08 * (gelPercent - 1.5))
-                var coreHeight = max(4.0, 8.0 - CGFloat(sqrt(Double(bp))) / 30.0) * gelThicknessFactor
+                let gelScale = max(0.8, 1.1 - 0.08 * (gelPercent - 1.5)) // ≈ 1.1 at 1%, ≈ 1.0 at 1.5%, ≈ 0.94 at 2.5%, ≈ 0.90 at 3%
+                var coreHeight = max(3.0, (8.0 - CGFloat(fragment.length).squareRoot()/30.0) * gelScale)
                 var haloOpacity: CGFloat = 0.35
                 var haloRadius: CGFloat = 10
                 var coreShadowOpacity: CGFloat = 0.6
