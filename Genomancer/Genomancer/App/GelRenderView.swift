@@ -67,11 +67,41 @@ struct GelRenderView: View {
 
     // MARK: - Rendering helpers
     
+    /// Computes which label indices should be placed on the right side to avoid overlap
+    private func computeLabelsOnRight(labelData: [(bp: Int, y: CGFloat)], minSpacing: CGFloat) -> Set<Int> {
+        var labelsOnRight = Set<Int>()
+        
+        for i in 0..<labelData.count {
+            for j in (i+1)..<labelData.count {
+                let spacing = abs(labelData[i].y - labelData[j].y)
+                if spacing < minSpacing {
+                    // Move the lower (smaller fragment) to the right
+                    labelsOnRight.insert(j)
+                }
+            }
+        }
+        
+        return labelsOnRight
+    }
+    
     /// Creates text label overlays for fragment bands
     @ViewBuilder
     private func tickLabelsOverlay(geometry: GeometryProxy) -> some View {
         let lengths = fragments.map { $0.length }
-        if let minLength = lengths.min(), let maxLength = lengths.max(), minLength > 0, maxLength > 0 {
+        if let actualMinBP = lengths.min(), let actualMaxBP = lengths.max(), actualMinBP > 0, actualMaxBP > 0 {
+            // Use same dynamic range calculation as drawBands for consistent positioning
+            let logMin = log10(Double(actualMinBP))
+            let logMax = log10(Double(actualMaxBP))
+            let logRange = logMax - logMin
+            
+            // Same padding factor as drawBands
+            let paddingFactor = 0.25
+            let expandedLogMin = logMin - (logRange * paddingFactor)
+            let expandedLogMax = logMax + (logRange * paddingFactor)
+            
+            let theoreticalMinBP = max(1, Int(pow(10.0, expandedLogMin)))
+            let theoreticalMaxBP = Int(pow(10.0, expandedLogMax))
+            
             let size = geometry.size
             let verticalPadding: CGFloat = 24
             let laneWidth: CGFloat = 110
@@ -83,24 +113,37 @@ struct GelRenderView: View {
             let laneY = verticalPadding
             let laneRect = CGRect(x: laneX, y: laneY, width: laneWidth, height: laneHeight)
             
+            // Use same mapping as drawBands for consistent positioning
             let maxCoreHeight: CGFloat = 8
             let mappingTop = laneRect.minY + maxCoreHeight / 2
             let mappingHeight = max(0, laneRect.height - maxCoreHeight)
             
-            let labelX = laneRect.minX - 20
+            let leftLabelX = laneRect.minX - 20
+            let rightLabelX = laneRect.maxX + 20
             let labelColor = Color.white.opacity(0.6)
             
-            // Get unique fragment sizes, sorted descending
+            // Get unique fragment sizes, sorted descending with their y positions
             let uniqueLengths = Array(Set(lengths)).sorted(by: >)
-            
-            ForEach(uniqueLengths, id: \.self) { bp in
-                let y = GelLayout.y(bp: bp, minBP: minLength, maxBP: maxLength, top: mappingTop, height: mappingHeight, gelPercent: gelPercent)
+            let labelData: [(bp: Int, y: CGFloat)] = uniqueLengths.compactMap { bp in
+                let y = GelLayout.y(bp: bp, minBP: theoreticalMinBP, maxBP: theoreticalMaxBP, top: mappingTop, height: mappingHeight, gelPercent: gelPercent)
                 if y >= laneRect.minY && y <= laneRect.maxY {
-                    Text("\(bp) bp")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(labelColor)
-                        .position(x: labelX, y: y)
+                    return (bp, y)
                 }
+                return nil
+            }
+            
+            // Determine which labels should go on the right to avoid overlap
+            let minLabelSpacing: CGFloat = 18  // Minimum pixels between label centers
+            let labelsOnRight = computeLabelsOnRight(labelData: labelData, minSpacing: minLabelSpacing)
+            
+            ForEach(Array(labelData.enumerated()), id: \.element.bp) { index, data in
+                let isOnRight = labelsOnRight.contains(index)
+                let xPos = isOnRight ? rightLabelX : leftLabelX
+                
+                Text("\(data.bp) bp")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(labelColor)
+                    .position(x: xPos, y: data.y)
             }
         }
     }
@@ -109,16 +152,30 @@ struct GelRenderView: View {
     private func drawBands(context: GraphicsContext, size: CGSize, laneRect: CGRect, gelPercent: Double) {
         guard !fragments.isEmpty else { return }
 
-        // Compute min and max base-pair sizes from fragments
+        // Compute actual fragment range, then expand it to provide margin at both ends
         let lengths = fragments.map { $0.length }
-        guard let minLength = lengths.min(), let maxLength = lengths.max(), minLength > 0, maxLength > 0 else { return }
+        guard let actualMinBP = lengths.min(), let actualMaxBP = lengths.max(), actualMinBP > 0, actualMaxBP > 0 else { return }
+        
+        // Expand range in log space to leave space at top and bottom of gel
+        // This ensures fragments move when gel% changes while keeping appropriate spacing
+        let logMin = log10(Double(actualMinBP))
+        let logMax = log10(Double(actualMaxBP))
+        let logRange = logMax - logMin
+        
+        // Add 25% padding on each end in log space for realistic gel margins
+        let paddingFactor = 0.25
+        let expandedLogMin = logMin - (logRange * paddingFactor)
+        let expandedLogMax = logMax + (logRange * paddingFactor)
+        
+        let theoreticalMinBP = max(1, Int(pow(10.0, expandedLogMin)))
+        let theoreticalMaxBP = Int(pow(10.0, expandedLogMax))
 
         // Inner padding within lane for band width
         let horizontalPadding: CGFloat = 8
         let innerX = laneRect.minX + horizontalPadding
         let innerWidth = max(0, laneRect.width - (horizontalPadding * 2))
 
-        // Mapping region for y-centers: keep room for max band thickness at top/bottom
+        // Mapping region: use full lane height since expanded range provides the margins
         let maxCoreHeight: CGFloat = 8
         let mappingTop = laneRect.minY + maxCoreHeight / 2
         let mappingHeight = max(0, laneRect.height - maxCoreHeight)
@@ -139,11 +196,13 @@ struct GelRenderView: View {
             for fragment in sortedFragments {
                 let bp = max(1, fragment.length)
 
-                // y-center using semi-log mapping with gel percentage
-                let yCenter = GelLayout.y(bp: bp, minBP: minLength, maxBP: maxLength, top: mappingTop, height: mappingHeight, gelPercent: gelPercent)
+                // y-center using semi-log mapping with gel percentage against theoretical range
+                let yCenter = GelLayout.y(bp: bp, minBP: theoreticalMinBP, maxBP: theoreticalMaxBP, top: mappingTop, height: mappingHeight, gelPercent: gelPercent)
 
-                // Band thickness heuristic
-                var coreHeight = max(4.0, 8.0 - CGFloat(sqrt(Double(bp))) / 30.0)
+                // Band thickness heuristic with gel% adjustment
+                // Minor polish: make thin bands at higher gel% 
+                let gelThicknessFactor = max(0.8, 1.1 - 0.08 * (gelPercent - 1.5))
+                var coreHeight = max(4.0, 8.0 - CGFloat(sqrt(Double(bp))) / 30.0) * gelThicknessFactor
                 var haloOpacity: CGFloat = 0.35
                 var haloRadius: CGFloat = 10
                 var coreShadowOpacity: CGFloat = 0.6
