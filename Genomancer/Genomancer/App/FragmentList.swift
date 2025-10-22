@@ -23,6 +23,7 @@ struct FragmentList: View {
         .scrollContentBackground(.hidden)
         .background(Color.genomancerBackground)
         .navigationTitle("Fragments")
+        .toolbarColorScheme(.dark, for: .navigationBar)
     }
     
     private func overhangDescription(_ end: EndInfo) -> String {

@@ -9,6 +9,7 @@ struct GelView: View {
             .background(Color.genomancerBackground)
             .navigationTitle("Gel Electrophoresis")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarColorScheme(.dark, for: .navigationBar)
     }
 }
 
