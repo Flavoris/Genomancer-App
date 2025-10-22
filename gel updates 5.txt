@@ -1,0 +1,123 @@
+Goal: Replace the current semi-log mapping with a Ferguson-plot mobility model and thread it into GelRenderView. Add unit tests verifying monotonicity, %-dependence, and the log-linear relation.
+
+Actions:
+
+1. Edit GelLayout.swift: replace the mapper with the model below. Keep function signatures stable.
+
+2. Wire it in GelRenderView (no UI changes).
+
+3. Add tests in GelLayoutTests.swift.
+
+Patch (drop-in):
+
+// GelLayout.swift
+import CoreGraphics
+import Foundation
+
+enum GelLayout {
+
+    // --- Tunables (documented, easy to calibrate later) ---
+    // Baseline mobility at C=0: μ0(bp) ≈ A * bp^(-α)
+    private static let A: Double  = 1.10    // baseline scale for Rf at 0% gel (normalized later)
+    private static let alpha: Double = 0.48 // size-exponent; larger -> steeper size dependence
+
+    // Retardation coefficient: K(bp) ≈ k0 + k1*log10(bp)
+    // Larger fragments -> larger K -> stronger slowdown with % agarose
+    private static let k0: Double = -0.05
+    private static let k1: Double = 0.22
+
+    /// Zero-gel baseline mobility as a function of fragment size (bp).
+    static func mu0(bp: Int) -> Double {
+        let b = max(1, bp)
+        return A * pow(Double(b), -alpha)
+    }
+
+    /// Retardation coefficient as a function of size (bp).
+    static func K(bp: Int) -> Double {
+        let b = max(1, bp)
+        return k0 + k1 * log10(Double(b))
+    }
+
+    /// Ferguson mobility at gel % C (e.g., 1.0, 2.0, 3.0).
+    /// μ(C) = μ0 * exp(-K * C)
+    static func mobility(bp: Int, gelPercent C: Double) -> Double {
+        let mu0 = mu0(bp: bp)
+        let Kr  = K(bp: bp)
+        return mu0 * exp(-Kr * max(0.0, C))
+    }
+
+    /// Convert mobility to screen Y using lane top/height.
+    /// We normalize μ(C) across [minBP, maxBP] to 0..1 => Rf, then map to pixels.
+    static func y(bp: Int, minBP: Int, maxBP: Int,
+                  yTop: CGFloat, height: CGFloat, gelPercent: Double) -> CGFloat {
+        let lo = min(minBP, maxBP)
+        let hi = max(minBP, maxBP)
+        let xs = stride(from: lo, through: hi, by: max(1, (hi-lo)/14)).map {
+            mobility(bp: $0, gelPercent: gelPercent)
+        }
+        guard let mMin = xs.min(), let mMax = xs.max(), mMax > mMin else {
+            return yTop + height // fallback
+        }
+        let mu = mobility(bp: bp, gelPercent: gelPercent)
+        let Rf = (mu - mMin) / (mMax - mMin)  // 0..1: small→high μ → bigger Rf (lower on gel)
+        return yTop + (1 - CGFloat(Rf)) * height
+    }
+}
+
+
+Tests (add/replace in GelLayoutTests.swift):
+
+import XCTest
+@testable import <YourModuleName>
+
+final class GelLayoutTests: XCTestCase {
+
+    func testMonotonicityAtFixedPercent() {
+        let C = 2.0
+        let sizes = [1500, 1000, 800, 600, 400, 200, 100]
+        let mus   = sizes.map { GelLayout.mobility(bp: $0, gelPercent: C) }
+        // Larger bp -> lower mobility
+        for i in 1..<mus.count {
+            XCTAssertLessThan(mus[i-1], mus[i], "Mobility should increase as bp decreases")
+        }
+    }
+
+    func testPercentEffect() {
+        let bp = 600
+        let muLow = GelLayout.mobility(bp: bp, gelPercent: 1.0)
+        let muHigh = GelLayout.mobility(bp: bp, gelPercent: 3.0)
+        XCTAssertGreaterThan(muLow, muHigh, "Higher % gel should decrease mobility")
+    }
+
+    func testFergusonLinearityLogMobilityVsPercent() {
+        // log(μ) should be ~linear in C for fixed bp
+        let bp = 700
+        let Cs = [1.0, 1.5, 2.0, 2.5, 3.0]
+        let ys = Cs.map { log(GelLayout.mobility(bp: bp, gelPercent: $0)) }
+        // Check that successive finite differences are ~constant (tolerant)
+        var diffs: [Double] = []
+        for i in 1..<ys.count { diffs.append(ys[i] - ys[i-1]) }
+        let mean = diffs.reduce(0,+)/Double(diffs.count)
+        let maxDev = diffs.map { abs($0 - mean) }.max() ?? 0
+        XCTAssertLessThan(maxDev, 0.08, "log(μ) should be ~linear in gel%; max deviation too large")
+    }
+
+    func testYMappingBounds() {
+        let top: CGFloat = 0, h: CGFloat = 1000
+        let yMin = GelLayout.y(bp: 1500, minBP: 100, maxBP: 1500, yTop: top, height: h, gelPercent: 2.0)
+        let yMax = GelLayout.y(bp: 100,  minBP: 100, maxBP: 1500, yTop: top, height: h, gelPercent: 2.0)
+        XCTAssertGreaterThan(yMax, yMin)
+        XCTAssertGreaterThanOrEqual(yMin, top)
+        XCTAssertLessThanOrEqual(yMax, top + h)
+    }
+}
+
+
+Replace <YourModuleName> with your target name.
+
+Hook in GelRenderView (where you compute y):
+
+func y(_ bp: Int) -> CGFloat {
+    GelLayout.y(bp: bp, minBP: minBP, maxBP: maxBP,
+                yTop: top, height: height, gelPercent: gelPercent)
+}
