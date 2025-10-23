@@ -1,0 +1,66 @@
+Anchor min/max to a reference percent (e.g., 2.0%) and map the current 
+log
+⁡
+𝜇
+(
+𝐶
+)
+logμ(C) into that fixed range. This keeps sizes ordered, but now changing 
+𝐶
+C actually moves bands.
+
+Cursor Patch — GelLayout.y (reference-percent normalization)
+
+Apply to: GelLayout.swift (keep public API the same)
+
+ public static func y(bp: Int, minBP: Int, maxBP: Int,
+                      top: CGFloat, height: CGFloat, gelPercent: Double) -> CGFloat
+ {
+     let lo = min(minBP, maxBP)
+     let hi = max(minBP, maxBP)
+
+-    // Sample mobilities across the range for normalization
+-    let step = max(1, (hi - lo) / 18)
+-    let eps  = 1e-12
+-    let logs = stride(from: lo, through: hi, by: step).map {
+-        log( max(eps, mobility(bp: $0, gelPercent: gelPercent)) )
+-    }
+-    guard let lMin = logs.min(), let lMax = logs.max(), lMax > lMin else {
+-        return top + height // degenerate → stick to bottom so it's visible
+-    }
+-    // If the log range is extremely small (pathological params), distribute by pure log(bp)
+-    if (lMax - lMin) < 1e-6 {
+-        let loMin = log10(Double(max(1, lo)))
+-        let loMax = log10(Double(max(lo+1, hi)))
+-        let span  = max(1e-6, loMax - loMin)
+-        let t = (log10(Double(max(1, bp))) - loMin) / span
+-        return top + CGFloat(t) * height
+-    }
+-    let lmu = log( max(eps, mobility(bp: bp, gelPercent: gelPercent)) )
+-    let Rf  = (lmu - lMin) / (lMax - lMin)   // 0..1: small bp → larger Rf
+-    return top + CGFloat(Rf) * height
++    let step = max(1, (hi - lo) / 18)
++    let eps  = 1e-12
++
++    // --- Reference window (fixed gel%) for normalization ---
++    let Cref = 2.0  // pick the midpoint of your UI presets
++    let logsRef = stride(from: lo, through: hi, by: step).map {
++        log( max(eps, mobility(bp: $0, gelPercent: Cref)) )
++    }
++    guard let lMinRef = logsRef.min(), let lMaxRef = logsRef.max(), lMaxRef > lMinRef else {
++        return top + height
++    }
++    let denom = lMaxRef - lMinRef
++
++    // Current band position uses the CURRENT gel%
++    let lmu = log( max(eps, mobility(bp: bp, gelPercent: gelPercent)) )
++    var Rf  = (lmu - lMinRef) / denom
++    // Clamp: if outside due to extreme C, keep visible
++    Rf = min(1, max(0, Rf))
++    return top + CGFloat(Rf) * height
+ }
+
+
+This keeps your good spacing but restores visible migration with gel%.
+
+Files for context: your current Ferguson helpers and renderer call sites.

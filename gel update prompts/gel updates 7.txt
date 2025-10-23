@@ -1,0 +1,54 @@
+Apply to: GelLayout.swift
+Goal: Compute Rf using log(mu) rather than mu, with a tiny epsilon to avoid -inf.
+
+Make these edits:
+
+In GelLayout.y(…), replace the current sampling and Rf computation with the log-space version below.
+
+Keep the function signature and callers unchanged.
+
+ public static func y(bp: Int, minBP: Int, maxBP: Int,
+-                     top: CGFloat, height: CGFloat, gelPercent: Double) -> CGFloat
++                     top: CGFloat, height: CGFloat, gelPercent: Double) -> CGFloat
+ {
+     let lo = min(minBP, maxBP)
+     let hi = max(minBP, maxBP)
+
+     // Sample mobilities across the range for normalization
+-    let step = max(1, (hi - lo) / 18)
+-    let sample = stride(from: lo, through: hi, by: step).map { mobility(bp: $0, gelPercent: gelPercent) }
+-
+-    guard let mMin = sample.min(), let mMax = sample.max(), mMax > mMin else {
+-        return top + height // fallback if degenerate range
+-    }
+-
+-    let mu = mobility(bp: bp, gelPercent: gelPercent)
+-    let Rf = (mu - mMin) / (mMax - mMin) // 0..1, where higher Rf means higher mobility (smaller bp)
+-    return top + CGFloat(Rf) * height // higher mobility (smaller bp) → larger y (bottom)
++    let step = max(1, (hi - lo) / 18)
++    let eps  = 1e-12
++    let logs = stride(from: lo, through: hi, by: step).map {
++        log( max(eps, mobility(bp: $0, gelPercent: gelPercent)) )
++    }
++    guard let lMin = logs.min(), let lMax = logs.max(), lMax > lMin else {
++        return top + height // degenerate → stick to bottom so it’s visible
++    }
++    let lmu = log( max(eps, mobility(bp: bp, gelPercent: gelPercent)) )
++    let Rf  = (lmu - lMin) / (lMax - lMin)   // 0..1: small bp → larger Rf
++    return top + CGFloat(Rf) * height
+ }
+
+
+Why this works: Ferguson says log μ is linear in % agarose, and log-space spreads those “near-zero” μ values for large fragments so they don’t all quantize at the top.
+
+Files referenced: your current Ferguson implementation and call sites. 
+
+GelLayout
+
+ 
+
+GelRenderView
+
+ 
+
+GelView
