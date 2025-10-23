@@ -1,0 +1,16 @@
+Apply to: GelLayout.y(…) (same method, just add a secondary fallback)
+
+Add below the guard let lMin… block you just edited:
+
+-    guard let lMin = logs.min(), let lMax = logs.max(), lMax > lMin else {
++    guard let lMin = logs.min(), let lMax = logs.max(), lMax > lMin else {
+         return top + height
+     }
++    // If the log range is extremely small (pathological params), distribute by pure log(bp)
++    if (lMax - lMin) < 1e-6 {
++        let loMin = log10(Double(max(1, lo)))
++        let loMax = log10(Double(max(lo+1, hi)))
++        let span  = max(1e-6, loMax - loMin)
++        let t = (log10(Double(max(1, bp))) - loMin) / span
++        return top + CGFloat(t) * height
++    }

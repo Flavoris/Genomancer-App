@@ -1,0 +1,35 @@
+Apply to: add/extend GelLayoutTests.swift in your test target.
+Goal: Ensure (a) bands don’t collapse at the top, (b) log-linear behavior holds.
+
+import XCTest
+@testable import <YourModuleName>
+
+final class GelLayoutTests: XCTestCase {
+
+    func testLogLinearityInPercent() {
+        let bp = 800
+        let Cs = [1.0, 1.5, 2.0, 2.5, 3.0]
+        let ys = Cs.map { log(GelLayout.mobility(bp: bp, gelPercent: $0)) }
+        // successive differences ~ constant
+        let diffs = zip(ys.dropFirst(), ys).map(-)
+        let mean = diffs.reduce(0, +) / Double(diffs.count)
+        let maxDev = diffs.map { abs($0 - mean) }.max() ?? 0
+        XCTAssertLessThan(maxDev, 0.08)
+    }
+
+    func testNoTopClumpingInY() {
+        let C = 2.0
+        let top: CGFloat = 0, h: CGFloat = 1000
+        let sizes = [1200, 900, 700, 500, 300, 150, 80]
+        let ys = sizes.map { GelLayout.y(bp: $0, minBP: 80, maxBP: 1200, top: top, height: h, gelPercent: C) }
+        // Strictly increasing with size decreasing
+        for i in 1..<ys.count { XCTAssertLessThan(ys[i-1], ys[i]) }
+        // Upper-half should not contain all large fragments (avoid clumping):
+        let topRegion = top + h * 0.15
+        let numInTop15 = ys.filter { $0 < topRegion }.count
+        XCTAssertLessThan(numInTop15, 3, "Too many bands collapsed near the top")
+    }
+}
+
+
+Replace <YourModuleName> with your app target.

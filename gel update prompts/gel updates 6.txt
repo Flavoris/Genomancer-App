@@ -1,3 +1,9 @@
+Goal: Implement Ferguson plots in GelLayout and preserve the existing y(...) signature used by GelRenderView.
+
+Apply to: Sources/Features/Gel/GelLayout.swift (or wherever GelLayout.swift lives).
+
+Actions: Replace the current contents with this implementation. Keep the file name the same.
+
 // GelLayout.swift
 import Foundation
 import CoreGraphics
@@ -10,11 +16,11 @@ public enum GelLayout {
     // ---- Tunables (visual → calibrate later with real ladders) ----
     // Zero-gel baseline mobility ~ A * bp^(-alpha)
     private static let A: Double = 1.10
-    private static let alpha: Double = 0.40   // slightly flatter size-dependence
+    private static let alpha: Double = 0.48
 
     // Retardation coefficient K(bp) ~ k0 + k1 * log10(bp)
-    private static let k0: Double = -0.02
-    private static let k1: Double =  0.18    // gentler % slow-down growth with size
+    private static let k0: Double = -0.05
+    private static let k1: Double =  0.22
 
     // MARK: - Ferguson helpers
 
@@ -33,9 +39,7 @@ public enum GelLayout {
         mu0(bp: bp) * exp(-K(bp: bp) * max(0.0, C))
     }
 
-    /// Map bp → y using Ferguson mobility in log-space, normalized against a reference gel%.
-    /// Bands actually migrate when gel% changes, anchored to a 2.0% reference window.
-    /// Log-space spreads out near-zero mobilities for large fragments, preventing quantization at the top.
+    /// Map bp → y using Ferguson mobility normalized to [0,1] within [minBP,maxBP].
     /// Larger fragments (bp↑) end up nearer the top (y closer to `top`).
     public static func y(bp: Int, minBP: Int, maxBP: Int,
                          top: CGFloat, height: CGFloat, gelPercent: Double) -> CGFloat
@@ -43,24 +47,19 @@ public enum GelLayout {
         let lo = min(minBP, maxBP)
         let hi = max(minBP, maxBP)
 
+        // Sample mobilities across the range for normalization
         let step = max(1, (hi - lo) / 18)
-        let eps  = 1e-12
+        let sample = stride(from: lo, through: hi, by: step).map { mobility(bp: $0, gelPercent: gelPercent) }
 
-        // --- Reference window (fixed gel%) for normalization ---
-        let Cref = 2.0  // pick the midpoint of your UI presets
-        let logsRef = stride(from: lo, through: hi, by: step).map {
-            log( max(eps, mobility(bp: $0, gelPercent: Cref)) )
+        guard let mMin = sample.min(), let mMax = sample.max(), mMax > mMin else {
+            return top + height // fallback if degenerate range
         }
-        guard let lMinRef = logsRef.min(), let lMaxRef = logsRef.max(), lMaxRef > lMinRef else {
-            return top + height
-        }
-        let denom = lMaxRef - lMinRef
 
-        // Current band position uses the CURRENT gel%
-        let lmu = log( max(eps, mobility(bp: bp, gelPercent: gelPercent)) )
-        var Rf  = (lmu - lMinRef) / denom
-        // Clamp: if outside due to extreme C, keep visible
-        Rf = min(1, max(0, Rf))
-        return top + CGFloat(Rf) * height
+        let mu = mobility(bp: bp, gelPercent: gelPercent)
+        let Rf = (mu - mMin) / (mMax - mMin) // 0..1 -> bottom
+        return top + (1 - CGFloat(Rf)) * height
     }
 }
+
+
+Why this is safe: GelRenderView already calls GelLayout.y(...) and passes gelPercent, so you don’t have to touch UI code.

@@ -1,0 +1,14 @@
+Apply to: GelLayout.swift (top tunables)
+Goal: Make default spacing saner without calibration.
+
+Change:
+
+- private static let alpha: Double = 0.48
+- private static let k0: Double = -0.05
+- private static let k1: Double =  0.22
++ private static let alpha: Double = 0.40   // slightly flatter size-dependence
++ private static let k0: Double = -0.02
++ private static let k1: Double =  0.18    // gentler % slow-down growth with size
+
+
+You can revert once you calibrate against a real ladder.
