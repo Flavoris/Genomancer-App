@@ -15,8 +15,9 @@
 		1A00001E /* enzymes.json in Resources */ = {isa = PBXBuildFile; fileRef = 1A00001F /* enzymes.json */; };
 		1A000020 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000021 /* HomeView.swift */; };
 		1A000022 /* EnzymePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000023 /* EnzymePicker.swift */; };
-		1A000024 /* FragmentList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000025 /* FragmentList.swift */; };
-		1A000026 /* MapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000027 /* MapView.swift */; };
+	1A000024 /* FragmentList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000025 /* FragmentList.swift */; };
+	1A00002E /* FragmentDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00002F /* FragmentDetailView.swift */; };
+	1A000026 /* MapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000027 /* MapView.swift */; };
 		1A000028 /* GelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000029 /* GelView.swift */; };
 		1A00002A /* ColorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00002B /* ColorTheme.swift */; };
 		1A00002C /* GelRenderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00002D /* GelRenderView.swift */; };
@@ -32,8 +33,9 @@
 		1A00001F /* enzymes.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = enzymes.json; sourceTree = "<group>"; };
 		1A000021 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		1A000023 /* EnzymePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnzymePicker.swift; sourceTree = "<group>"; };
-		1A000025 /* FragmentList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FragmentList.swift; sourceTree = "<group>"; };
-		1A000027 /* MapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapView.swift; sourceTree = "<group>"; };
+	1A000025 /* FragmentList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FragmentList.swift; sourceTree = "<group>"; };
+	1A00002F /* FragmentDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FragmentDetailView.swift; sourceTree = "<group>"; };
+	1A000027 /* MapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapView.swift; sourceTree = "<group>"; };
 		1A000029 /* GelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GelView.swift; sourceTree = "<group>"; };
 		1A00002B /* ColorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorTheme.swift; sourceTree = "<group>"; };
 		1A00002D /* GelRenderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GelRenderView.swift; sourceTree = "<group>"; };
@@ -91,9 +93,10 @@
 				1A000000 /* GenomancerApp.swift */,
 				1A000002 /* ContentView.swift */,
 				1A000021 /* HomeView.swift */,
-				1A000023 /* EnzymePicker.swift */,
-				1A000025 /* FragmentList.swift */,
-				1A000027 /* MapView.swift */,
+			1A000023 /* EnzymePicker.swift */,
+			1A000025 /* FragmentList.swift */,
+			1A00002F /* FragmentDetailView.swift */,
+			1A000027 /* MapView.swift */,
 				1A000029 /* GelView.swift */,
 				1A00002D /* GelRenderView.swift */,
 				1A00002B /* ColorTheme.swift */,
@@ -191,9 +194,10 @@
 				1A000003 /* ContentView.swift in Sources */,
 				1A000001 /* GenomancerApp.swift in Sources */,
 				1A000020 /* HomeView.swift in Sources */,
-				1A000022 /* EnzymePicker.swift in Sources */,
-				1A000024 /* FragmentList.swift in Sources */,
-				1A000026 /* MapView.swift in Sources */,
+			1A000022 /* EnzymePicker.swift in Sources */,
+			1A000024 /* FragmentList.swift in Sources */,
+			1A00002E /* FragmentDetailView.swift in Sources */,
+			1A000026 /* MapView.swift in Sources */,
 				1A000028 /* GelView.swift in Sources */,
 				1A00002C /* GelRenderView.swift in Sources */,
 				1A00002A /* ColorTheme.swift in Sources */,

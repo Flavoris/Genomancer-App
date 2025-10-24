@@ -175,7 +175,7 @@ struct HomeView: View {
             if !results.isEmpty {
                 VStack(spacing: 12) {
                     NavigationLink("View Fragments") { 
-                        FragmentList(fragments: results) 
+                        FragmentList(fragments: results, fullSequence: parseFASTA(sequence)) 
                     }
                     .padding()
                     .background(Color(.systemBackground))
@@ -318,7 +318,8 @@ struct HomeView: View {
         }
         
         let engine = DigestEngine(sequence: dna, enzymes: Array(selected))
-        results = engine.digest(options: .init(circular: circular, returnSequences: false))
+        // Enable sequence retrieval so fragments contain their DNA sequences
+        results = engine.digest(options: .init(circular: circular, returnSequences: true))
         
         // Generate export data
         prepareExports(dna: dna)
