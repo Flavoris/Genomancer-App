@@ -17,6 +17,7 @@ struct HomeView: View {
     @State private var showFileImporter = false
     @State private var showFileImportError = false
     @State private var fileImportErrorMessage = ""
+    @FocusState private var isSequenceFieldFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -27,6 +28,9 @@ struct HomeView: View {
                 }
             }
             .background(Color.genomancerBackground)
+            .onTapGesture {
+                isSequenceFieldFocused = false
+            }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear(perform: loadEnzymes)
@@ -89,6 +93,7 @@ struct HomeView: View {
                         .frame(height: 120)
                         .font(.system(.body, design: .monospaced))
                         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                        .focused($isSequenceFieldFocused)
                         .onChange(of: sequence) { newValue in
                             validateSequence(newValue)
                         }
@@ -97,6 +102,14 @@ struct HomeView: View {
                         .padding(8)
                         .background(Color(.systemBackground))
                         .cornerRadius(8)
+                        .toolbar {
+                            ToolbarItemGroup(placement: .keyboard) {
+                                Spacer()
+                                Button("Done") {
+                                    isSequenceFieldFocused = false
+                                }
+                            }
+                        }
                     
                     if isFASTAFormat {
                         Label("FASTA format detected", systemImage: "doc.text")
