@@ -1,0 +1,34 @@
+Open GelLayout.swift. In the mobility(bp:gelPercent:) pipeline, make fragment size an explicit factor (so it’s not just implicit via μ₀ and K). Keep the Ferguson form, multiply by a gentle size term that scales ~1/log10(bp). Add comments explaining the physics.
+
+Edit:
+
+Near the existing mobility(bp:gelPercent:) function, add:
+
+private static func sizeFactor(bp: Int) -> Double {
+    let b = max(2, bp) // avoid log(1)
+    // Smaller fragments should move faster → larger factor.
+    // 1 / log10(bp) grows as bp shrinks; clamp to avoid extremes.
+    let f = 1.0 / log10(Double(b))
+    return min(2.0, max(0.5, f))
+}
+
+
+Modify mobility(bp:gelPercent:) to:
+
+public static func mobility(bp: Int, gelPercent C: Double) -> Double {
+    let ferguson = mu0(bp: bp) * exp(-K(bp: bp) * max(0.0, C))
+    return ferguson * sizeFactor(bp: bp)
+}
+
+
+Add a doc comment above mobility noting that fragment size now contributes both via μ₀/K and an explicit size factor for clearer, tunable size-dependence.
+
+Don’t change y(...). It should keep using mobility(...) as the source of truth. Keep all constants as currently defined.
+
+Save.
+
+(Your file already routes drawing through GelLayout.y(…), so this makes size unambiguously part of the calculation. 
+
+GelLayout
+
+)

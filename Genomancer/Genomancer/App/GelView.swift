@@ -26,7 +26,7 @@ struct GelView: View {
                 
                 // Slider
                 VStack {
-                    Slider(value: $gelPercent, in: 0.8...3.0, step: 0.1)
+                    Slider(value: $gelPercent, in: 0.5...3.0, step: 0.1)
                         .rotationEffect(.degrees(-90))
                         .frame(width: 200)
                         .tint(.blue)
@@ -38,7 +38,7 @@ struct GelView: View {
                 
                 // Quick preset buttons (vertical)
                 VStack(spacing: 8) {
-                    ForEach([3.0, 2.5, 2.0, 1.5, 1.0], id: \.self) { preset in
+                    ForEach([3.0, 2.5, 2.0, 1.5, 1.0, 0.5], id: \.self) { preset in
                         Button(action: {
                             gelPercent = preset
                         }) {
