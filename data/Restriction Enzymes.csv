@@ -1,0 +1,358 @@
+Enzyme,Recognition Sequence,Cut Site,Overhang Type
+AaaI,5'-CGGCCG-3',C^GGCCG,5' overhang
+AagI,5'-ATCGAT-3',AT^CGAT,Blunt
+AanI,5'-TTATAA-3',TTA^TAA,Blunt
+AatII,5'-GACGTC-3',GACGT^C,3' overhang
+AauI,5'-TGTACA-3',T^GTACA,5' overhang
+AbaI,5'-TGATCA-3',T^GATCA,5' overhang
+AbrI,5'-CTCGAG-3',C^TCGAG,5' overhang
+AbsI,5'-CCTCGAGG-3',CC^TCGAGG,Blunt
+Acc113I,5'-AGTACT-3',AGT^ACT,Blunt
+Acc16I,5'-TGCGCA-3',TGC^GCA,Blunt
+Acc65I,5'-GGTACC-3',G^GTACC,5' overhang
+AccB2I,5'-RGCGCY-3',RGCGC^Y,3' overhang
+AccBSI,5'-CCANNNNNTGG-3',CCANNNN^NTGG,5' overhang
+AccI,5'-GTMKAC-3',GT^MKAC,Blunt
+AccII,5'-CGCG-3',CG^CG,Blunt
+AccIII,5'-TCCGGA-3',T^CCGGA,5' overhang
+AciI,5'-CCGC-3',C^CGC,5' overhang
+AclI,5'-AACGTT-3',AA^CGTT,Blunt
+AclWI,5'-GGATC-3',GGATCNNNN^,5' overhang
+AcsI,5'-RAATTY-3',R^AATTY,5' overhang
+AcyI,5'-GRCGYC-3',GR^CGYC,3' overhang
+AfaI,5'-GTAC-3',GT^AC,Blunt
+AfeI,5'-AGCGCT-3',AGC^GCT,Blunt
+AflII,5'-CTTAAG-3',C^TTAAG,5' overhang
+AflIII,5'-ACRYGT-3',A^CRYGT,5' overhang
+AgeI,5'-ACCGGT-3',A^CCGGT,5' overhang
+AhaIII,5'-TTTAAA-3',TTT^AAA,Blunt
+AhdI,5'-GACNNNGTC-3',GACN^NNGTC,5' overhang
+AleI,5'-CACNNNNGTG-3',CACNNN^GTG,Blunt
+AluBI,5'-AGCT-3',AG^CT,Blunt
+AluI,5'-AGCT-3',AG^CT,Blunt
+Alw21I,5'-GWGCWC-3',GWGCW^C,3' overhang
+Alw26I,5'-GTCTC-3',GTCTCN^NNN,5' overhang
+Alw44I,5'-GTGCAC-3',G^TGCAC,5' overhang
+AlwI,5'-GGATC-3',GGATCNNNN^,5' overhang
+AlwNI,5'-CAGNNNCTG-3',CAGNNN^CTG,Blunt
+ApaI,5'-GGGCCC-3',GGG^CCC,Blunt
+ApaLI,5'-GTGCAC-3',G^TGCAC,5' overhang
+ApoI,5'-RAATTY-3',R^AATTY,5' overhang
+AscI,5'-GGCGCGCC-3',GG^CGCGCC,Blunt
+AseI,5'-ATTAAT-3',AT^TAAT,Blunt
+AsnI,5'-ATTAAT-3',AT^TAAT,Blunt
+Asp26HI,5'-GAATGC-3',GAATGCN^,5' overhang
+Asp27HI,5'-GAATGC-3',GAATGCN^,5' overhang
+Asp35HI,5'-GAATGC-3',GAATGCN^,5' overhang
+Asp700I,5'-GAANNNNTTC-3',GAANNN^NTTC,Blunt
+Asp718,5'-GGTACC-3',G^GTACC,5' overhang
+AspI,5'-GACNNNGTC-3',GACN^NNGTC,5' overhang
+AspNI,5'-GGNNCC-3',GGN^NCC,Blunt
+AssI,5'-AGTACT-3',AGT^ACT,Blunt
+AsuC2I,5'-CCSGG-3',^CCSGG,5' overhang
+AsuII,5'-TTCGAA-3',TT^CGAA,Blunt
+AsuNHI,5'-GCTAGC-3',G^CTAGC,5' overhang
+AvaI,5'-CYCGRG-3',C^YCGRG,5' overhang
+AvaII,5'-GGWCC-3',G^GWCC,5' overhang
+AviII,5'-TGCGCA-3',TGC^GCA,Blunt
+AvrII,5'-CCTAGG-3',C^CTAGG,5' overhang
+BalI,5'-TGGCCA-3',TGG^CCA,Blunt
+BamHI,5'-GGATCC-3',G^GATCC,5' overhang
+BanI,5'-GGYRCC-3',G^GYRCC,5' overhang
+BanII,5'-GRGCYC-3',GRGCY^C,3' overhang
+BbsI,5'-GAAGAC-3',GAAGACNN^,5' overhang
+BbvI,5'-GCAGC-3',GCAGCNNNNN^,5' overhang
+BcgI,5'-CGANNNNNNTGC-3',CGANNNNNNN^,5' overhang
+BclI,5'-TGATCA-3',T^GATCA,5' overhang
+BcnI,5'-CCSGG-3',^CCSGG,5' overhang
+BfaI,5'-CTAG-3',C^TAG,Blunt
+BfoI,5'-RGCGCY-3',RGCGC^Y,3' overhang
+BglI,5'-GCCNNNNNGGC-3',GCCNNNN^NGGC,5' overhang
+BglII,5'-AGATCT-3',A^GATCT,5' overhang
+BinI,5'-GGATC-3',GGATCNNNN^,5' overhang
+BmaHI,5'-GAATGC-3',GAATGCN^,5' overhang
+BmcAI,5'-AGTACT-3',AGT^ACT,Blunt
+Bme142I,5'-RGCGCY-3',RGCGC^Y,3' overhang
+BmeRI,5'-GACNNNNNGTC-3',GACNNNN^NNGTC,5' overhang
+BmgBI,5'-CACGTC-3',CAC^GTC,Blunt
+BmrI,5'-ACTGGG-3',ACTGGGNNNNN^,5' overhang
+BmtI,5'-GCTAGC-3',G^CTAGC,5' overhang
+Bpa34I,5'-AGTACT-3',AGT^ACT,Blunt
+BpmI,5'-CTGGAG-3',CTGGAGNNNNN^,5' overhang
+Bpu10I,5'-CCTNAGC-3',CCTNAGCN^,5' overhang
+BpuFI,5'-GGATC-3',GGATCNNNN^,5' overhang
+BpuMI,5'-CCSGG-3',^CCSGG,5' overhang
+BsaAI,5'-YACGTR-3',YAC^GTR,Blunt
+BsaBI,5'-GATNNNATC-3',GATNNN^NATC,Blunt
+BsaHI,5'-GRCGYC-3',GR^CGYC,3' overhang
+BsaI,5'-GGTCTC-3',GGTCTCN^NNN,5' overhang
+BsaJI,5'-CCNNGG-3',C^CNNGG,Blunt
+BsaMI,5'-GAATGC-3',GAATGCN^,5' overhang
+BsaWI,5'-WCCGGW-3',W^CCGGW,Blunt
+BsaXI,5'-ACNNNNNCTCC-3',ACNNNNNN^,5' overhang
+BscBI,5'-GGNNCC-3',GGN^NCC,Blunt
+BscCI,5'-GAATGC-3',GAATGCN^,5' overhang
+BseRI,5'-GAGGAG-3',GAGGAGNNNNN^,5' overhang
+BseYI,5'-CCCAGC-3',CCCAGCNN^,5' overhang
+BsgI,5'-GTGCAG-3',GTGCAGNNNN^,5' overhang
+Bsh45I,5'-GWGCWC-3',GWGCW^C,3' overhang
+BshTI,5'-ACCGGT-3',A^CCGGT,5' overhang
+BsiEI,5'-CGRYCG-3',CG^RYCG,Blunt
+BsiHKAI,5'-GWGCWC-3',GWGCW^C,3' overhang
+BsiQI,5'-TGATCA-3',T^GATCA,5' overhang
+BsiWI,5'-CGTACG-3',C^GTACG,Blunt
+BslI,5'-CCNNNNNNNGG-3',CCNNNNNN^NNG,5' overhang
+Bsm6I,5'-GWGCWC-3',GWGCW^C,3' overhang
+BsmAI,5'-GTCTC-3',GTCTCN^NNN,5' overhang
+BsmBI,5'-CGTCTC-3',CGTCTCN^NNN,5' overhang
+BsmFI,5'-GGGAC-3',GGGACNNNN^,5' overhang
+BsmI,5'-GAATGC-3',GAATGCN^,5' overhang
+BsoBI,5'-CYCGRG-3',C^YCGRG,5' overhang
+Bsp1286I,5'-GDGCHC-3',GDGCH^C,3' overhang
+Bsp143II,5'-RGCGCY-3',RGCGC^Y,3' overhang
+BspCNI,5'-CTCAG-3',CTCAGNNNNN^,5' overhang
+BspDI,5'-ATCGAT-3',AT^CGAT,Blunt
+BspEI,5'-TCCGGA-3',T^CCGGA,5' overhang
+BspHI,5'-TCATGA-3',T^CATGA,5' overhang
+BspLI,5'-GGNNCC-3',GGN^NCC,Blunt
+BspMI,5'-ACCTGC-3',ACCTGCNNNN^,5' overhang
+BspOI,5'-GCTAGC-3',G^CTAGC,5' overhang
+BspOVI,5'-GACNNNNNGTC-3',GACNNNN^NNGTC,5' overhang
+BspPI,5'-GGATC-3',GGATCNNNN^,5' overhang
+BspXII,5'-TGATCA-3',T^GATCA,5' overhang
+BsrBI,5'-CCGCTC-3',CCG^CTC,Blunt
+BsrDI,5'-GCAATG-3',GCAATGNN^,5' overhang
+BsrFI,5'-RCCGGY-3',R^CCGGY,5' overhang
+BsrGI,5'-TGTACA-3',T^GTACA,5' overhang
+BsrI,5'-ACTGG-3',ACTGGN^,5' overhang
+BssHII,5'-GCGCGC-3',G^CGCGC,5' overhang
+BssKI,5'-CCNGG-3',CCNGG^,Blunt
+BssSI,5'-CACGAG-3',CACGAGNNNN^,5' overhang
+Bst31TI,5'-GGATC-3',GGATCNNNN^,5' overhang
+BstAPI,5'-GCANNNNNTGC-3',GCANNN^NNTGC,5' overhang
+BstBI,5'-TTCGAA-3',TT^CGAA,Blunt
+BstDEI,5'-CTNAG-3',C^TNAG,5' overhang
+BstEII,5'-GGTNACC-3',G^GTNACC,5' overhang
+BstH2I,5'-RGCGCY-3',RGCGC^Y,3' overhang
+BstH9I,5'-GGATC-3',GGATCNNNN^,5' overhang
+BstNI,5'-CCWGG-3',CC^WGG,Blunt
+BstT7I,5'-TGATCA-3',T^GATCA,5' overhang
+BstUI,5'-CGCG-3',CG^CG,Blunt
+BstXI,5'-CCANNNNNNTGG-3',CCANNNNN^NTGG,5' overhang
+BstYI,5'-RGATCY-3',R^GATCY,5' overhang
+BstZ17I,5'-GTATAC-3',GTA^TAC,Blunt
+Bsu36I,5'-CCTNAGG-3',CC^TNAGG,Blunt
+BtgI,5'-CCRYGG-3',C^CRYGG,5' overhang
+BtgZI,5'-GCGATG-3',GCGATGNNNN^,5' overhang
+Bth617I,5'-GGATC-3',GGATCNNNN^,5' overhang
+BtsCI,5'-GGATG-3',GGATGNN^,5' overhang
+BtsI,5'-GCAGTG-3',GCAGTGNN^,5' overhang
+BtsIMutI,5'-CAGTG-3',CAGTGNN^,5' overhang
+Cac8I,5'-GCNNGC-3',GCN^NGC,Blunt
+CaiI,5'-CAGCAG-3',CAGCAGNNNNNNNNNNNNNNNNNN^,5' overhang
+CauI,5'-CGATCG-3',CGAT^CG,Blunt
+CauII,5'-CCSGG-3',^CCSGG,5' overhang
+CelII,5'-GCTNAGC-3',GC^TNAGC,Blunt
+Cfr10I,5'-RCCGGY-3',R^CCGGY,5' overhang
+Cfr13I,5'-GGNCC-3',G^GNCC,5' overhang
+Cfr42I,5'-CCGCGG-3',CCGC^GG,Blunt
+CfrI,5'-YGGCCR-3',Y^GGCCR,5' overhang
+ClaI,5'-ATCGAT-3',AT^CGAT,Blunt
+CsiAI,5'-ACCGGT-3',A^CCGGT,5' overhang
+Csp6I,5'-GTAC-3',G^TAC,Blunt
+CspAI,5'-ACCGGT-3',A^CCGGT,5' overhang
+CspCI,5'-CAANNNNNGTGG-3',CAANNNNN^,5' overhang
+CviAII,5'-CATG-3',C^ATG,Blunt
+CviKI-1,5'-RGCY-3',RG^CY,Blunt
+CviQI,5'-GTAC-3',G^TAC,Blunt
+CviRII,5'-GTAC-3',GT^AC,Blunt
+DdeI,5'-CTNAG-3',C^TNAG,5' overhang
+DpnI,5'-GATC-3',GA^TC,Blunt
+DpnII,5'-GATC-3',^GATC,5' overhang
+DraI,5'-TTTAAA-3',TTT^AAA,Blunt
+DraII,5'-RGGNCCY-3',RG^GNCCY,3' overhang
+DraIII,5'-CACNNNGTG-3',CACNNN^GTG,Blunt
+DrdI,5'-GACNNNNNNGTC-3',GACNNNN^NNGTC,5' overhang
+DriI,5'-GACNNNNNGTC-3',GACNNNN^NNGTC,5' overhang
+DsaI,5'-CCRYGG-3',C^CRYGG,5' overhang
+EaeI,5'-YGGCCR-3',Y^GGCCR,5' overhang
+EagI,5'-CGGCCG-3',C^GGCCG,5' overhang
+Eam1105I,5'-GACNNNNNGTC-3',GACNNNN^NNGTC,5' overhang
+EarI,5'-CTCTTC-3',CTCTTCN^,5' overhang
+EciI,5'-TCCGCC-3',TCCGCCNNNN^,5' overhang
+Ecl136II,5'-GAGCTC-3',GAG^CTC,Blunt
+EclHKI,5'-GACNNNNNGTC-3',GACNNNN^NNGTC,5' overhang
+Eco255I,5'-AGTACT-3',AGT^ACT,Blunt
+Eco47III,5'-AGCGCT-3',AGC^GCT,Blunt
+Eco52I,5'-CGGCCG-3',C^GGCCG,5' overhang
+Eco57I,5'-CTGAAG-3',CTGAAGNNNNN^,5' overhang
+Eco57MI,5'-CTGRAG-3',CTGRAGNNNNN^,5' overhang
+EcoHI,5'-CCSGG-3',^CCSGG,5' overhang
+EcoICRI,5'-GAGCTC-3',GAG^CTC,Blunt
+EcoNI,5'-CCTNNNNNAGG-3',CCTNNNN^NAGG,5' overhang
+EcoO109I,5'-RGGNCCY-3',RG^GNCCY,3' overhang
+EcoRI,5'-GAATTC-3',G^AATTC,5' overhang
+EcoRII,5'-CCWGG-3',^CCWGG,5' overhang
+EcoRII,5'-CCWGG-3',^CCWGG,5' overhang
+EcoRV,5'-GATATC-3',GAT^ATC,Blunt
+Esp3I,5'-CGTCTC-3',CGTCTCN^NNN,5' overhang
+EspI,5'-GCTNAGC-3',GC^TNAGC,Blunt
+FalI,5'-AAGNNNNNCTT-3',AAGN5CTTN^,5' overhang
+FalI,5'-AAGNNNNNCTT-3',AAGN5CTTN^,5' overhang
+FaqI,5'-GGGAC-3',GGGACNNNNNN^,5' overhang
+FauI,5'-CCCGC-3',CCCGCNNNN^,5' overhang
+FbaI,5'-TGATCA-3',T^GATCA,5' overhang
+Fnu4HI,5'-GCNGC-3',GC^NGC,Blunt
+FnuDII,5'-CGCG-3',CG^CG,Blunt
+FokI,5'-GGATG-3',GGATGNNNNN^,5' overhang
+FseI,5'-GGCCGGCC-3',GGCCGG^CC,Blunt
+FspI,5'-TGCGCA-3',TGC^GCA,Blunt
+GauT27I,5'-CGCG-3',CG^CG,Blunt
+GdiII,5'-YGGCCR-3',Y^GGCCR,5' overhang
+GdiII,5'-YGGCCR-3',Y^GGCCR,5' overhang
+GlaI,5'-GCGC-3',GCG^C,3' overhang
+GsaI,5'-CCCAGC-3',CCCAGCNN^,5' overhang
+GsuI,5'-CTGGAG-3',CTGGAGNNNNN^,5' overhang
+HaeII,5'-RGCGCY-3',RGCGC^Y,3' overhang
+HaeIII,5'-GGCC-3',GG^CC,Blunt
+HgaI,5'-GACGC-3',GACGCNNNNN^,5' overhang
+HgiAI,5'-GWGCWC-3',GWGCW^C,3' overhang
+HgiS22I,5'-CCSGG-3',^CCSGG,5' overhang
+HhaI,5'-GCGC-3',GCG^C,3' overhang
+Hin1I,5'-GRCGYC-3',GR^CGYC,3' overhang
+Hin1II,5'-CATG-3',CATG^,Blunt
+Hin4I,5'-GAYNNNNNRTC-3',GAYN5RTCN^,5' overhang
+Hin4I,5'-GAYNNNNNRTC-3',GAYN5RTCN^,5' overhang
+HincII,5'-GTYRAC-3',GTY^RAC,Blunt
+HindIII,5'-AAGCTT-3',A^AGCTT,5' overhang
+HinfI,5'-GANTC-3',G^ANTC,5' overhang
+HinPI,5'-GCGC-3',G^CGC,5' overhang
+HpaI,5'-GTTAAC-3',GTT^AAC,Blunt
+HpaII,5'-CCGG-3',C^CGG,5' overhang
+HphI,5'-GGTGA-3',GGTGANNNN^,5' overhang
+Hpy166II,5'-GTNNAC-3',GTN^NAC,Blunt
+Hpy178III,5'-TCNNGA-3',TC^NNGA,Blunt
+Hpy188I,5'-TCNGA-3',TCN^GA,Blunt
+Hpy188III,5'-TCNNGA-3',TC^NNGA,Blunt
+Hpy8I,5'-GTNNAC-3',GTN^NAC,Blunt
+Hpy99I,5'-CGWCG-3',C^GWCG,5' overhang
+HpyAV,5'-CCTTC-3',CCTTCNNNNN^,5' overhang
+HpyBI,5'-GTAC-3',GT^AC,Blunt
+HpyCH4III,5'-ACNGT-3',ACN^GT,Blunt
+HpyCH4IV,5'-ACGT-3',A^CGT,Blunt
+HpyCH4V,5'-TGCA-3',TG^CA,Blunt
+HpyF10VI,5'-GCNNNNNNNGC-3',GCNNNNN^NNGC,5' overhang
+HpyF3I,5'-CTNAG-3',C^TNAG,5' overhang
+HpyF46II,5'-GWGCWC-3',GWGCW^C,3' overhang
+KasI,5'-GGCGCC-3',G^GCGCC,5' overhang
+KpnI,5'-GGTACC-3',GGTAC^C,3' overhang
+Ksp22I,5'-TGATCA-3',T^GATCA,5' overhang
+Ksp632I,5'-CTCTTC-3',CTCTTCN^,5' overhang
+KspAI,5'-GTTAAC-3',GTT^AAC,Blunt
+LlaG2I,5'-GCTAGC-3',G^CTAGC,5' overhang
+LpnI,5'-RGCGCY-3',RGCGC^Y,3' overhang
+MabI,5'-ACCWGGT-3',A^CCWGGT,5' overhang
+MboI,5'-GATC-3',^GATC,5' overhang
+MboII,5'-GAAGA-3',GAAGANNNN^,5' overhang
+MfeI,5'-CAATTG-3',C^AATTG,5' overhang
+MluI,5'-ACGCGT-3',A^CGCGT,5' overhang
+MlyI,5'-GAGTC-3',GAGTCNNNNN^,5' overhang
+MmeI,5'-TCCRAC-3',TCCRACNNNN^,5' overhang
+MnlI,5'-CCTC-3',CCTCNNNNN^,5' overhang
+MscI,5'-TGGCCA-3',TGG^CCA,Blunt
+MseI,5'-TTAA-3',T^TAA,5' overhang
+MslI,5'-CAYNNNNRTG-3',CAYNNNN^NRTG,5' overhang
+MspA1I,5'-CMGCKG-3',CMG^CKG,Blunt
+MspI,5'-CCGG-3',C^CGG,5' overhang
+MspV281I,5'-GWGCWC-3',GWGCW^C,3' overhang
+Mva1269I,5'-GAATGC-3',GAATGCN^,5' overhang
+MwoI,5'-GCNNNNNNNGC-3',GCNNNNN^NNNNNNGC,5' overhang
+NaeI,5'-GCCGGC-3',GCC^GGC,Blunt
+NarI,5'-GGCGCC-3',GG^CGCC,Blunt
+NciI,5'-CCSGG-3',CC^SGG,Blunt
+NcoI,5'-CCATGG-3',C^CATGG,5' overhang
+NdeI,5'-CATATG-3',CA^TATG,Blunt
+NgoMIV,5'-GCCGGC-3',G^CCGGC,5' overhang
+NheI,5'-GCTAGC-3',G^CTAGC,5' overhang
+NlaIII,5'-CATG-3',CATG^,Blunt
+NlaIV,5'-GGNNCC-3',GGN^NCC,Blunt
+NotI,5'-GCGGCCGC-3',GC^GGCCGC,5' overhang
+NruGI,5'-GACNNNNNGTC-3',GACNNNN^NNGTC,5' overhang
+NruI,5'-TCGCGA-3',TCG^CGA,Blunt
+NruI-HF®,5'-TCGCGA-3',TCG^CGA,Blunt
+NsiI,5'-ATGCAT-3',ATGCA^T,3' overhang
+NspI,5'-RCATGY-3',RCATG^Y,3' overhang
+OliI,5'-CACNNNNGTG-3',CACNN^NNGTG,Blunt
+PabI,5'-GTAC-3',GT^AC,Blunt
+PacI,5'-TTAATTAA-3',TTAAT^TAA,Blunt
+PaeR7I,5'-CTCGAG-3',C^TCGAG,5' overhang
+ParI,5'-TGATCA-3',T^GATCA,5' overhang
+PciI,5'-ACATGT-3',A^CATGT,5' overhang
+PflFI,5'-GACNNNGTC-3',GACN^NNGTC,5' overhang
+PflMI,5'-CCANNNNNTGG-3',CCANNNN^NTGG,5' overhang
+PinAI,5'-ACCGGT-3',A^CCGGT,5' overhang
+PlaAII,5'-GTAC-3',GT^AC,Blunt
+PleI,5'-GAGTC-3',GAGTCNNNN^,5' overhang
+PmeI,5'-GTTTAAAC-3',GTTT^AAAC,Blunt
+PmlI,5'-CACGTG-3',CAC^GTG,Blunt
+Ppu10I,5'-ATGCAT-3',A^TGCAT,5' overhang
+PpuMI,5'-RGGWCCY-3',RG^GWCCY,3' overhang
+PshAI,5'-GACNNNNGTC-3',GACNN^NNGTC,Blunt
+PsiI,5'-TTATAA-3',TTA^TAA,Blunt
+PsiI-v2,5'-TTATAA-3',TTA^TAA,Blunt
+PspGI,5'-CCWGG-3',^CCWGG,5' overhang
+PspOMI,5'-GGGCCC-3',GGG^CCC,Blunt
+PstI,5'-CTGCAG-3',CTGCA^G,3' overhang
+PvuI,5'-CGATCG-3',CGAT^CG,Blunt
+PvuII,5'-CAGCTG-3',CAG^CTG,Blunt
+Ral8I,5'-GGATC-3',GGATCNNNN^,5' overhang
+RflFII,5'-AGTACT-3',AGT^ACT,Blunt
+RsaI,5'-GTAC-3',GT^AC,Blunt
+RsaNI,5'-GTAC-3',GT^AC,Blunt
+RsrII,5'-CGGWCCG-3',CG^GWCCG,5' overhang
+SacI,5'-GAGCTC-3',GAGCT^C,3' overhang
+SacII,5'-CCGCGG-3',CCGC^GG,Blunt
+SalI,5'-GTCGAC-3',G^TCGAC,5' overhang
+SapI,5'-GCTCTTC-3',GCTCTTCN^,5' overhang
+Sau3AI,5'-GATC-3',^GATC,5' overhang
+Sau96I,5'-GGNCC-3',G^GNCC,5' overhang
+SbfI,5'-CCTGCAGG-3',CCTGCA^GG,Blunt
+ScaI,5'-AGTACT-3',AGT^ACT,Blunt
+ScrFI,5'-CCNGG-3',CC^NGG,Blunt
+SduI,5'-GDGCHC-3',GDGCH^C,3' overhang
+SexAI,5'-ACCWGGT-3',A^CCWGGT,5' overhang
+SfaNI,5'-GCATC-3',GCATCNNNNN^,5' overhang
+SfcI,5'-CTRYAG-3',C^TRYAG,5' overhang
+SfiI,5'-GGCCNNNNNGGCC-3',GGCCNNNN^NGGCC,5' overhang
+SfoI,5'-GGCGCC-3',GGC^GCC,Blunt
+SgrAI,5'-CRCCGGYG-3',CR^CCGGYG,Blunt
+SmaI,5'-CCCGGG-3',CCC^GGG,Blunt
+SmlI,5'-CTYRAG-3',C^TYRAG,5' overhang
+SnaBI,5'-TACGTA-3',TAC^GTA,Blunt
+SpeI,5'-ACTAGT-3',A^CTAGT,5' overhang
+SphI,5'-GCATGC-3',GCATG^C,3' overhang
+SplI,5'-CGTACG-3',C^GTACG,Blunt
+SrfI,5'-GCCCGGGC-3',GCCC^GGGC,Blunt
+SspI,5'-AATATT-3',AAT^ATT,Blunt
+StuI,5'-AGGCCT-3',AGG^CCT,Blunt
+StyD4I,5'-CCNGG-3',C^CNGG,5' overhang
+StyI,5'-CCWWGG-3',C^CWWGG,5' overhang
+SwaI,5'-ATTTAAAT-3',ATTT^AAAT,Blunt
+TaqI,5'-TCGA-3',T^CGA,Blunt
+TaqII,5'-GACCGA-3',GACCGANNNNN^,5' overhang
+TfiI,5'-GAWTC-3',G^AWTC,5' overhang
+TliI,5'-CTCGAG-3',C^TCGAG,5' overhang
+Tru1I,5'-TTAA-3',T^TAA,5' overhang
+Tru9I,5'-TTAA-3',T^TAA,5' overhang
+Tsp45I,5'-GTSAC-3',^GTSAC,5' overhang
+TspRI,5'-CASTG-3',CASTGNN^,5' overhang
+Tth111I,5'-GACNNNGTC-3',GACN^NNGTC,5' overhang
+XapI,5'-RAATTY-3',R^AATTY,5' overhang
+XbaI,5'-TCTAGA-3',T^CTAGA,5' overhang
+XcmI,5'-CCANNNNNNNNNTGG-3',CCANNNNNNN^NNTGG,5' overhang
+XhoI,5'-CTCGAG-3',C^TCGAG,5' overhang
+XhoII,5'-RGATCY-3',R^GATCY,5' overhang
+XmaI,5'-CCCGGG-3',C^CCGGG,5' overhang
+XmnI,5'-GAANNNNTTC-3',GAANNN^NTTC,Blunt
+ZraI,5'-GACGC-3',GAC^GC,3' overhang
+ZrmI,5'-AGTACT-3',AGT^ACT,Blunt
