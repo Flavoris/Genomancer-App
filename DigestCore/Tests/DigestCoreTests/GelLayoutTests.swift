@@ -58,6 +58,33 @@ final class GelLayoutTests: XCTestCase {
         let numInTop15 = ys.filter { $0 < topRegion }.count
         XCTAssertLessThan(numInTop15, 3, "Too many bands collapsed near the top")
     }
+
+    func testMobilityMonotonicWithSize() {
+        let C = 2.0
+        let m100  = GelLayout.mobility(bp: 100,  gelPercent: C)
+        let m300  = GelLayout.mobility(bp: 300,  gelPercent: C)
+        let m1000 = GelLayout.mobility(bp: 1000, gelPercent: C)
+        let m3000 = GelLayout.mobility(bp: 3000, gelPercent: C)
+        XCTAssertTrue(m100  > m300)
+        XCTAssertTrue(m300  > m1000)
+        XCTAssertTrue(m1000 > m3000)
+    }
+
+    func testMobilityDecreasesWithGelPercent() {
+        let bp = 1000
+        let m1 = GelLayout.mobility(bp: bp, gelPercent: 1.0)
+        let m2 = GelLayout.mobility(bp: bp, gelPercent: 2.0)
+        let m3 = GelLayout.mobility(bp: bp, gelPercent: 3.0)
+        XCTAssertTrue(m1 > m2 && m2 > m3)
+    }
+
+    func testYMappingDirection() {
+        let top: CGFloat = 0
+        let height: CGFloat = 300
+        let ySmall = GelLayout.y(bp: 100,  minBP: 50,  maxBP: 5000, top: top, height: height, gelPercent: 2.0)
+        let yLarge = GelLayout.y(bp: 3000, minBP: 50,  maxBP: 5000, top: top, height: height, gelPercent: 2.0)
+        XCTAssertTrue(ySmall > yLarge, "Smaller fragments should appear lower (greater y).")
+    }
 }
 
 

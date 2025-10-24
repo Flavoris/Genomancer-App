@@ -28,9 +28,20 @@ public enum GelLayout {
         return k0 + k1 * log10(Double(b))
     }
 
+    private static func sizeFactor(bp: Int) -> Double {
+        let b = max(2, bp) // avoid log(1)
+        // Smaller fragments should move faster → larger factor.
+        // 1 / log10(bp) grows as bp shrinks; clamp to avoid extremes.
+        let f = 1.0 / log10(Double(b))
+        return min(2.0, max(0.5, f))
+    }
+
     /// Mobility at gel percentage C (e.g., 1.0, 2.0, 3.0).
+    /// Fragment size contributes both via μ₀/K (Ferguson model) and an explicit size factor
+    /// for clearer, tunable size-dependence. Smaller fragments move faster.
     public static func mobility(bp: Int, gelPercent C: Double) -> Double {
-        mu0(bp: bp) * exp(-K(bp: bp) * max(0.0, C))
+        let ferguson = mu0(bp: bp) * exp(-K(bp: bp) * max(0.0, C))
+        return ferguson * sizeFactor(bp: bp)
     }
 
     /// Map bp → y using Ferguson mobility in log-space, normalized against a reference gel%.
