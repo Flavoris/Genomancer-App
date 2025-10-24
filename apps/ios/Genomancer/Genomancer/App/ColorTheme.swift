@@ -27,7 +27,11 @@ extension Color {
     
     // Text colors - high contrast for accessibility
     static let genomancerText = Color.white
-    static let genomancerSecondaryText = Color(red: 0.85, green: 0.90, blue: 0.95) // Slightly off-white
+    static let genomancerSecondaryText = Color(uiColor: UIColor { traitCollection in
+        traitCollection.userInterfaceStyle == .dark
+            ? UIColor(red: 0.85, green: 0.90, blue: 0.95, alpha: 1.0) // Light gray for dark mode
+            : UIColor(red: 0.40, green: 0.45, blue: 0.50, alpha: 1.0) // Medium gray for light mode
+    })
     static let genomancerTertiaryText = Color(red: 0.70, green: 0.80, blue: 0.85) // Muted text
     
     // Status colors - using DNA base colors for consistency
