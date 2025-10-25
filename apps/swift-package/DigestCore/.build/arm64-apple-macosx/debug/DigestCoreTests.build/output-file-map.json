@@ -1,19 +1,33 @@
 {
   "": {
-    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/master.swiftdeps"
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/master.swiftdeps"
   },
-  "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift": {
-    "dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.d",
-    "object": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swift.o",
-    "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests~partial.swiftmodule",
-    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swiftdeps",
-    "diagnostics": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.dia"
+  "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift": {
+    "dependencies": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.d",
+    "object": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swift.o",
+    "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests~partial.swiftmodule",
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swiftdeps",
+    "diagnostics": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.dia"
   },
-  "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift": {
-    "dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.d",
-    "object": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swift.o",
-    "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests~partial.swiftmodule",
-    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swiftdeps",
-    "diagnostics": "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.dia"
+  "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/EnzymeCutSiteTests.swift": {
+    "dependencies": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/EnzymeCutSiteTests.d",
+    "object": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/EnzymeCutSiteTests.swift.o",
+    "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/EnzymeCutSiteTests~partial.swiftmodule",
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/EnzymeCutSiteTests.swiftdeps",
+    "diagnostics": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/EnzymeCutSiteTests.dia"
+  },
+  "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift": {
+    "dependencies": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.d",
+    "object": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swift.o",
+    "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests~partial.swiftmodule",
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swiftdeps",
+    "diagnostics": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.dia"
+  },
+  "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DerivedSources/resource_bundle_accessor.swift": {
+    "dependencies": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/resource_bundle_accessor.d",
+    "object": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/resource_bundle_accessor.swift.o",
+    "swiftmodule": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/resource_bundle_accessor~partial.swiftmodule",
+    "swift-dependencies": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/resource_bundle_accessor.swiftdeps",
+    "diagnostics": "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/resource_bundle_accessor.dia"
   }
 }

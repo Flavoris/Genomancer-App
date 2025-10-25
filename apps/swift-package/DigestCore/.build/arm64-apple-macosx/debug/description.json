@@ -1,13 +1,26 @@
 {
   "builtTestProducts" : [
     {
-      "binaryPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.xctest/Contents/MacOS/DigestCorePackageTests",
-      "packagePath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore",
+      "binaryPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.xctest/Contents/MacOS/DigestCorePackageTests",
+      "packagePath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore",
       "productName" : "DigestCorePackageTests"
     }
   ],
   "copyCommands" : {
-
+    "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore_DigestCoreTests.bundle/enzymes.json" : {
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/enzymes.json"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore_DigestCoreTests.bundle/enzymes.json"
+        }
+      ]
+    }
   },
   "explicitTargetDependencyImportCheckingMode" : {
     "none" : {
@@ -23,97 +36,97 @@
   "swiftCommands" : {
     "C.DigestCore-arm64-apple-macosx15.0-debug.module" : {
       "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
-      "fileList" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/sources",
-      "importPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules",
+      "fileList" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/sources",
+      "importPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules",
       "inputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Compat.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Compat.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestCore.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/DigestCore.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestEngine.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/DigestEngine.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/EnzymeLoader.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/EnzymeLoader.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Exporters.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Exporters.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Gel.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Gel.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/GelLayout.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/GelLayout.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/IUPAC.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/IUPAC.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Ligation.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Ligation.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Match.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Match.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/DigestModels.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Models/DigestModels.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/Enzyme.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Models/Enzyme.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Overhangs.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Overhangs.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Render.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Render.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Theoretical.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Theoretical.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/sources"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/sources"
         }
       ],
       "isLibrary" : true,
       "moduleName" : "DigestCore",
-      "moduleOutputPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCore.swiftmodule",
+      "moduleOutputPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCore.swiftmodule",
       "objects" : [
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Compat.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestEngine.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/EnzymeLoader.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Exporters.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Gel.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/GelLayout.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/IUPAC.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Ligation.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Match.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestModels.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Enzyme.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Overhangs.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Render.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Theoretical.swift.o"
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Compat.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestEngine.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/EnzymeLoader.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Exporters.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Gel.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/GelLayout.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/IUPAC.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Ligation.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Match.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestModels.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Enzyme.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Overhangs.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Render.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Theoretical.swift.o"
       ],
       "otherArguments" : [
         "-target",
@@ -122,7 +135,7 @@
         "-enable-batch-mode",
         "-serialize-diagnostics",
         "-index-store-path",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/index/store",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/index/store",
         "-Onone",
         "-enable-testing",
         "-j10",
@@ -130,12 +143,12 @@
         "-DDEBUG",
         "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
         "-module-cache-path",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
         "-parseable-output",
         "-parse-as-library",
         "-emit-objc-header",
         "-emit-objc-header-path",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/include/DigestCore-Swift.h",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/include/DigestCore-Swift.h",
         "-swift-version",
         "5",
         "-plugin-path",
@@ -170,121 +183,121 @@
         "-package-name",
         "digestcore"
       ],
-      "outputFileMapPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/output-file-map.json",
+      "outputFileMapPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/output-file-map.json",
       "outputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Compat.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Compat.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestEngine.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestEngine.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/EnzymeLoader.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/EnzymeLoader.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Exporters.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Exporters.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Gel.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Gel.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/GelLayout.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/GelLayout.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/IUPAC.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/IUPAC.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Ligation.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Ligation.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Match.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Match.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestModels.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestModels.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Enzyme.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Enzyme.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Overhangs.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Overhangs.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Render.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Render.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Theoretical.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Theoretical.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCore.swiftmodule"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCore.swiftmodule"
         }
       ],
       "prepareForIndexing" : false,
       "sources" : [
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Compat.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestCore.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestEngine.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/EnzymeLoader.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Exporters.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Gel.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/GelLayout.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/IUPAC.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Ligation.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Match.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/DigestModels.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/Enzyme.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Overhangs.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Render.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Theoretical.swift"
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Compat.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/DigestCore.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/DigestEngine.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/EnzymeLoader.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Exporters.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Gel.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/GelLayout.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/IUPAC.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Ligation.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Match.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Models/DigestModels.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Models/Enzyme.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Overhangs.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Render.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Theoretical.swift"
       ],
-      "tempsPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build",
+      "tempsPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build",
       "wholeModuleOptimization" : false
     },
     "C.DigestCorePackageTests-arm64-apple-macosx15.0-debug.module" : {
       "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
-      "fileList" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/sources",
-      "importPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules",
+      "fileList" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/sources",
+      "importPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules",
       "inputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCoreTests.swiftmodule"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCoreTests.swiftmodule"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/sources"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/sources"
         }
       ],
       "isLibrary" : true,
       "moduleName" : "DigestCorePackageTests",
-      "moduleOutputPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCorePackageTests.swiftmodule",
+      "moduleOutputPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCorePackageTests.swiftmodule",
       "objects" : [
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/runner.swift.o"
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/runner.swift.o"
       ],
       "otherArguments" : [
         "-target",
@@ -293,7 +306,7 @@
         "-enable-batch-mode",
         "-serialize-diagnostics",
         "-index-store-path",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/index/store",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/index/store",
         "-Onone",
         "-enable-testing",
         "-Xfrontend",
@@ -303,12 +316,12 @@
         "-DDEBUG",
         "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
         "-module-cache-path",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
         "-parseable-output",
         "-parse-as-library",
         "-emit-objc-header",
         "-emit-objc-header-path",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/include/DigestCorePackageTests-Swift.h",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/include/DigestCorePackageTests-Swift.h",
         "-plugin-path",
         "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
         "-sdk",
@@ -341,56 +354,70 @@
         "-package-name",
         "digestcore"
       ],
-      "outputFileMapPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/output-file-map.json",
+      "outputFileMapPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/output-file-map.json",
       "outputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/runner.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/runner.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCorePackageTests.swiftmodule"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCorePackageTests.swiftmodule"
         }
       ],
       "prepareForIndexing" : false,
       "sources" : [
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift"
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift"
       ],
-      "tempsPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build",
+      "tempsPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build",
       "wholeModuleOptimization" : false
     },
     "C.DigestCoreTests-arm64-apple-macosx15.0-debug.module" : {
       "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
-      "fileList" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/sources",
-      "importPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules",
+      "fileList" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/sources",
+      "importPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules",
       "inputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/EnzymeCutSiteTests.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCore.swiftmodule"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DerivedSources/resource_bundle_accessor.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/sources"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<DigestCoreTests-arm64-apple-macosx15.0-debug.module-resources>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCore.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/sources"
         }
       ],
       "isLibrary" : true,
       "moduleName" : "DigestCoreTests",
-      "moduleOutputPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCoreTests.swiftmodule",
+      "moduleOutputPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCoreTests.swiftmodule",
       "objects" : [
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swift.o",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swift.o"
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/EnzymeCutSiteTests.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swift.o",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/resource_bundle_accessor.swift.o"
       ],
       "otherArguments" : [
         "-target",
@@ -399,7 +426,7 @@
         "-enable-batch-mode",
         "-serialize-diagnostics",
         "-index-store-path",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/index/store",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/index/store",
         "-Onone",
         "-enable-testing",
         "-Xfrontend",
@@ -407,9 +434,9 @@
         "-j10",
         "-DSWIFT_PACKAGE",
         "-DDEBUG",
-        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
         "-module-cache-path",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
         "-parseable-output",
         "-parse-as-library",
         "-swift-version",
@@ -446,27 +473,37 @@
         "-package-name",
         "digestcore"
       ],
-      "outputFileMapPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/output-file-map.json",
+      "outputFileMapPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/output-file-map.json",
       "outputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/EnzymeCutSiteTests.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCoreTests.swiftmodule"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules/DigestCoreTests.swiftmodule"
         }
       ],
       "prepareForIndexing" : false,
       "sources" : [
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift",
-        "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift"
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/EnzymeCutSiteTests.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift",
+        "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DerivedSources/resource_bundle_accessor.swift"
       ],
-      "tempsPath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build",
+      "tempsPath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build",
       "wholeModuleOptimization" : false
     }
   },
@@ -481,30 +518,30 @@
       "-package-name",
       "digestcore",
       "-c",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Compat.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestCore.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestEngine.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/EnzymeLoader.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Exporters.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Gel.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/GelLayout.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/IUPAC.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Ligation.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Match.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/DigestModels.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/Enzyme.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Overhangs.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Render.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Theoretical.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Compat.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/DigestCore.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/DigestEngine.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/EnzymeLoader.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Exporters.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Gel.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/GelLayout.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/IUPAC.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Ligation.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Match.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Models/DigestModels.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Models/Enzyme.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Overhangs.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Render.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Theoretical.swift",
       "-I",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules",
       "-target",
       "arm64-apple-macosx10.13",
       "-incremental",
       "-enable-batch-mode",
       "-serialize-diagnostics",
       "-index-store-path",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/index/store",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/index/store",
       "-Onone",
       "-enable-testing",
       "-j10",
@@ -512,12 +549,12 @@
       "-DDEBUG",
       "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
       "-module-cache-path",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
       "-parseable-output",
       "-parse-as-library",
       "-emit-objc-header",
       "-emit-objc-header-path",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/include/DigestCore-Swift.h",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/include/DigestCore-Swift.h",
       "-swift-version",
       "5",
       "-plugin-path",
@@ -561,16 +598,16 @@
       "-package-name",
       "digestcore",
       "-c",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift",
       "-I",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules",
       "-target",
       "arm64-apple-macosx10.13",
       "-incremental",
       "-enable-batch-mode",
       "-serialize-diagnostics",
       "-index-store-path",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/index/store",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/index/store",
       "-Onone",
       "-enable-testing",
       "-Xfrontend",
@@ -580,12 +617,12 @@
       "-DDEBUG",
       "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
       "-module-cache-path",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
       "-parseable-output",
       "-parse-as-library",
       "-emit-objc-header",
       "-emit-objc-header-path",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/include/DigestCorePackageTests-Swift.h",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/include/DigestCorePackageTests-Swift.h",
       "-plugin-path",
       "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
       "-sdk",
@@ -627,17 +664,19 @@
       "-package-name",
       "digestcore",
       "-c",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/EnzymeCutSiteTests.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DerivedSources/resource_bundle_accessor.swift",
       "-I",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/Modules",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/Modules",
       "-target",
       "arm64-apple-macosx14.0",
       "-incremental",
       "-enable-batch-mode",
       "-serialize-diagnostics",
       "-index-store-path",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/index/store",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/index/store",
       "-Onone",
       "-enable-testing",
       "-Xfrontend",
@@ -645,9 +684,9 @@
       "-j10",
       "-DSWIFT_PACKAGE",
       "-DDEBUG",
-      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
       "-module-cache-path",
-      "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
+      "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/ModuleCache",
       "-parseable-output",
       "-parse-as-library",
       "-swift-version",
@@ -703,14 +742,14 @@
 
   },
   "testEntryPointCommands" : {
-    "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift" : {
+    "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift" : {
       "inputs" : [
 
       ],
       "outputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift"
         }
       ]
     }
@@ -721,7 +760,7 @@
     }
   },
   "writeCommands" : {
-    "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/sources" : {
+    "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/sources" : {
       "alwaysOutOfDate" : false,
       "inputs" : [
         {
@@ -730,68 +769,68 @@
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Compat.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Compat.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestCore.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/DigestCore.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestEngine.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/DigestEngine.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/EnzymeLoader.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/EnzymeLoader.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Exporters.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Exporters.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Gel.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Gel.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/GelLayout.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/GelLayout.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/IUPAC.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/IUPAC.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Ligation.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Ligation.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Match.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Match.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/DigestModels.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Models/DigestModels.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Models/Enzyme.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Models/Enzyme.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Overhangs.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Overhangs.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Render.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Render.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/Theoretical.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Sources/DigestCore/Theoretical.swift"
         }
       ],
-      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/sources"
+      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/sources"
     },
-    "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/sources" : {
+    "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/sources" : {
       "alwaysOutOfDate" : false,
       "inputs" : [
         {
@@ -800,12 +839,12 @@
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.derived/runner.swift"
         }
       ],
-      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/sources"
+      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/sources"
     },
-    "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.product/Objects.LinkFileList" : {
+    "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.product/Objects.LinkFileList" : {
       "alwaysOutOfDate" : false,
       "inputs" : [
         {
@@ -814,80 +853,88 @@
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Compat.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Compat.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestCore.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestEngine.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestEngine.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestModels.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/DigestModels.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Enzyme.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Enzyme.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/EnzymeLoader.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/EnzymeLoader.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Exporters.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Exporters.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Gel.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Gel.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/GelLayout.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/GelLayout.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/IUPAC.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/IUPAC.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Ligation.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Ligation.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Match.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Match.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Overhangs.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Overhangs.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Render.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Render.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Theoretical.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCore.build/Theoretical.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/runner.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.build/runner.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DigestCoreTests.swift.o"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swift.o"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/EnzymeCutSiteTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/GelLayoutTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/resource_bundle_accessor.swift.o"
         }
       ],
-      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.product/Objects.LinkFileList"
+      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCorePackageTests.product/Objects.LinkFileList"
     },
-    "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/sources" : {
+    "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/sources" : {
       "alwaysOutOfDate" : false,
       "inputs" : [
         {
@@ -896,16 +943,24 @@
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/DigestCoreTests.swift"
         },
         {
           "kind" : "file",
-          "name" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift"
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/EnzymeCutSiteTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/Tests/DigestCoreTests/GelLayoutTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/DerivedSources/resource_bundle_accessor.swift"
         }
       ],
-      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/sources"
+      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/DigestCoreTests.build/sources"
     },
-    "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+    "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
       "alwaysOutOfDate" : true,
       "inputs" : [
         {
@@ -917,7 +972,7 @@
           "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
         }
       ],
-      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+      "outputFilePath" : "/Users/flavorisbelue/Desktop/Genomancer/apps/swift-package/DigestCore/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
     }
   }
 }
