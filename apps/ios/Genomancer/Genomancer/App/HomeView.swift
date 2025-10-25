@@ -196,6 +196,13 @@ struct HomeView: View {
                     .padding()
                     .background(Color(.systemBackground))
                     .cornerRadius(8)
+                    
+                    NavigationLink("Ligation Analysis") { 
+                        LigationCompatibilityView(fragments: results) 
+                    }
+                    .padding()
+                    .background(Color(.systemBackground))
+                    .cornerRadius(8)
                 }
                 .padding(.horizontal)
                 
