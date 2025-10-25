@@ -22,6 +22,7 @@
 		1A000028 /* GelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000029 /* GelView.swift */; };
 		1A00002A /* ColorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00002B /* ColorTheme.swift */; };
 		1A00002C /* GelRenderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00002D /* GelRenderView.swift */; };
+	1A000032 /* LigationCompatibilityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000033 /* LigationCompatibilityView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,6 +42,7 @@
 		1A000029 /* GelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GelView.swift; sourceTree = "<group>"; };
 		1A00002B /* ColorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorTheme.swift; sourceTree = "<group>"; };
 		1A00002D /* GelRenderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GelRenderView.swift; sourceTree = "<group>"; };
+	1A000033 /* LigationCompatibilityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LigationCompatibilityView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -102,6 +104,7 @@
 			1A000027 /* MapView.swift */,
 				1A000029 /* GelView.swift */,
 				1A00002D /* GelRenderView.swift */,
+				1A000033 /* LigationCompatibilityView.swift */,
 				1A00002B /* ColorTheme.swift */,
 			);
 			path = App;
@@ -204,6 +207,7 @@
 			1A000026 /* MapView.swift in Sources */,
 				1A000028 /* GelView.swift in Sources */,
 				1A00002C /* GelRenderView.swift in Sources */,
+				1A000032 /* LigationCompatibilityView.swift in Sources */,
 				1A00002A /* ColorTheme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
