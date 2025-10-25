@@ -345,9 +345,17 @@ struct HomeView: View {
         )
         
         // Generate GenBank
-        let features = results.enumerated().map { (index, frag) -> (Range<Int>, String) in
+        var features: [(Range<Int>, String)] = []
+        for (index, frag) in results.enumerated() {
             let label = "fragment_\(index + 1)"
-            return (frag.start..<frag.end, label)
+            if frag.start < frag.end {
+                // Normal fragment
+                features.append((frag.start..<frag.end, label))
+            } else {
+                // Wrapping fragment (spans origin) - split into two features
+                features.append((frag.start..<dna.count, label + "_part1"))
+                features.append((0..<frag.end, label + "_part2"))
+            }
         }
         let gbContent = exportGenBank(sequence: dna, locus: locusName, features: features)
         genbankExportData = ExportData(
