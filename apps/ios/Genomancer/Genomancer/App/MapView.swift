@@ -77,7 +77,6 @@ struct InteractivePlasmidMapView: View {
     @State private var showHint = true
     @State private var selectedCluster: ClusterWrapper?
     @State private var selectedSingleSite: IndexedCutSite?
-    @State private var showSingleSiteDetail = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -95,23 +94,6 @@ struct InteractivePlasmidMapView: View {
                         }
                     }
                 
-                // Hidden NavigationLink for single site navigation
-                NavigationLink(
-                    destination: Group {
-                        if let site = selectedSingleSite {
-                            CutSiteDetailView(
-                                cutSite: site.site,
-                                index: site.index,
-                                sequence: sequence
-                            )
-                        }
-                    },
-                    isActive: $showSingleSiteDetail
-                ) {
-                    EmptyView()
-                }
-                .opacity(0)
-                
                 // Overlay interactive buttons at cut site positions
                 ForEach(clusters.indices, id: \.self) { clusterIndex in
                     let cluster = clusters[clusterIndex]
@@ -122,9 +104,8 @@ struct InteractivePlasmidMapView: View {
                         if isCluster {
                             selectedCluster = ClusterWrapper(sites: cluster)
                         } else {
-                            // Single site - navigate directly
+                            // Single site - show as sheet
                             selectedSingleSite = cluster[0]
-                            showSingleSiteDetail = true
                         }
                     }) {
                         ZStack {
@@ -203,6 +184,24 @@ struct InteractivePlasmidMapView: View {
                 ClusterSelectionView(cluster: clusterWrapper.sites, sequence: sequence)
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $selectedSingleSite) { indexedSite in
+                NavigationStack {
+                    CutSiteDetailView(
+                        cutSite: indexedSite.site,
+                        index: indexedSite.index,
+                        sequence: sequence
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") {
+                                selectedSingleSite = nil
+                            }
+                        }
+                    }
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
         }
     }

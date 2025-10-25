@@ -1,5 +1,0 @@
-version: "Apple Swift version 5.10 (swiftlang-5.10.0.13 clang-1500.3.9.4)"
-options: "dc417f5ec86ffdda3334846467bc0352"
-build_time: [1760502550, 543681000]
-inputs:
-  "/Users/flavorisbelue/Desktop/Genomancer/DigestCore/Sources/DigestCore/DigestCore.swift": [1760502261, 676079569]

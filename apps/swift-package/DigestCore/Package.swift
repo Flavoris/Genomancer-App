@@ -19,6 +19,7 @@ let package = Package(
         .testTarget(
             name: "DigestCoreTests",
             dependencies: ["DigestCore"],
-            path: "Tests/DigestCoreTests"),
+            path: "Tests/DigestCoreTests",
+            resources: [.process("enzymes.json")]),
     ]
 )
