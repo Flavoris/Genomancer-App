@@ -236,15 +236,8 @@ struct FragmentDetailView: View {
             let lineEndIndex = seq.index(seq.startIndex, offsetBy: lineEnd)
             let line = String(seq[lineStart..<lineEndIndex])
             
-            // Add grouped bases
-            var groupPos = 0
-            for char in line {
-                if groupPos > 0 && groupPos % groupSize == 0 {
-                    result += " "
-                }
-                result.append(char)
-                groupPos += 1
-            }
+            // Add bases without spaces
+            result += line
             
             result += "\n"
             position = lineEnd
@@ -318,31 +311,31 @@ struct FragmentDetailView: View {
         case .fivePrime:
             // 5' overhang extends on top strand
             if isLeftEnd {
-                topStrand = "5'- \(overhangSeq) \(contextSeq)"
-                bottomStrand = "3'-" + String(repeating: " ", count: overhangLen + 1) + contextComplement
+                topStrand = "\(overhangSeq)\(contextSeq) -5'"
+                bottomStrand = String(repeating: " ", count: overhangLen) + "\(contextComplement) -3'"
             } else {
-                topStrand = "   \(contextSeq) \(overhangSeq) -5'"
-                bottomStrand = "   " + contextComplement + String(repeating: " ", count: overhangLen + 1) + "-3'"
+                topStrand = "\(contextSeq)\(overhangSeq) -5'"
+                bottomStrand = contextComplement + String(repeating: " ", count: overhangLen) + " -3'"
             }
             
         case .threePrime:
             // 3' overhang extends on bottom strand
             if isLeftEnd {
-                topStrand = "5'- " + contextSeq
-                bottomStrand = "3'- \(overhangComplement) \(contextComplement)"
+                topStrand = contextSeq + " -5'"
+                bottomStrand = "\(overhangComplement)\(contextComplement) -3'"
             } else {
-                topStrand = "   " + contextSeq + String(repeating: " ", count: overhangLen + 1) + "-5'"
-                bottomStrand = "   \(contextComplement) \(overhangComplement) -3'"
+                topStrand = contextSeq + String(repeating: " ", count: overhangLen) + " -5'"
+                bottomStrand = "\(contextComplement)\(overhangComplement) -3'"
             }
             
         case .blunt:
             // Blunt end - both strands same length
             if isLeftEnd {
-                topStrand = "5'- \(contextSeq)"
-                bottomStrand = "3'- \(contextComplement)"
+                topStrand = "\(contextSeq) -5'"
+                bottomStrand = "\(contextComplement) -3'"
             } else {
-                topStrand = "   \(contextSeq) -5'"
-                bottomStrand = "   \(contextComplement) -3'"
+                topStrand = "\(contextSeq) -5'"
+                bottomStrand = "\(contextComplement) -3'"
             }
             
         case .unknown:
