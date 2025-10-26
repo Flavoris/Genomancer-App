@@ -20,7 +20,8 @@ public struct FragmentEndInfo: Hashable {
 }
 
 /// Result of compatibility check between two ends
-public struct CompatibilityResult: Hashable {
+public struct CompatibilityResult: Hashable, Identifiable {
+    public let id = UUID()
     public let endA: FragmentEndInfo
     public let endB: FragmentEndInfo
     public let compatible: Bool
@@ -43,6 +44,30 @@ public struct CompatibilityResult: Hashable {
         self.tmA = tmA
         self.tmB = tmB
         self.note = note
+    }
+    
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(endA)
+        hasher.combine(endB)
+        hasher.combine(compatible)
+        hasher.combine(directional)
+        hasher.combine(gcPercentA)
+        hasher.combine(gcPercentB)
+        hasher.combine(tmA)
+        hasher.combine(tmB)
+        hasher.combine(note)
+    }
+    
+    public static func == (lhs: CompatibilityResult, rhs: CompatibilityResult) -> Bool {
+        lhs.endA == rhs.endA &&
+        lhs.endB == rhs.endB &&
+        lhs.compatible == rhs.compatible &&
+        lhs.directional == rhs.directional &&
+        lhs.gcPercentA == rhs.gcPercentA &&
+        lhs.gcPercentB == rhs.gcPercentB &&
+        lhs.tmA == rhs.tmA &&
+        lhs.tmB == rhs.tmB &&
+        lhs.note == rhs.note
     }
     
     /// Calculate compatibility strength score (0.0 to 1.0)

@@ -7,7 +7,6 @@ struct LigationCompatibilityView: View {
     @State private var minOverhang: Int = 1
     @State private var requireDirectional: Bool = false
     @State private var selectedPair: CompatibilityResult?
-    @State private var showCompatibilityDetail: Bool = false
     
     private var compatibilityResults: [CompatibilityResult] {
         calculateCompatibility(
@@ -36,13 +35,10 @@ struct LigationCompatibilityView: View {
         .background(Color.genomancerBackground)
         .navigationTitle("Ligation Compatibility")
         .toolbarColorScheme(.dark, for: .navigationBar)
-        .sheet(isPresented: $showCompatibilityDetail) {
-                if let pair = selectedPair {
-                CompatibilityDetailSheet(result: pair, onDismiss: {
-                    showCompatibilityDetail = false
-                    selectedPair = nil
-                })
-            }
+        .sheet(item: $selectedPair) { pair in
+            CompatibilityDetailSheet(result: pair, onDismiss: {
+                selectedPair = nil
+            })
         }
     }
     
@@ -129,7 +125,6 @@ struct LigationCompatibilityView: View {
         List(Array(compatibilityResults.enumerated()), id: \.offset) { index, result in
             Button(action: {
                 selectedPair = result
-                showCompatibilityDetail = true
             }) {
                 CompatibilityPairRow(result: result, index: index)
             }
@@ -178,30 +173,30 @@ struct CompatibilityPairRow: View {
                     Text("\(Int(result.strengthScore * 100))%")
                         .font(.caption)
                         .fontWeight(.semibold)
-                        .foregroundColor(strengthColor)
+                        .foregroundColor(.white)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(strengthColor.opacity(0.15))
+                .background(Color.genomancerBackground.opacity(0.6))
                 .cornerRadius(8)
                 
                 if result.directional {
                     Label("Directional", systemImage: "arrow.right")
                         .font(.caption)
-                        .fontWeight(.medium)
+                        .fontWeight(.semibold)
                         .foregroundColor(.green)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color.green.opacity(0.15))
+                        .background(Color.genomancerBackground.opacity(0.6))
                         .cornerRadius(6)
                 } else {
                     Label("Palindromic", systemImage: "arrow.left.arrow.right")
                         .font(.caption)
-                        .fontWeight(.medium)
+                        .fontWeight(.semibold)
                         .foregroundColor(.orange)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color.orange.opacity(0.15))
+                        .background(Color.genomancerBackground.opacity(0.6))
                         .cornerRadius(6)
                 }
             }
@@ -271,7 +266,7 @@ struct CompatibilityPairRow: View {
             .padding(.top, 4)
         }
         .padding(16)
-        .background(Color.genomancerSecondaryBackground)
+        .background(Color(UIColor.secondarySystemBackground))
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
     }
@@ -284,11 +279,11 @@ struct CompatibilityPairRow: View {
                 Text(label)
                     .font(.caption)
                     .fontWeight(.semibold)
-                    .foregroundColor(.genomancerAccent)
+                    .foregroundColor(.white)
                     .textCase(.uppercase)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Color.genomancerAccent.opacity(0.15))
+                    .background(Color.genomancerAccent.opacity(0.7))
                     .cornerRadius(4)
                 Spacer()
             }
@@ -309,8 +304,12 @@ struct CompatibilityPairRow: View {
                         .foregroundColor(.genomancerSecondaryText)
                     Text(enzyme)
                         .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.genomancerAccent)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.genomancerAccent.opacity(0.7))
+                        .cornerRadius(4)
                 }
             }
             
