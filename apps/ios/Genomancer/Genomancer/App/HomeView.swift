@@ -8,12 +8,8 @@ struct HomeView: View {
     @State private var selected: Set<Enzyme> = []
     @State private var circular = false
     @State private var results: [Fragment] = []
-    @State private var csvExportData: ExportData?
-    @State private var genbankExportData: ExportData?
     @State private var showValidationAlert = false
     @State private var validationMessage = ""
-    @State private var showCopyAlert = false
-    @State private var copyMessage = ""
     @State private var showFileImporter = false
     @State private var showFileImportError = false
     @State private var fileImportErrorMessage = ""
@@ -38,11 +34,6 @@ struct HomeView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(validationMessage)
-            }
-            .alert("Copied", isPresented: $showCopyAlert) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(copyMessage)
             }
             .alert("Import Error", isPresented: $showFileImportError) {
                 Button("OK", role: .cancel) { }
@@ -173,7 +164,10 @@ struct HomeView: View {
             
             // Results Section
             if !results.isEmpty {
-                VStack(spacing: 12) {
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 12),
+                    GridItem(.flexible(), spacing: 12)
+                ], spacing: 12) {
                     NavigationLink("View Fragments") { 
                         FragmentList(fragments: results, fullSequence: parseFASTA(sequence)) 
                     }
@@ -205,57 +199,6 @@ struct HomeView: View {
                     .cornerRadius(8)
                 }
                 .padding(.horizontal)
-                
-                // Export Section
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Export")
-                        .foregroundColor(.genomancerText)
-                        .font(.headline)
-                        .padding(.horizontal)
-                    
-                    VStack(spacing: 12) {
-                        if let csvData = csvExportData {
-                            HStack {
-                                ShareLink(
-                                    item: csvData.data,
-                                    preview: SharePreview(csvData.filename, image: Image(systemName: "doc.text"))
-                                ) {
-                                    Label("Export CSV", systemImage: "tablecells")
-                                }
-                                Spacer()
-                                Button(action: { copyToClipboard(csvData.data, format: "CSV") }) {
-                                    Image(systemName: "doc.on.doc")
-                                        .foregroundColor(.genomancerAccent)
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                            .padding()
-                            .background(Color(.systemBackground))
-                            .cornerRadius(8)
-                        }
-                        
-                        if let gbData = genbankExportData {
-                            HStack {
-                                ShareLink(
-                                    item: gbData.data,
-                                    preview: SharePreview(gbData.filename, image: Image(systemName: "doc.text"))
-                                ) {
-                                    Label("Export GenBank", systemImage: "doc.text")
-                                }
-                                Spacer()
-                                Button(action: { copyToClipboard(gbData.data, format: "GenBank") }) {
-                                    Image(systemName: "doc.on.doc")
-                                        .foregroundColor(.genomancerAccent)
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                            .padding()
-                            .background(Color(.systemBackground))
-                            .cornerRadius(8)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
             }
         }
         .padding(.vertical)
@@ -327,66 +270,11 @@ struct HomeView: View {
         let engine = DigestEngine(sequence: dna, enzymes: Array(selected))
         // Enable sequence retrieval so fragments contain their DNA sequences
         results = engine.digest(options: .init(circular: circular, returnSequences: true))
-        
-        // Generate export data
-        prepareExports(dna: dna)
     }
 
     func parseFASTA(_ s: String) -> String {
         s.split(separator: "\n").filter{ !$0.hasPrefix(">") }
             .joined().replacingOccurrences(of: "\\s", with: "", options: .regularExpression)
-    }
-    
-    func prepareExports(dna: String) {
-        // Extract locus name from FASTA header or use timestamp
-        let locusName = extractLocusName()
-        let timestamp = formattedTimestamp()
-        let filename = "\(locusName)_\(timestamp)"
-        
-        // Generate CSV
-        let csvContent = exportCSV(fragments: results)
-        csvExportData = ExportData(
-            filename: "\(filename)_fragments.csv",
-            data: csvContent,
-            utType: .commaSeparatedText
-        )
-        
-        // Generate GenBank
-        var features: [(Range<Int>, String)] = []
-        for (index, frag) in results.enumerated() {
-            let label = "fragment_\(index + 1)"
-            if frag.start < frag.end {
-                // Normal fragment
-                features.append((frag.start..<frag.end, label))
-            } else {
-                // Wrapping fragment (spans origin) - split into two features
-                features.append((frag.start..<dna.count, label + "_part1"))
-                features.append((0..<frag.end, label + "_part2"))
-            }
-        }
-        let gbContent = exportGenBank(sequence: dna, locus: locusName, features: features)
-        genbankExportData = ExportData(
-            filename: "\(filename).gb",
-            data: gbContent,
-            utType: .plainText
-        )
-    }
-    
-    func extractLocusName() -> String {
-        // Try to extract name from FASTA header
-        let lines = sequence.split(separator: "\n")
-        if let firstLine = lines.first, firstLine.hasPrefix(">") {
-            let header = String(firstLine.dropFirst())
-            let cleaned = header.split(separator: " ").first ?? "sequence"
-            return String(cleaned).replacingOccurrences(of: "[^A-Za-z0-9_]", with: "_", options: .regularExpression)
-        }
-        return "sequence"
-    }
-    
-    func formattedTimestamp() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd_HHmmss"
-        return formatter.string(from: Date())
     }
     
     func validateSequence(_ input: String) {
@@ -400,12 +288,6 @@ struct HomeView: View {
             validationMessage = "Warning: Sequence contains illegal characters. Only IUPAC DNA codes (A,T,C,G,N,R,Y,S,W,K,M,B,D,H,V) are valid."
             showValidationAlert = true
         }
-    }
-    
-    func copyToClipboard(_ content: String, format: String) {
-        UIPasteboard.general.string = content
-        copyMessage = "\(format) data copied to clipboard"
-        showCopyAlert = true
     }
     
     func handleFileImport(result: Result<[URL], Error>) {
@@ -450,21 +332,6 @@ struct HomeView: View {
             showFileImportError = true
         }
     }
-}
-
-struct ExportData: Identifiable, Transferable {
-    let id = UUID()
-    let filename: String
-    let data: String
-    let utType: UTType
-    
-    static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(exportedContentType: .plainText) { exportData in
-            Data(exportData.data.utf8)
-        }
-    }
-    
-    var suggestedName: String { filename }
 }
 
 // MARK: - Enzyme Chip Component

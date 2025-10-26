@@ -15,14 +15,6 @@ struct FragmentList: View {
         .background(Color.genomancerBackground)
         .navigationTitle("Fragments")
         .toolbarColorScheme(.dark, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink(destination: LigationCompatibilityView(fragments: fragments)) {
-                    Label("Ligation", systemImage: "link")
-                        .foregroundColor(.genomancerAccent)
-                }
-            }
-        }
     }
 }
 

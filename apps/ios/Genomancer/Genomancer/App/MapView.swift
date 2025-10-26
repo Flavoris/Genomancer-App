@@ -8,7 +8,6 @@ struct MapView: View {
     let circular: Bool
     
     @State private var svgContent: String = ""
-    @State private var showCopiedAlert = false
     @State private var cutSites: [CutSite] = []
     
     var body: some View {
@@ -29,27 +28,9 @@ struct MapView: View {
                 .toolbarColorScheme(.dark, for: .navigationBar)
                 .accessibilityLabel("Plasmid map visualization")
                 .accessibilityHint(mapAccessibilityDescription)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(action: copySVG) {
-                            Label("Copy SVG", systemImage: "doc.on.doc")
-                        }
-                        .accessibilityLabel("Copy SVG to clipboard")
-                    }
-                }
-                .alert("SVG Copied", isPresented: $showCopiedAlert) {
-                    Button("OK", role: .cancel) { }
-                } message: {
-                    Text("SVG code copied to clipboard")
-                }
             }
         }
         .background(Color.genomancerBackground)
-    }
-    
-    private func copySVG() {
-        UIPasteboard.general.string = svgContent
-        showCopiedAlert = true
     }
     
     private func generateMap() {
