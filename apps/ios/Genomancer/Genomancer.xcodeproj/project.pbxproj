@@ -23,6 +23,11 @@
 		1A00002A /* ColorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00002B /* ColorTheme.swift */; };
 		1A00002C /* GelRenderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00002D /* GelRenderView.swift */; };
 	1A000032 /* LigationCompatibilityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000033 /* LigationCompatibilityView.swift */; };
+	1A000034 /* AppStartupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000035 /* AppStartupManager.swift */; };
+	1A000036 /* IntroView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000037 /* IntroView.swift */; };
+	1A000038 /* Intro.mov in Resources */ = {isa = PBXBuildFile; fileRef = 1A000039 /* Intro.mov */; };
+	1A00003A /* IntroVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00003B /* IntroVideoView.swift */; };
+	1A00003C /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00003D /* RootView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +48,11 @@
 		1A00002B /* ColorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorTheme.swift; sourceTree = "<group>"; };
 		1A00002D /* GelRenderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GelRenderView.swift; sourceTree = "<group>"; };
 	1A000033 /* LigationCompatibilityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LigationCompatibilityView.swift; sourceTree = "<group>"; };
+	1A000035 /* AppStartupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStartupManager.swift; sourceTree = "<group>"; };
+	1A000037 /* IntroView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntroView.swift; sourceTree = "<group>"; };
+	1A000039 /* Intro.mov */ = {isa = PBXFileReference; lastKnownFileType = file; path = Intro.mov; sourceTree = "<group>"; };
+	1A00003B /* IntroVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntroVideoView.swift; sourceTree = "<group>"; };
+	1A00003D /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -95,6 +105,10 @@
 			isa = PBXGroup;
 			children = (
 				1A000000 /* GenomancerApp.swift */,
+				1A00003D /* RootView.swift */,
+				1A000035 /* AppStartupManager.swift */,
+				1A000037 /* IntroView.swift */,
+				1A00003B /* IntroVideoView.swift */,
 				1A000002 /* ContentView.swift */,
 				1A000021 /* HomeView.swift */,
 			1A000023 /* EnzymePicker.swift */,
@@ -115,6 +129,7 @@
 			children = (
 				1A000004 /* Assets.xcassets */,
 				1A00001F /* enzymes.json */,
+				1A000039 /* Intro.mov */,
 				1A000006 /* Preview Content */,
 			);
 			path = Resources;
@@ -187,6 +202,7 @@
 				1A000008 /* Preview Assets.xcassets in Resources */,
 				1A000005 /* Assets.xcassets in Resources */,
 				1A00001E /* enzymes.json in Resources */,
+				1A000038 /* Intro.mov in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -199,6 +215,10 @@
 			files = (
 				1A000003 /* ContentView.swift in Sources */,
 				1A000001 /* GenomancerApp.swift in Sources */,
+				1A00003C /* RootView.swift in Sources */,
+				1A000034 /* AppStartupManager.swift in Sources */,
+				1A000036 /* IntroView.swift in Sources */,
+				1A00003A /* IntroVideoView.swift in Sources */,
 				1A000020 /* HomeView.swift in Sources */,
 			1A000022 /* EnzymePicker.swift in Sources */,
 			1A000024 /* FragmentList.swift in Sources */,

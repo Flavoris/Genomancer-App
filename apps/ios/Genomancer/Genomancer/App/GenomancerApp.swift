@@ -2,5 +2,5 @@ import SwiftUI
 
 @main
 struct GenomancerApp: App {
-    var body: some Scene { WindowGroup { HomeView() } }
+    var body: some Scene { WindowGroup { RootView() } }
 }

@@ -1,0 +1,13 @@
+You are my iOS build assistant. I’m replacing an intro Intro.mp4 with Intro.mov that contains transparency (alpha). The .mov is exported as Apple ProRes 4444 with premultiplied alpha, 30 fps, straight RGB, no color keying. We will play it with AVPlayerLayer and expect the transparent pixels to reveal my SwiftUI background.
+
+Ensure Xcode does not transcode away alpha. The file must remain a bundled resource (Copy Bundle Resources).
+
+Tasks (describe exact Xcode steps back to me):
+
+Add Intro.mov to the project at the top level (not the asset catalog).
+
+Check Target Membership for my app target.
+
+Confirm it appears in Build Phases → Copy Bundle Resources.
+
+Do not re-encode the file in a build phase script; leave it untouched.
