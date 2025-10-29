@@ -6,6 +6,7 @@ struct IntroView: View {
     @StateObject private var startup = AppStartupManager()
 
     @State private var videoFinished = false
+    @State private var autoDismissWorkItem: DispatchWorkItem?
 
     var body: some View {
         ZStack {
@@ -34,7 +35,9 @@ struct IntroView: View {
         .onAppear {
             print("🚀 IntroView appeared")
             startup.performStartup()
+            scheduleAutoDismiss()
         }
+        .onDisappear { cancelAutoDismiss() }
         .onChange(of: startup.isReady) { _ in proceedIfDone() }
         .onChange(of: videoFinished) { _ in proceedIfDone() }
     }
@@ -55,9 +58,26 @@ struct IntroView: View {
         
         print("✅ Intro complete! Startup ready: \(startup.isReady), Video finished: \(videoFinished)")
         print("✅ Transitioning to HomeView")
+        cancelAutoDismiss()
         withAnimation(.easeInOut(duration: 0.35)) {
             hasSeenIntro = true
         }
+    }
+
+    private func scheduleAutoDismiss() {
+        autoDismissWorkItem?.cancel()
+        let workItem = DispatchWorkItem { 
+            print("⏱️ Auto dismiss triggered after 4 seconds")
+            self.videoFinished = true
+            self.autoDismissWorkItem = nil
+        }
+        autoDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: workItem)
+    }
+
+    private func cancelAutoDismiss() {
+        autoDismissWorkItem?.cancel()
+        autoDismissWorkItem = nil
     }
 }
 
