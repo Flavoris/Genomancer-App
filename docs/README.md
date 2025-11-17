@@ -5,8 +5,7 @@ A comprehensive Python tool for simulating restriction enzyme cutting on **linea
 ## Features
 
 - **Linear and Circular DNA Support**: Full support for both linear and circular DNA topology with wrap-around fragment calculation
-- **Fragment Sequence Extraction**: Returns actual DNA sequences for each fragment with detailed overhang analysis and FASTA export
-- **GenBank & CSV Export (NEW!)**: Export digest results to GenBank format or CSV tables for use in other tools
+- **Fragment Sequence Extraction**: Returns actual DNA sequences for each fragment with detailed overhang analysis.
 - **Ligation Compatibility Analysis (NEW!)**: Analyzes which fragment ends are compatible for ligation, with directionality and heuristics
 - **Multiple Enzyme Support**: Supports 1 to N enzymes for combined digest analysis
 - **Advanced IUPAC Expansion**: Full support for all IUPAC degenerate bases (A,C,G,T,R,Y,W,S,M,K,B,D,H,V,N)
@@ -207,7 +206,6 @@ The simulator now extracts and reports the actual DNA sequence for each fragment
 - **Overhang Analysis**: Calculates and reports overhang types (5', 3', or blunt) and overhang lengths
 - **End Base Detection**: Shows the specific bases present at each fragment end
 - **Circular Wrap-Around**: Correctly handles fragments that wrap around the origin in circular DNA
-- **FASTA Export**: Exports fragment sequences to FASTA format with informative headers
 - **Context Control**: Option to show only N bases at each end for long fragments
 
 ### Basic Usage
