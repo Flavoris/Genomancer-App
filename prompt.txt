@@ -1,0 +1,67 @@
+Implement DNABERT-style span masking in MLM
+
+Finally, change the masking method in pretrain_mlm.py from independent per-token masking to span masking similar to DNABERT.
+
+Replace mask_tokens with something like this:
+
+def mask_tokens_span(inputs: torch.LongTensor, vocab, mask_prob: float = 0.15,
+                     max_span_len: int = 3):
+    """
+    DNABERT-style span masking:
+    - Select contiguous spans until ~mask_prob of tokens are covered.
+    - Apply standard 80/10/10 BERT masking inside those spans.
+    """
+    device = inputs.device
+    labels = inputs.clone()
+    batch_size, seq_len = inputs.shape
+
+    # Initialize all as unmasked
+    masked = torch.zeros_like(inputs, dtype=torch.bool, device=device)
+
+    for b in range(batch_size):
+        num_to_mask = max(1, int(mask_prob * seq_len))
+        covered = 0
+        while covered < num_to_mask:
+            span_len = random.randint(1, max_span_len)
+            start = random.randint(0, seq_len - span_len)
+            end = min(seq_len, start + span_len)
+            # avoid double-masking
+            span_mask = ~masked[b, start:end]
+            if span_mask.any():
+                masked[b, start:end] = True
+                covered += span_mask.sum().item()
+            # safety break:
+            if covered >= num_to_mask or covered >= seq_len:
+                break
+
+    # Don't use padding positions
+    if hasattr(vocab, "pad_id"):
+        pad_mask = inputs.eq(vocab.pad_id)
+        masked[pad_mask] = False
+
+    labels[~masked] = -100  # ignore index for unmasked tokens
+
+    # 80% [MASK], 10% random, 10% unchanged
+    rand = torch.rand_like(inputs, dtype=torch.float32)
+    mask_token_indices = masked & (rand < 0.8)
+    random_token_indices = masked & (rand >= 0.8) & (rand < 0.9)
+    # remaining masked positions (rand >= 0.9) stay unchanged
+
+    inputs = inputs.clone()
+    inputs[mask_token_indices] = vocab.mask_id
+
+    if random_token_indices.any():
+        flat = random_token_indices.view(-1)
+        num_rand = flat.sum().item()
+        random_ids = torch.randint(
+            low=0,
+            high=vocab_size,  # ensure this is defined
+            size=(num_rand,),
+            device=device,
+        )
+        inputs.view(-1)[flat] = random_ids
+
+    return inputs, labels
+
+
+Update the MLM training loop to call mask_tokens_span instead of the old per-token masking function.

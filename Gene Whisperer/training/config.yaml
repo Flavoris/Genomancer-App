@@ -1,0 +1,175 @@
+# Gene Whisperer V2 Configuration
+# Optimized for 90%+ accuracy on Apple M4 chip
+# Based on insights from DNABERT, msBERT, and Procables papers
+
+# =============================================================================
+# RANDOM SEED
+# =============================================================================
+seed: 1337
+
+# =============================================================================
+# DATA SETTINGS
+# =============================================================================
+max_bp_len: 81
+batch_size: 32  # Smaller batch for M4 memory, compensated by grad_accum
+delimiter: "\t"
+train_val_split: 0.9
+
+# Data paths (relative to training/ directory)
+stage1_train: ../data/stage1_train.tsv
+stage1_val: ../data/stage1_val.tsv
+stage2_train: ../data/stage2_train.tsv
+stage2_val: ../data/stage2_val.tsv
+stage2_test: ../data/stage2_test.tsv
+
+# Stage 2 strength mapping
+stage2_strength_positive: 1
+stage2_strength_negative: 0
+
+# =============================================================================
+# MODEL ARCHITECTURE (Enhanced for 90%+ accuracy)
+# =============================================================================
+# Transformer settings
+embedding_dim: 192
+transformer_layers: 6  # Reduced from 8 to prevent overfitting with TCN
+transformer_heads: 8
+transformer_ff_dim: 384
+transformer_dropout: 0.2
+
+# Position encoding (ALiBi is more efficient on M4)
+use_alibi: true
+use_positional_bias: false  # Disabled when using ALiBi
+
+# Attention pooling (KEY for promoter detection)
+use_attention_pool: true
+
+# K-mer tokenization
+kmer: 3
+vocab_size: 67  # 64 + 3 special tokens
+pad_token_id: 66
+vocab_cache_dir: ../artifacts/vocabs
+
+# =============================================================================
+# TCN + MULTI-SCALE CNN (KEY for 90%+ accuracy)
+# =============================================================================
+# Based on iPro-TCN and PROCABLES papers
+# Multi-scale CNN captures different motif lengths (TATA box, -10/-35 elements)
+# TCN provides exponentially growing receptive field via dilated convolutions
+
+use_tcn: true  # Set to false to use original single CNN for comparison
+
+# TCN (Temporal Convolutional Network) settings
+tcn_hidden: 256       # Hidden dimension in TCN blocks
+tcn_levels: 4         # Number of dilated conv levels (dilation: 1,2,4,8)
+tcn_kernel: 3         # Kernel size for dilated convolutions
+
+# Multi-scale CNN settings (parallel convolutions for different motif lengths)
+multiscale_channels: 64           # Channels per kernel size branch
+multiscale_kernels: [3, 5, 7, 9, 15]  # Kernel sizes to capture 3-15bp motifs
+
+# BiLSTM settings
+lstm_hidden: 192      # Hidden size (output will be 2x for bidirectional)
+
+# =============================================================================
+# POST-CNN TRANSFORMER (Global context after local feature extraction)
+# =============================================================================
+# Lightweight transformer applied AFTER CNN/TCN for global contextualization
+# This follows the new architecture order: Embedding → CNN/TCN → Transformer → Pool
+post_cnn_transformer_layers: 3  # Fewer layers since CNN/TCN already extracted features
+
+# =============================================================================
+# ENGINEERED FEATURES (Enhanced with separate MLP branch)
+# =============================================================================
+# TNC(64) + PSTNP(64) + PseEIIP(64) + CKSNAP(16) = 208
+stage1_use_engineered_features: true
+stage1_engineered_dim: 208
+
+# Separate MLP branch for engineered features (increases their influence)
+engineered_mlp_hidden: 256    # Hidden dimension in engineered feature MLP
+engineered_mlp_output: 128    # Output dimension before fusion
+
+# =============================================================================
+# ATTENTION-BASED FUSION (Instead of simple concatenation)
+# =============================================================================
+# Gated cross-attention fusion between sequence and engineered features
+# This allows the model to learn optimal weighting between modalities
+fusion_hidden: 256            # Hidden dimension in fusion module
+
+# Reverse complement augmentation
+stage1_reverse_complement_prob: 0.5
+
+# =============================================================================
+# TRAINING SETTINGS (Optimized for 90%+ accuracy)
+# =============================================================================
+# Learning rate and schedule
+lr: 0.0003  # 3e-4, good for transformers
+weight_decay: 0.01  # L2 regularization
+warmup_ratio: 0.1  # 10% warmup steps
+
+# Training duration
+epochs: 100
+early_stopping_patience: 20  # More patience for better convergence
+
+# Gradient settings
+grad_accum_steps: 4  # Effective batch = 32 * 4 = 128
+grad_clip_norm: 1.0
+
+# =============================================================================
+# LOSS FUNCTION
+# =============================================================================
+# Focal loss with label smoothing (KEY improvement)
+stage1_use_focal_loss: true
+stage1_focal_alpha: 0.5
+stage1_focal_gamma: 2.0
+label_smoothing: 0.1  # Prevents overconfidence
+
+# =============================================================================
+# AUGMENTATION
+# =============================================================================
+use_mixup: true
+mixup_alpha: 0.4  # Soft mixup
+
+# =============================================================================
+# MLM PRETRAINING (Enhanced)
+# =============================================================================
+stage1_load_mlm_weights: true
+stage1_freeze_layers: 0  # Don't freeze - let all layers adapt
+stage1_unfreeze_epoch: null
+mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k3.pt
+
+# MLM training settings (for pretraining script)
+mlm_fasta_path: ../data/GCF_000005845.2_ASM584v2_genomic.fna
+mlm_window_size: 81
+mlm_stride: 20
+mlm_batch_size: 128
+mlm_epochs: 150  # More pretraining epochs
+mlm_lr: 0.0005
+mlm_weight_decay: 0.01
+mlm_kmer: 3
+mlm_vocab_path: ../artifacts/vocabs/mlm_k3_vocab.json
+mlm_encoder_path: ../artifacts/mlm_encoder_k3.pt
+
+# =============================================================================
+# CHECKPOINTS
+# =============================================================================
+stage1_checkpoint_name: null  # Auto-generated: stage1_v2_k{kmer}.pt
+
+# =============================================================================
+# VISUALIZATION (Optional)
+# =============================================================================
+stage1_embed_plot_epoch: null
+stage1_embed_plot_method: pca
+stage1_embed_plot_samples: 512
+
+# =============================================================================
+# METRICS
+# =============================================================================
+metrics_stage1: ["accuracy", "precision", "recall", "f1", "mcc", "specificity"]
+metrics_stage2: ["accuracy", "mcc", "roc_auc"]
+
+# =============================================================================
+# MULTI-SCALE ENSEMBLE (Advanced - for >92% accuracy)
+# =============================================================================
+# Enable to train multiple k-mer models and ensemble
+use_multi_scale: true
+multi_scale_kmers: [3, 4, 5, 6]
