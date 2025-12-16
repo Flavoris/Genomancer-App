@@ -30,11 +30,12 @@ stage2_strength_negative: 0
 # MODEL ARCHITECTURE (Enhanced for 90%+ accuracy)
 # =============================================================================
 # Transformer settings
-embedding_dim: 192
-transformer_layers: 6  # Reduced from 8 to prevent overfitting with TCN
+# NOTE: These should match MLM pretraining dimensions for proper weight transfer
+embedding_dim: 256       # Match mlm_embedding_dim for weight transfer
+transformer_layers: 6    # Reduced from 8 to prevent overfitting with TCN
 transformer_heads: 8
-transformer_ff_dim: 384
-transformer_dropout: 0.2
+transformer_ff_dim: 1024  # Match mlm_transformer_ff_dim (4x embedding)
+transformer_dropout: 0.15  # Slightly higher for fine-tuning
 
 # Position encoding (ALiBi is more efficient on M4)
 use_alibi: true
@@ -102,36 +103,58 @@ stage1_reverse_complement_prob: 0.5
 # TRAINING SETTINGS (Optimized for 90%+ accuracy)
 # =============================================================================
 # Learning rate and schedule
-lr: 0.0003  # 3e-4, good for transformers
-weight_decay: 0.01  # L2 regularization
-warmup_ratio: 0.1  # 10% warmup steps
+lr: 0.0002  # Slightly lower for stability (was 3e-4)
+weight_decay: 0.02  # Slightly stronger regularization
+warmup_ratio: 0.15  # 15% warmup for better stability (was 10%)
 
 # Training duration
-epochs: 100
-early_stopping_patience: 20  # More patience for better convergence
+epochs: 120  # More epochs with better early stopping
+early_stopping_patience: 25  # More patience for better convergence
 
 # Gradient settings
 grad_accum_steps: 4  # Effective batch = 32 * 4 = 128
 grad_clip_norm: 1.0
 
+# Layer-wise learning rate decay (lower LR for earlier layers)
+# This helps preserve pretrained features while fine-tuning upper layers
+layer_lr_decay: 0.8  # Each layer gets 0.8x the LR of the layer above
+
+# Stochastic depth (drop path) rate for regularization
+drop_path_rate: 0.1
+
 # =============================================================================
 # LOSS FUNCTION
 # =============================================================================
-# Focal loss with label smoothing (KEY improvement)
+# Focal loss with REDUCED label smoothing (was too aggressive)
 stage1_use_focal_loss: true
 stage1_focal_alpha: 0.5
 stage1_focal_gamma: 2.0
-label_smoothing: 0.1  # Prevents overconfidence
+label_smoothing: 0.05  # Reduced from 0.1 - less smoothing for higher accuracy
 
 # =============================================================================
 # AUGMENTATION
 # =============================================================================
 use_mixup: true
-mixup_alpha: 0.4  # Soft mixup
+mixup_alpha: 0.2  # Reduced from 0.4 - less aggressive mixup for higher accuracy
 
 # =============================================================================
-# MLM PRETRAINING (Enhanced)
+# STOCHASTIC WEIGHT AVERAGING (SWA) for breaking plateaus
 # =============================================================================
+use_swa: true
+swa_start_epoch: 60  # Start SWA after 60 epochs (when base training plateaus)
+swa_lr: 0.00005  # Low constant LR for SWA phase
+swa_anneal_epochs: 10  # Anneal to SWA LR over 10 epochs
+
+# =============================================================================
+# MLM PRETRAINING (Enhanced V4 - targeting loss < 1.0)
+# =============================================================================
+# Based on DNABERT, msBERT, and iPro-TCN papers
+# Key changes for lower loss:
+# 1. Larger model capacity (256 dim, 8 layers, 4x FF)
+# 2. Weight tying between embedding and LM head (BERT-style)
+# 3. Layer-wise learning rate decay
+# 4. Better initialization and normalization
+
 stage1_load_mlm_weights: true
 stage1_freeze_layers: 0  # Don't freeze - let all layers adapt
 stage1_unfreeze_epoch: null
@@ -142,12 +165,32 @@ mlm_fasta_path: ../data/GCF_000005845.2_ASM584v2_genomic.fna
 mlm_window_size: 81
 mlm_stride: 20
 mlm_batch_size: 128
-mlm_epochs: 150  # More pretraining epochs
-mlm_lr: 0.0005
+mlm_epochs: 200  # More epochs for better convergence
+mlm_lr: 0.001  # Higher base LR (layer-wise decay will adjust)
 mlm_weight_decay: 0.01
 mlm_kmer: 3
 mlm_vocab_path: ../artifacts/vocabs/mlm_k3_vocab.json
 mlm_encoder_path: ../artifacts/mlm_encoder_k3.pt
+
+# MLM architecture settings (ENHANCED for lower loss)
+# Larger model learns better representations during pretraining
+mlm_embedding_dim: 256      # Larger capacity (was 192)
+mlm_transformer_layers: 8   # Deeper model (was 6)
+mlm_transformer_heads: 8    # Keep same
+mlm_transformer_ff_dim: 1024  # 4x embedding dim (BERT-style)
+mlm_transformer_dropout: 0.1  # Lower dropout during pretraining
+
+# MLM optimization settings (CRITICAL for low loss)
+mlm_tie_weights: true       # Share embedding/LM head weights (BERT-style)
+mlm_use_output_norm: true   # Layer norm before LM head
+mlm_use_layer_lr_decay: true  # Different LR per layer
+mlm_layer_lr_decay: 0.9     # Each lower layer gets 0.9x LR
+
+# MLM additional settings
+mlm_val_ratio: 0.1  # 10% validation split
+mlm_grad_accum_steps: 4  # Effective batch = 512
+mlm_warmup_ratio: 0.06  # 6% warmup
+mlm_patience: 30  # More patience for convergence
 
 # =============================================================================
 # CHECKPOINTS

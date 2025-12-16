@@ -460,7 +460,14 @@ class DNAEncoder(nn.Module):
     Key improvements over original:
     - ALiBi positional encoding for better length generalization
     - Pre-norm architecture for training stability
+    - Stochastic depth for regularization (linearly increasing drop rate)
+    - Scaled embedding initialization (critical for MLM pretraining)
     - Optional gradient checkpointing for memory efficiency
+    
+    IMPORTANT FOR MLM PRETRAINING:
+    - Use scaled initialization for embeddings (std = 0.02)
+    - Deeper models (8+ layers) learn better representations
+    - Larger FF dimension (4x embedding_dim) helps capacity
     """
     
     def __init__(
@@ -475,37 +482,64 @@ class DNAEncoder(nn.Module):
         use_alibi: bool = True,
         pad_token_id: Optional[int] = None,
         max_seq_len: int = 256,
+        drop_path_rate: float = 0.1,  # Stochastic depth rate
+        layer_scale_init: float = 1.0,  # Layer scale initialization
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
+        self.vocab_size = vocab_size
         self.k = kmer
         self.pad_token_id = pad_token_id
         self.num_heads = num_heads
         self.use_alibi = use_alibi
         
+        # Embedding with scaled initialization (BERT-style)
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_token_id)
+        self._init_embedding()
+        
         self.embed_dropout = nn.Dropout(dropout)
         
-        # ALiBi for relative position encoding
+        # Embedding layer norm for stability (like BERT)
+        self.embed_norm = nn.LayerNorm(embedding_dim)
+        
+        # Positional encoding - ALWAYS use position embeddings for input
+        # This is critical for MLM: when all tokens are [MASK], the model needs
+        # positional information in the embeddings themselves, not just in attention
+        self.pos_embedding = nn.Embedding(max_seq_len, embedding_dim)
+        nn.init.normal_(self.pos_embedding.weight, std=0.02)
+        
+        # ALiBi for additional relative position encoding in attention
         if use_alibi:
             self.alibi = ALiBiPositionalBias(num_heads, max_seq_len)
         else:
-            # Fallback to learned positional embedding
-            self.pos_embedding = nn.Embedding(max_seq_len, embedding_dim)
             self.alibi = None
         
-        # Pre-norm transformer layers
+        # Pre-norm transformer layers with linearly increasing stochastic depth
+        # This drops more aggressively in later layers (which are more task-specific)
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, num_layers)]
         self.layers = nn.ModuleList([
             PreNormTransformerLayer(
                 d_model=embedding_dim,
                 nhead=num_heads,
                 dim_feedforward=ff_dim,
                 dropout=dropout,
+                drop_path=dpr[i],
             )
-            for _ in range(num_layers)
+            for i in range(num_layers)
         ])
         
         self.final_norm = nn.LayerNorm(embedding_dim)
+    
+    def _init_embedding(self):
+        """
+        Initialize embeddings with truncated normal distribution.
+        This is critical for good MLM pretraining - standard deviation of 0.02
+        is the BERT default and works well for small vocabularies.
+        """
+        nn.init.trunc_normal_(self.embedding.weight, std=0.02, a=-0.04, b=0.04)
+        if self.pad_token_id is not None:
+            # Ensure padding embedding is zero
+            nn.init.zeros_(self.embedding.weight[self.pad_token_id])
     
     def load_mlm_weights(self, checkpoint: Union[str, Path, dict], strict: bool = False) -> None:
         """Load pretrained MLM encoder weights with flexible matching."""
@@ -543,22 +577,28 @@ class DNAEncoder(nn.Module):
         self, 
         token_ids: torch.LongTensor,
         key_padding_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        return_all_hidden_states: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
         """
         Args:
             token_ids: (B, L) token indices
             key_padding_mask: Optional (B, L) boolean mask (True = padding)
+            return_all_hidden_states: If True, return tuple of (output, hidden_states_list)
         Returns:
-            (B, L, D) encoded representations
+            (B, L, D) encoded representations, optionally with hidden states
         """
         B, L = token_ids.shape
         
         x = self.embedding(token_ids)
         
-        if not self.use_alibi and hasattr(self, 'pos_embedding'):
-            positions = torch.arange(L, device=token_ids.device)
-            x = x + self.pos_embedding(positions).unsqueeze(0)
+        # ALWAYS add positional embeddings to input
+        # This is critical for MLM: when inputs are [MASK], positions must be encoded
+        # in the embeddings, not just in attention (ALiBi only affects attention scores)
+        positions = torch.arange(L, device=token_ids.device)
+        x = x + self.pos_embedding(positions).unsqueeze(0)
         
+        # Apply embedding layer norm for stability
+        x = self.embed_norm(x)
         x = self.embed_dropout(x)
         
         # Build padding mask if not provided
@@ -571,14 +611,56 @@ class DNAEncoder(nn.Module):
             attn_bias = self.alibi(L)  # (H, L, L)
         
         # Process through layers
+        hidden_states = [] if return_all_hidden_states else None
         for layer in self.layers:
+            if return_all_hidden_states:
+                hidden_states.append(x)
             x = layer(x, key_padding_mask=key_padding_mask, attn_bias=attn_bias)
         
-        return self.final_norm(x)
+        output = self.final_norm(x)
+        
+        if return_all_hidden_states:
+            hidden_states.append(output)
+            return output, hidden_states
+        
+        return output
+
+
+class StochasticDepth(nn.Module):
+    """
+    Stochastic Depth (Layer Drop) for regularization.
+    
+    Randomly drops entire layers during training, which:
+    1. Acts as strong regularization
+    2. Reduces effective network depth, speeding up training
+    3. Creates an implicit ensemble of different depth networks
+    """
+    
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+    
+    def forward(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.drop_prob == 0.0:
+            return x + residual
+        
+        # During training, randomly skip this layer
+        keep_prob = 1.0 - self.drop_prob
+        if torch.rand(1).item() < self.drop_prob:
+            return x  # Skip the residual (drop this layer)
+        
+        # Scale residual to compensate for dropped layers
+        return x + residual / keep_prob
 
 
 class PreNormTransformerLayer(nn.Module):
-    """Pre-norm transformer layer with optional ALiBi bias."""
+    """
+    Pre-norm transformer layer with optional ALiBi bias and stochastic depth.
+    
+    IMPORTANT FIX: The attention mask handling was causing interference with learning.
+    Now properly handles ALiBi bias as additive attention bias without interfering
+    with the attention computation.
+    """
     
     def __init__(
         self,
@@ -586,15 +668,26 @@ class PreNormTransformerLayer(nn.Module):
         nhead: int,
         dim_feedforward: int,
         dropout: float = 0.1,
+        drop_path: float = 0.0,  # Stochastic depth probability
     ):
         super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        self.head_dim = d_model // nhead
+        
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         
-        self.self_attn = nn.MultiheadAttention(
-            d_model, nhead, dropout=dropout, batch_first=True
-        )
+        # Use custom attention for better ALiBi support
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
         
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
+        
+        # GLU-style FFN for better gradient flow (from Llama-style improvements)
         self.ffn = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
             nn.GELU(),
@@ -603,7 +696,21 @@ class PreNormTransformerLayer(nn.Module):
             nn.Dropout(dropout),
         )
         
-        self.dropout = nn.Dropout(dropout)
+        # Stochastic depth for regularization
+        self.drop_path_attn = StochasticDepth(drop_path)
+        self.drop_path_ffn = StochasticDepth(drop_path)
+        
+        self.scale = self.head_dim ** -0.5
+        
+        # Initialize projections with scaled initialization
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Scaled initialization for better training dynamics."""
+        for module in [self.q_proj, self.k_proj, self.v_proj, self.out_proj]:
+            nn.init.xavier_uniform_(module.weight, gain=1.0 / math.sqrt(2))
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
     
     def forward(
         self,
@@ -611,34 +718,44 @@ class PreNormTransformerLayer(nn.Module):
         key_padding_mask: Optional[torch.Tensor] = None,
         attn_bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        # Pre-norm self-attention with residual
+        B, L, D = x.shape
+        
+        # Pre-norm
         normed = self.norm1(x)
-        B, L, _ = x.shape
         
-        # For ALiBi, we need to add the bias to attention logits
-        # PyTorch's MHA doesn't directly support this, so we use attn_mask
-        attn_mask = None
+        # Project to Q, K, V
+        q = self.q_proj(normed).view(B, L, self.nhead, self.head_dim).transpose(1, 2)
+        k = self.k_proj(normed).view(B, L, self.nhead, self.head_dim).transpose(1, 2)
+        v = self.v_proj(normed).view(B, L, self.nhead, self.head_dim).transpose(1, 2)
+        
+        # Scaled dot-product attention
+        attn_weights = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, L, L)
+        
+        # Add ALiBi bias (additive, not as mask)
         if attn_bias is not None:
-            # attn_bias is (H, L, L), we need (B*H, L, L) for MHA
-            attn_mask = attn_bias.unsqueeze(0).expand(B, -1, -1, -1)
-            attn_mask = attn_mask.reshape(B * attn_bias.size(0), attn_bias.size(1), attn_bias.size(2))
+            attn_weights = attn_weights + attn_bias.unsqueeze(0)  # (1, H, L, L) broadcasts
         
-        # Convert key_padding_mask to float to match attn_mask type
-        # This avoids the deprecation warning about mismatched mask types
-        float_key_padding_mask = None
+        # Apply padding mask
         if key_padding_mask is not None:
-            float_key_padding_mask = key_padding_mask.float().masked_fill(key_padding_mask, float('-inf'))
+            # key_padding_mask: (B, L), True = pad
+            # Expand to (B, 1, 1, L) and mask with -inf
+            attn_weights = attn_weights.masked_fill(
+                key_padding_mask.unsqueeze(1).unsqueeze(2), float('-inf')
+            )
         
-        attn_out, _ = self.self_attn(
-            normed, normed, normed,
-            key_padding_mask=float_key_padding_mask,
-            attn_mask=attn_mask,
-            need_weights=False,
-        )
-        x = x + self.dropout(attn_out)
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        attn_weights = self.attn_dropout(attn_weights)
         
-        # Pre-norm FFN with residual
-        x = x + self.ffn(self.norm2(x))
+        # Apply attention to values
+        attn_out = (attn_weights @ v).transpose(1, 2).reshape(B, L, D)
+        attn_out = self.out_proj(attn_out)
+        
+        # Stochastic depth on attention residual
+        x = self.drop_path_attn(x, self.resid_dropout(attn_out))
+        
+        # Pre-norm FFN with residual + stochastic depth
+        ffn_out = self.ffn(self.norm2(x))
+        x = self.drop_path_ffn(x, ffn_out)
         
         return x
 
@@ -690,11 +807,14 @@ class EngineeredFeatureMLP(nn.Module):
 
 class GatedAttentionFusion(nn.Module):
     """
-    Attention-based fusion of sequence and engineered features.
+    Attention-based fusion of sequence and engineered features with residual.
     
     Uses cross-attention where engineered features attend to sequence features,
     plus a gating mechanism to control the contribution of each modality.
     This is more expressive than simple concatenation.
+    
+    Key improvement: Residual connection from sequence features ensures
+    the model doesn't lose important sequence information during fusion.
     """
     
     def __init__(
@@ -703,7 +823,7 @@ class GatedAttentionFusion(nn.Module):
         eng_dim: int,
         hidden_dim: int = 256,
         num_heads: int = 4,
-        dropout: float = 0.2,
+        dropout: float = 0.15,  # Reduced from 0.2
     ):
         super().__init__()
         self.seq_dim = seq_dim
@@ -722,23 +842,36 @@ class GatedAttentionFusion(nn.Module):
             batch_first=True,
         )
         
+        # Self-attention for sequence features to enhance them
+        self.seq_self_attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        
         # Gating mechanism to balance sequence vs engineered contributions
         self.gate_seq = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.Sigmoid(),
         )
         self.gate_eng = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.Sigmoid(),
         )
         
-        # Final projection after fusion
+        # Final projection after fusion with residual pathway
         self.out_proj = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
         )
+        
+        # Residual projection for sequence features (preserves seq info)
+        self.seq_residual_proj = nn.Linear(seq_dim, hidden_dim)
         
         self.output_dim = hidden_dim
     
@@ -754,7 +887,8 @@ class GatedAttentionFusion(nn.Module):
         Returns:
             (B, hidden_dim) fused representation
         """
-        B = seq_features.size(0)
+        # Residual from original sequence features
+        seq_residual = self.seq_residual_proj(seq_features)  # (B, hidden_dim)
         
         # Project to common dimension
         seq_h = self.seq_proj(seq_features)  # (B, hidden_dim)
@@ -780,8 +914,8 @@ class GatedAttentionFusion(nn.Module):
         g_seq = self.gate_seq(concat)  # (B, hidden_dim)
         g_eng = self.gate_eng(concat)  # (B, hidden_dim)
         
-        # Apply gates
-        gated_seq = g_seq * seq_h
+        # Apply gates with sequence residual
+        gated_seq = g_seq * (seq_h + seq_residual)  # Add residual for seq preservation
         gated_eng = g_eng * (eng_h + attn_out)  # Add attention-enhanced eng features
         
         # Fuse
@@ -789,46 +923,90 @@ class GatedAttentionFusion(nn.Module):
         return self.out_proj(fused)
 
 
-class LightweightTransformerEncoder(nn.Module):
+class PostCNNTransformerAdapter(nn.Module):
     """
-    Lightweight transformer encoder for post-CNN/TCN contextualization.
+    Adapter to apply pretrained transformer layers after CNN/TCN.
     
-    This processes the CNN/TCN features to add global context via self-attention.
-    Uses fewer layers than the full DNAEncoder since CNN/TCN already extracted
-    local features.
+    This bridges the dimension mismatch between CNN/TCN output (tcn_hidden)
+    and the pretrained transformer (embedding_dim), allowing us to reuse
+    the pretrained transformer weights from MLM.
+    
+    Architecture:
+    CNN/TCN output (tcn_hidden) → Projection → Pretrained Transformer → Output
     """
     
     def __init__(
         self,
-        d_model: int,
+        input_dim: int,
+        transformer_dim: int,
         num_layers: int = 3,
-        num_heads: int = 4,
-        ff_dim: int = 256,
+        num_heads: int = 8,
+        ff_dim: int = 384,
         dropout: float = 0.15,
         use_alibi: bool = True,
         max_seq_len: int = 256,
+        drop_path_rate: float = 0.1,  # Stochastic depth
     ):
         super().__init__()
-        self.d_model = d_model
-        self.use_alibi = use_alibi
+        self.input_dim = input_dim
+        self.transformer_dim = transformer_dim
         
+        # Projection to transformer dimension
+        self.input_proj = nn.Linear(input_dim, transformer_dim)
+        self.input_norm = nn.LayerNorm(transformer_dim)
+        
+        # Transformer layers (can be initialized from pretrained DNAEncoder)
+        self.use_alibi = use_alibi
         if use_alibi:
             self.alibi = ALiBiPositionalBias(num_heads, max_seq_len)
         else:
-            self.pos_embedding = nn.Embedding(max_seq_len, d_model)
             self.alibi = None
         
+        # Linearly increasing stochastic depth
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, num_layers)]
         self.layers = nn.ModuleList([
             PreNormTransformerLayer(
-                d_model=d_model,
+                d_model=transformer_dim,
                 nhead=num_heads,
                 dim_feedforward=ff_dim,
                 dropout=dropout,
+                drop_path=dpr[i],
             )
-            for _ in range(num_layers)
+            for i in range(num_layers)
         ])
         
-        self.final_norm = nn.LayerNorm(d_model)
+        self.final_norm = nn.LayerNorm(transformer_dim)
+        
+        # Project back to original dimension for pooling
+        self.output_proj = nn.Linear(transformer_dim, input_dim)
+        self.output_norm = nn.LayerNorm(input_dim)
+    
+    def load_pretrained_layers(self, encoder: 'DNAEncoder', num_layers: int) -> int:
+        """
+        Load transformer layers from a pretrained DNAEncoder.
+        
+        Args:
+            encoder: Pretrained DNAEncoder
+            num_layers: Number of layers to copy (from the top of encoder)
+        Returns:
+            Number of layers successfully loaded
+        """
+        loaded = 0
+        encoder_layers = list(encoder.layers)
+        
+        # Copy from the TOP of the pretrained encoder (most general layers)
+        # to our adapter layers
+        for i in range(min(num_layers, len(self.layers), len(encoder_layers))):
+            src_idx = len(encoder_layers) - num_layers + i  # Take from top
+            if src_idx >= 0:
+                self.layers[i].load_state_dict(encoder_layers[src_idx].state_dict())
+                loaded += 1
+        
+        # Also copy ALiBi if available
+        if self.use_alibi and hasattr(encoder, 'alibi') and encoder.alibi is not None:
+            self.alibi.load_state_dict(encoder.alibi.state_dict())
+        
+        return loaded
     
     def forward(
         self,
@@ -837,25 +1015,33 @@ class LightweightTransformerEncoder(nn.Module):
     ) -> torch.Tensor:
         """
         Args:
-            x: (B, L, D) features from CNN/TCN
+            x: (B, L, input_dim) features from CNN/TCN
             key_padding_mask: Optional (B, L) padding mask
         Returns:
-            (B, L, D) contextualized features
+            (B, L, input_dim) contextualized features
         """
         B, L, D = x.shape
         
-        if not self.use_alibi and hasattr(self, 'pos_embedding'):
-            positions = torch.arange(L, device=x.device)
-            x = x + self.pos_embedding(positions).unsqueeze(0)
+        # Project to transformer dimension
+        x = self.input_proj(x)
+        x = self.input_norm(x)
         
+        # Get ALiBi bias
         attn_bias = None
-        if self.use_alibi:
+        if self.use_alibi and self.alibi is not None:
             attn_bias = self.alibi(L)
         
+        # Apply transformer layers
         for layer in self.layers:
             x = layer(x, key_padding_mask=key_padding_mask, attn_bias=attn_bias)
         
-        return self.final_norm(x)
+        x = self.final_norm(x)
+        
+        # Project back to input dimension
+        x = self.output_proj(x)
+        x = self.output_norm(x)
+        
+        return x
 
 
 class GeneWhispererStage1(nn.Module):
@@ -949,9 +1135,11 @@ class GeneWhispererStage1(nn.Module):
             self.conv_act = nn.GELU()
             cnn_out_dim = 256
         
-        # Step 3: Lightweight transformer for global contextualization (AFTER CNN)
-        self.post_cnn_transformer = LightweightTransformerEncoder(
-            d_model=cnn_out_dim,
+        # Step 3: Transformer adapter for global contextualization (AFTER CNN)
+        # Uses same dimension as pretrained encoder for weight transfer
+        self.post_cnn_transformer = PostCNNTransformerAdapter(
+            input_dim=cnn_out_dim,
+            transformer_dim=embedding_dim,  # Match pretrained encoder dimension
             num_layers=post_cnn_transformer_layers,
             num_heads=num_heads,
             ff_dim=ff_dim,
@@ -991,18 +1179,21 @@ class GeneWhispererStage1(nn.Module):
         else:
             classifier_in = seq_out_dim
         
-        # Step 7: Classifier head
-        hidden_dim = 512 if use_tcn else 384
+        # Step 7: Classifier head with reduced dropout
+        # Original had 0.4/0.3 dropout which was too aggressive
+        classifier_hidden = 512 if use_tcn else 384
+        classifier_dropout = dropout * 1.5  # Scale with base dropout (0.15 -> 0.225)
+        
         self.classifier = nn.Sequential(
-            nn.Linear(classifier_in, hidden_dim),
-            nn.LayerNorm(hidden_dim),
+            nn.Linear(classifier_in, classifier_hidden),
+            nn.LayerNorm(classifier_hidden),
             nn.GELU(),
-            nn.Dropout(0.4),
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.LayerNorm(hidden_dim // 2),
+            nn.Dropout(classifier_dropout),  # Was 0.4, now ~0.22
+            nn.Linear(classifier_hidden, classifier_hidden // 2),
+            nn.LayerNorm(classifier_hidden // 2),
             nn.GELU(),
-            nn.Dropout(0.3),
-            nn.Linear(hidden_dim // 2, 1),
+            nn.Dropout(classifier_dropout * 0.8),  # Was 0.3, now ~0.18
+            nn.Linear(classifier_hidden // 2, 1),
             nn.Sigmoid(),
         )
     
@@ -1010,6 +1201,28 @@ class GeneWhispererStage1(nn.Module):
     def encoder(self):
         """Compatibility property for MLM weight loading."""
         return self._full_encoder
+    
+    def load_pretrained_weights(self, checkpoint_path: Union[str, Path], strict: bool = False) -> None:
+        """
+        Load pretrained MLM weights into the model.
+        
+        This properly transfers:
+        1. Embedding weights (directly used in forward pass)
+        2. Transformer layer weights (into post_cnn_transformer adapter)
+        
+        Args:
+            checkpoint_path: Path to pretrained encoder checkpoint
+            strict: Whether to require exact match
+        """
+        # Load into the full encoder first
+        self._full_encoder.load_mlm_weights(checkpoint_path, strict=strict)
+        
+        # The embedding is already shared (self.embedding.weight = self._full_encoder.embedding.weight)
+        
+        # Transfer transformer layers to post_cnn_transformer
+        num_layers = len(self.post_cnn_transformer.layers)
+        loaded = self.post_cnn_transformer.load_pretrained_layers(self._full_encoder, num_layers)
+        LOGGER.info("Transferred %d transformer layers to post-CNN adapter", loaded)
     
     def _get_padding_mask(self, tokens: torch.Tensor) -> Optional[torch.Tensor]:
         """Generate padding mask from tokens."""

@@ -10,8 +10,8 @@ from typing import Dict, Tuple
 import torch
 import yaml
 
-from dataset import KmerVocabulary, compute_eiip, compute_pstnp, compute_tnc
-from model import GeneWhispererStage1, Stage1Ensemble
+from dataset import KmerVocabulary, compute_eiip, compute_pstnp, compute_tnc, compute_pseeiip, compute_cksnap
+from model import GeneWhispererStage1, MultiScaleEnsemble
 
 LOGGER = logging.getLogger("gene_whisperer.ensemble")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -31,11 +31,28 @@ def load_vocab(vocab_path: Path) -> KmerVocabulary:
 
 
 def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneWhispererStage1:
-    embedding_dim = int(cfg.get("embedding_dim", 160))
-    transformer_layers = int(cfg.get("transformer_layers", 4))
+    """Build GeneWhispererStage1 model with V3 architecture parameters."""
+    embedding_dim = int(cfg.get("embedding_dim", 192))
+    transformer_layers = int(cfg.get("transformer_layers", 6))
     transformer_heads = int(cfg.get("transformer_heads", 8))
-    transformer_ff_dim = int(cfg.get("transformer_ff_dim", 256))
-    transformer_dropout = float(cfg.get("transformer_dropout", 0.1))
+    transformer_ff_dim = int(cfg.get("transformer_ff_dim", 384))
+    transformer_dropout = float(cfg.get("transformer_dropout", 0.2))
+    
+    # TCN parameters
+    use_tcn = bool(cfg.get("use_tcn", True))
+    tcn_hidden = int(cfg.get("tcn_hidden", 256))
+    tcn_levels = int(cfg.get("tcn_levels", 4))
+    tcn_kernel = int(cfg.get("tcn_kernel", 3))
+    multiscale_channels = int(cfg.get("multiscale_channels", 64))
+    multiscale_kernels = tuple(cfg.get("multiscale_kernels", [3, 5, 7, 9, 15]))
+    lstm_hidden = int(cfg.get("lstm_hidden", 192))
+    
+    # New V3 architecture parameters
+    post_cnn_transformer_layers = int(cfg.get("post_cnn_transformer_layers", 3))
+    engineered_mlp_hidden = int(cfg.get("engineered_mlp_hidden", 256))
+    engineered_mlp_output = int(cfg.get("engineered_mlp_output", 128))
+    fusion_hidden = int(cfg.get("fusion_hidden", 256))
+    
     model = GeneWhispererStage1(
         vocab_size=len(vocab.itos),
         kmer=vocab.k,
@@ -44,19 +61,35 @@ def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneW
         num_heads=transformer_heads,
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
-        use_positional_bias=bool(cfg.get("use_positional_bias", True)),
+        use_alibi=bool(cfg.get("use_alibi", True)),
         pad_token_id=vocab.pad_id,
-        engineered_dim=int(cfg.get("stage1_engineered_dim", 192)),
+        engineered_dim=int(cfg.get("stage1_engineered_dim", 208)),
         use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
+        use_attention_pool=bool(cfg.get("use_attention_pool", True)),
+        # TCN parameters
+        use_tcn=use_tcn,
+        tcn_hidden=tcn_hidden,
+        tcn_levels=tcn_levels,
+        tcn_kernel=tcn_kernel,
+        multiscale_channels=multiscale_channels,
+        multiscale_kernels=multiscale_kernels,
+        lstm_hidden=lstm_hidden,
+        # V3 architecture parameters
+        post_cnn_transformer_layers=post_cnn_transformer_layers,
+        engineered_mlp_hidden=engineered_mlp_hidden,
+        engineered_mlp_output=engineered_mlp_output,
+        fusion_hidden=fusion_hidden,
     ).to(device)
     return model
 
 
 def compute_engineered_features(sequence: str) -> torch.Tensor:
-    tnc = compute_tnc(sequence)
-    pstnp = compute_pstnp(sequence)
-    eiip = compute_eiip(sequence)
-    return torch.cat([tnc, pstnp, eiip], dim=0)
+    """Compute engineered features: TNC(64) + PSTNP(64) + PseEIIP(64) + CKSNAP(16) = 208."""
+    tnc = compute_tnc(sequence)        # 64-dim
+    pstnp = compute_pstnp(sequence)    # 64-dim
+    pseeiip = compute_pseeiip(sequence)  # 64-dim
+    cksnap = compute_cksnap(sequence)  # 16-dim
+    return torch.cat([tnc, pstnp, pseeiip, cksnap], dim=0)
 
 
 def prepare_inputs(sequence: str, vocab: KmerVocabulary, max_bp_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -131,7 +164,7 @@ def main() -> None:
     if not models:
         raise RuntimeError("No models loaded for ensemble inference")
 
-    ensemble = Stage1Ensemble(models).to(device)
+    ensemble = MultiScaleEnsemble(models).to(device)
     with torch.no_grad():
         outputs = ensemble(batch_inputs)
     prob = outputs.squeeze().item()

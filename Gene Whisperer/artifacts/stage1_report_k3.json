@@ -1,23 +1,23 @@
 {
   "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config.yaml",
-  "best_epoch": 55,
+  "best_epoch": 64,
   "train_metrics": {
-    "accuracy": 0.6809611829944547,
-    "precision": 0.6912856584603361,
-    "recall": 0.6539741219963031,
-    "f1": 0.672112462006079,
-    "mcc": 0.36245069780011496,
-    "specificity": 0.7079482439926063,
-    "loss": 0.061992123035813876
+    "accuracy": 0.6959334565619224,
+    "precision": 0.7057453416149069,
+    "recall": 0.6720887245841035,
+    "f1": 0.6885059647793978,
+    "mcc": 0.39231328316365827,
+    "specificity": 0.7197781885397412,
+    "loss": 0.0632088415944422
   },
   "val_metrics": {
-    "accuracy": 0.8220088626292467,
-    "precision": 0.841692789968652,
-    "recall": 0.793205317577548,
-    "f1": 0.8167300380228136,
-    "mcc": 0.6450890034870557,
-    "specificity": 0.8508124076809453,
-    "loss": 0.057031014689314485
+    "accuracy": 0.8190546528803545,
+    "precision": 0.8439490445859873,
+    "recall": 0.7828655834564254,
+    "f1": 0.8122605363984674,
+    "mcc": 0.6397872994974187,
+    "specificity": 0.8552437223042836,
+    "loss": 0.05801049079553415
   },
   "class_balance": {
     "total": 5410,
@@ -28,11 +28,29 @@
   "device": "mps",
   "seed": 1337,
   "model_params": {
-    "total": 4171969,
-    "trainable": 4171969,
+    "total": 6237153,
+    "trainable": 6237153,
     "embedding_dim": 192,
-    "layers": 8,
+    "layers": 6,
     "heads": 8,
     "kmer": 3
+  },
+  "architecture_v3": {
+    "order": "Embedding \u2192 CNN/TCN \u2192 Transformer \u2192 Pool \u2192 Fusion \u2192 Classifier",
+    "use_tcn": true,
+    "tcn_hidden": 256,
+    "tcn_levels": 4,
+    "multiscale_kernels": [
+      3,
+      5,
+      7,
+      9,
+      15
+    ],
+    "post_cnn_transformer_layers": 3,
+    "engineered_mlp_hidden": 256,
+    "engineered_mlp_output": 128,
+    "fusion_hidden": 256,
+    "use_attention_fusion": true
   }
 }
