@@ -1,4 +1,4 @@
-import pandas as pd
+import pandas as pd  # pyright: ignore[reportMissingImports]
 
 def clean_file(path, out_path):
     print(f"Cleaning {path} → {out_path}")
@@ -20,6 +20,6 @@ def clean_file(path, out_path):
     df.to_csv(out_path, sep="\t", index=False)
     print("Done.\n")
 
-clean_file("stage1_train.tsv", "stage1_train.cleaned.tsv")
-clean_file("stage1_val.tsv", "stage1_val.cleaned.tsv")
+clean_file("stage2_train.tsv", "stage2_train.cleaned.tsv")
+clean_file("stage2_val.tsv", "stage2_val.cleaned.tsv")
 print("All cleaned!")

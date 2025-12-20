@@ -15,9 +15,9 @@ import math
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import torch  # pyright: ignore[reportMissingImports]
+import torch.nn as nn  # pyright: ignore[reportMissingImports]
+import torch.nn.functional as F  # pyright: ignore[reportMissingImports]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -963,7 +963,13 @@ class PostCNNTransformerAdapter(nn.Module):
             self.alibi = None
         
         # Linearly increasing stochastic depth
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, num_layers)]
+        if num_layers < 0:
+            raise ValueError(f"num_layers must be >= 0, got {num_layers}")
+        dpr = (
+            [x.item() for x in torch.linspace(0, drop_path_rate, num_layers)]
+            if num_layers > 0
+            else []
+        )
         self.layers = nn.ModuleList([
             PreNormTransformerLayer(
                 d_model=transformer_dim,
@@ -1020,6 +1026,9 @@ class PostCNNTransformerAdapter(nn.Module):
         Returns:
             (B, L, input_dim) contextualized features
         """
+        if len(self.layers) == 0:
+            return x
+        
         B, L, D = x.shape
         
         # Project to transformer dimension
@@ -1343,5 +1352,4 @@ class MultiScaleEnsemble(nn.Module):
         
         stacked = torch.stack(outputs, dim=0)
         return stacked.mean(dim=0)
-
 

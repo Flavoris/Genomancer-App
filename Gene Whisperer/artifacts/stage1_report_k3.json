@@ -1,41 +1,45 @@
 {
-  "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config.yaml",
-  "best_epoch": 64,
+  "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config_smoke.yaml",
+  "best_epoch": 1,
   "train_metrics": {
-    "accuracy": 0.6959334565619224,
-    "precision": 0.7057453416149069,
-    "recall": 0.6720887245841035,
-    "f1": 0.6885059647793978,
-    "mcc": 0.39231328316365827,
-    "specificity": 0.7197781885397412,
-    "loss": 0.0632088415944422
+    "accuracy": 0.484375,
+    "precision": 0.3870967741935484,
+    "recall": 0.46153846153846156,
+    "f1": 0.42105263157894735,
+    "mcc": -0.03779786830012622,
+    "roc_auc": 0.41700404858299595,
+    "specificity": 0.5,
+    "loss": 0.10469318926334381,
+    "optimizer_steps": 0
   },
   "val_metrics": {
-    "accuracy": 0.8190546528803545,
-    "precision": 0.8439490445859873,
-    "recall": 0.7828655834564254,
-    "f1": 0.8122605363984674,
-    "mcc": 0.6397872994974187,
-    "specificity": 0.8552437223042836,
-    "loss": 0.05801049079553415
+    "accuracy": 0.546875,
+    "precision": 0.6285714285714286,
+    "recall": 0.5789473684210527,
+    "f1": 0.6027397260273972,
+    "mcc": 0.0778902520624173,
+    "roc_auc": 0.5506072874493927,
+    "specificity": 0.5,
+    "loss": 0.0872015506029129,
+    "optimizer_steps": 0
   },
   "class_balance": {
-    "total": 5410,
-    "positive": 2705,
-    "negative": 2705,
-    "positive_ratio": 0.5
+    "total": 64,
+    "positive": 26,
+    "negative": 38,
+    "positive_ratio": 0.40625
   },
-  "device": "mps",
+  "device": "cpu",
   "seed": 1337,
   "model_params": {
-    "total": 6237153,
-    "trainable": 6237153,
-    "embedding_dim": 192,
+    "total": 11265057,
+    "trainable": 11265057,
+    "embedding_dim": 256,
     "layers": 6,
     "heads": 8,
     "kmer": 3
   },
-  "architecture_v3": {
+  "architecture_v4": {
     "order": "Embedding \u2192 CNN/TCN \u2192 Transformer \u2192 Pool \u2192 Fusion \u2192 Classifier",
     "use_tcn": true,
     "tcn_hidden": 256,
@@ -52,5 +56,16 @@
     "engineered_mlp_output": 128,
     "fusion_hidden": 256,
     "use_attention_fusion": true
+  },
+  "training_enhancements": {
+    "layer_wise_lr_decay": 0.8,
+    "label_smoothing": 0.05,
+    "mixup_alpha": 0.2,
+    "use_swa": true,
+    "swa_start_epoch": 60,
+    "swa_lr": 5e-05,
+    "drop_path_rate": 0.1,
+    "ablation_max_steps_stage1": 5,
+    "ablation_disable_wandb": false
   }
 }

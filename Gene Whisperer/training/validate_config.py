@@ -104,9 +104,11 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     
     # MLM pretraining
     "stage1_load_mlm_weights": bool,
+    "stage2_load_mlm_weights": bool,
     "stage1_freeze_layers": int,
     "stage1_unfreeze_epoch": (int, type(None)),  # Can be null
     "mlm_encoder_checkpoint": str,
+    "include_reverse_complements": bool,
     "mlm_fasta_path": str,
     "mlm_window_size": int,
     "mlm_stride": int,
@@ -328,4 +330,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

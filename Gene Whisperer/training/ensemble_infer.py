@@ -5,7 +5,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
 import yaml
@@ -83,18 +83,29 @@ def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneW
     return model
 
 
-def compute_engineered_features(sequence: str) -> torch.Tensor:
+def compute_engineered_features(sequence: str, cfg: Optional[Dict] = None) -> torch.Tensor:
     """Compute engineered features: TNC(64) + PSTNP(64) + PseEIIP(64) + CKSNAP(16) = 208."""
     tnc = compute_tnc(sequence)        # 64-dim
     pstnp = compute_pstnp(sequence)    # 64-dim
     pseeiip = compute_pseeiip(sequence)  # 64-dim
     cksnap = compute_cksnap(sequence)  # 16-dim
+    if cfg is not None:
+        if not bool(cfg.get("stage1_feature_enable_tnc", True)):
+            tnc = torch.zeros_like(tnc)
+        if not bool(cfg.get("stage1_feature_enable_pstnp", True)):
+            pstnp = torch.zeros_like(pstnp)
+        if not bool(cfg.get("stage1_feature_enable_pseeiip", True)):
+            pseeiip = torch.zeros_like(pseeiip)
+        if not bool(cfg.get("stage1_feature_enable_cksnap", True)):
+            cksnap = torch.zeros_like(cksnap)
     return torch.cat([tnc, pstnp, pseeiip, cksnap], dim=0)
 
 
-def prepare_inputs(sequence: str, vocab: KmerVocabulary, max_bp_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
+def prepare_inputs(
+    sequence: str, vocab: KmerVocabulary, max_bp_len: int, cfg: Optional[Dict] = None
+) -> Tuple[torch.Tensor, torch.Tensor]:
     tokens = vocab.tokenize(sequence, max_bp_len)
-    engineered = compute_engineered_features(sequence)
+    engineered = compute_engineered_features(sequence, cfg)
     return tokens.unsqueeze(0), engineered.unsqueeze(0)
 
 
@@ -155,7 +166,7 @@ def main() -> None:
         vocab = load_vocab(vocab_path)
         model = build_model(cfg, vocab, device)
         load_checkpoint(model, checkpoint_path, device)
-        tokens, engineered = prepare_inputs(sequence, vocab, max_bp_len)
+        tokens, engineered = prepare_inputs(sequence, vocab, max_bp_len, cfg)
         tokens = tokens.to(device)
         engineered = engineered.to(device)
         models.append(model)
