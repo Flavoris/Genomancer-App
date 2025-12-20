@@ -23,6 +23,9 @@ if not LOGGER.handlers:
     LOGGER.addHandler(handler)
 LOGGER.setLevel(logging.INFO)
 
+# Note: Random seeding is now handled by seed_utils.set_global_seed()
+# The GENE_WHISPERER_SEED environment variable is set by seed_utils when called
+# For backwards compatibility, we still check the env var and apply it if present
 RANDOM_SEED = int(os.environ.get("GENE_WHISPERER_SEED", 1337))
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
@@ -334,6 +337,28 @@ def _split_dataframe(df: pd.DataFrame, train_ratio: float) -> Tuple[pd.DataFrame
     return train_df, val_df
 
 
+def _maybe_ablation_subsample(
+    df: pd.DataFrame,
+    max_samples: Any,
+    seed: int,
+    label: str,
+) -> pd.DataFrame:
+    if max_samples is None:
+        return df
+    try:
+        limit = int(max_samples)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} ablation limit must be an int, got {max_samples!r}") from exc
+    if limit < 0:
+        raise ValueError(f"{label} ablation limit must be >= 0, got {limit}")
+    if len(df) <= limit:
+        return df
+    original_len = len(df)
+    df = df.sample(n=limit, random_state=seed).reset_index(drop=True)
+    LOGGER.info("Ablation subsample %s: %d -> %d (seed=%d)", label, original_len, len(df), seed)
+    return df
+
+
 def _maybe_sampler(labels: Sequence[float], imbalance_threshold: float = 0.2) -> Optional[WeightedRandomSampler]:
     total = len(labels)
     if total == 0:
@@ -416,6 +441,10 @@ class PromoterDatasetStage1(Dataset):
         max_bp_len: int,
         vocab: KmerVocabulary,
         use_engineered_features: bool = True,
+        feature_enable_tnc: bool = True,
+        feature_enable_pstnp: bool = True,
+        feature_enable_pseeiip: bool = True,
+        feature_enable_cksnap: bool = True,
         reverse_complement_prob: float = 0.5,
         base_substitution_prob: float = 0.0,  # Set > 0 for training augmentation
         base_indel_prob: float = 0.0,  # Usually 0 for promoter prediction
@@ -427,6 +456,10 @@ class PromoterDatasetStage1(Dataset):
         self.max_bp_len = max_bp_len
         self.vocab = vocab
         self.use_engineered_features = use_engineered_features
+        self.feature_enable_tnc = bool(feature_enable_tnc)
+        self.feature_enable_pstnp = bool(feature_enable_pstnp)
+        self.feature_enable_pseeiip = bool(feature_enable_pseeiip)
+        self.feature_enable_cksnap = bool(feature_enable_cksnap)
         self.reverse_complement_prob = max(0.0, min(1.0, reverse_complement_prob))
         self.base_substitution_prob = max(0.0, min(0.2, base_substitution_prob))
         self.base_indel_prob = max(0.0, min(0.1, base_indel_prob))
@@ -442,6 +475,14 @@ class PromoterDatasetStage1(Dataset):
         pstnp = compute_pstnp(sequence)       # 64-dim
         pseeiip = compute_pseeiip(sequence)   # 64-dim
         cksnap = compute_cksnap(sequence)     # 16-dim
+        if not self.feature_enable_tnc:
+            tnc = torch.zeros_like(tnc)
+        if not self.feature_enable_pstnp:
+            pstnp = torch.zeros_like(pstnp)
+        if not self.feature_enable_pseeiip:
+            pseeiip = torch.zeros_like(pseeiip)
+        if not self.feature_enable_cksnap:
+            cksnap = torch.zeros_like(cksnap)
         return torch.cat([tnc, pstnp, pseeiip, cksnap], dim=0)
 
     def _augment_sequence(self, sequence: str) -> str:
@@ -528,9 +569,30 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     # pin_memory only works on CUDA, not MPS
     pin_memory = bool(_cfg_value(cfg, "pin_memory", False)) and torch.cuda.is_available()
     stage1_use_engineered = bool(_cfg_value(cfg, "stage1_use_engineered_features", True))
+    stage1_feature_enable_tnc = bool(_cfg_value(cfg, "stage1_feature_enable_tnc", True))
+    stage1_feature_enable_pstnp = bool(_cfg_value(cfg, "stage1_feature_enable_pstnp", True))
+    stage1_feature_enable_pseeiip = bool(_cfg_value(cfg, "stage1_feature_enable_pseeiip", True))
+    stage1_feature_enable_cksnap = bool(_cfg_value(cfg, "stage1_feature_enable_cksnap", True))
     stage1_rc_prob = float(_cfg_value(cfg, "stage1_reverse_complement_prob", 0.5))
     kmer = int(_cfg_value(cfg, "kmer", 3))
     vocab_cache_dir = Path(_cfg_value(cfg, "vocab_cache_dir", "../artifacts/vocabs")).resolve()
+    ablation_seed = int(_cfg_value(cfg, "ablation_seed", 1337))
+    ablation_cfg = _cfg_value(cfg, "ablation")
+    if not isinstance(ablation_cfg, dict):
+        ablation_cfg = {}
+    ablation_enabled = bool(ablation_cfg.get("enabled", False))
+    stage1_train_limit = ablation_cfg.get("stage1_max_train_samples") if ablation_enabled else None
+    stage1_val_limit = ablation_cfg.get("stage1_max_val_samples") if ablation_enabled else None
+    if stage1_train_limit is None:
+        stage1_train_limit = _cfg_value(cfg, "ablation_max_train_samples_stage1")
+    if stage1_val_limit is None:
+        stage1_val_limit = _cfg_value(cfg, "ablation_max_val_samples_stage1")
+    stage2_train_limit = ablation_cfg.get("stage2_max_train_samples") if ablation_enabled else None
+    stage2_val_limit = ablation_cfg.get("stage2_max_val_samples") if ablation_enabled else None
+    if stage2_train_limit is None:
+        stage2_train_limit = _cfg_value(cfg, "ablation_max_train_samples_stage2")
+    if stage2_val_limit is None:
+        stage2_val_limit = _cfg_value(cfg, "ablation_max_val_samples_stage2")
 
     stage1_train_df = _load_dataframe(_cfg_value(cfg, "stage1_train"), delimiter)
     if stage1_train_df is None:
@@ -538,6 +600,18 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     stage1_val_df = _load_dataframe(_cfg_value(cfg, "stage1_val"), delimiter)
     if stage1_val_df is None:
         stage1_train_df, stage1_val_df = _split_dataframe(stage1_train_df, train_val_split)
+    stage1_train_df = _maybe_ablation_subsample(
+        stage1_train_df,
+        stage1_train_limit,
+        ablation_seed,
+        "stage1 train",
+    )
+    stage1_val_df = _maybe_ablation_subsample(
+        stage1_val_df,
+        stage1_val_limit,
+        ablation_seed,
+        "stage1 val",
+    )
     stage1_vocab = _get_or_create_vocab(stage1_train_df["sequence"].astype(str).tolist(), kmer, vocab_cache_dir)
 
     stage1_train_ds = PromoterDatasetStage1(
@@ -545,6 +619,10 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         max_bp_len,
         vocab=stage1_vocab,
         use_engineered_features=stage1_use_engineered,
+        feature_enable_tnc=stage1_feature_enable_tnc,
+        feature_enable_pstnp=stage1_feature_enable_pstnp,
+        feature_enable_pseeiip=stage1_feature_enable_pseeiip,
+        feature_enable_cksnap=stage1_feature_enable_cksnap,
         reverse_complement_prob=stage1_rc_prob,
     )
     stage1_val_ds = PromoterDatasetStage1(
@@ -552,6 +630,10 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         max_bp_len,
         vocab=stage1_vocab,
         use_engineered_features=stage1_use_engineered,
+        feature_enable_tnc=stage1_feature_enable_tnc,
+        feature_enable_pstnp=stage1_feature_enable_pstnp,
+        feature_enable_pseeiip=stage1_feature_enable_pseeiip,
+        feature_enable_cksnap=stage1_feature_enable_cksnap,
         reverse_complement_prob=0.0,
     )
     stage1_sampler = _maybe_sampler(stage1_train_ds.labels)
@@ -577,6 +659,18 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     stage2_val_df = _load_dataframe(_cfg_value(cfg, "stage2_val"), delimiter)
     if stage2_val_df is None:
         stage2_train_df, stage2_val_df = _split_dataframe(stage2_train_df, train_val_split)
+    stage2_train_df = _maybe_ablation_subsample(
+        stage2_train_df,
+        stage2_train_limit,
+        ablation_seed,
+        "stage2 train",
+    )
+    stage2_val_df = _maybe_ablation_subsample(
+        stage2_val_df,
+        stage2_val_limit,
+        ablation_seed,
+        "stage2 val",
+    )
     stage2_test_df = _load_dataframe(_cfg_value(cfg, "stage2_test"), delimiter)
 
     pos_strength = float(_cfg_value(cfg, "stage2_strength_positive", 1))
@@ -626,3 +720,43 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
             "test": stage2_test_loader,
         },
     }
+
+
+if __name__ == "__main__":
+    try:
+        import yaml  # type: ignore
+    except ImportError as exc:
+        raise SystemExit("PyYAML is required for this sanity check (pip install pyyaml)") from exc
+
+    here = Path(__file__).resolve().parent
+    config_path = here / "config.yaml"
+    if not config_path.exists():
+        raise SystemExit(f"Config file not found: {config_path}")
+
+    os.chdir(here)
+    with config_path.open("r", encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle) or {}
+
+    limit_keys = (
+        "ablation_max_train_samples_stage1",
+        "ablation_max_val_samples_stage1",
+        "ablation_max_train_samples_stage2",
+        "ablation_max_val_samples_stage2",
+    )
+    if not any(_cfg_value(cfg, key) is not None for key in limit_keys):
+        print("No ablation_max_* limits set; add them to config.yaml to sanity-check subsampling.")
+        raise SystemExit(0)
+
+    cfg_no_limits = dict(cfg)
+    for key in limit_keys:
+        cfg_no_limits.pop(key, None)
+
+    original = build_dataloaders(cfg_no_limits)
+    limited = build_dataloaders(cfg)
+
+    for stage in ("stage1", "stage2"):
+        orig_train = len(original[stage]["train"].dataset)
+        orig_val = len(original[stage]["val"].dataset)
+        lim_train = len(limited[stage]["train"].dataset)
+        lim_val = len(limited[stage]["val"].dataset)
+        print(f"{stage}: train {orig_train} -> {lim_train}, val {orig_val} -> {lim_val}")

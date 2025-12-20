@@ -1,16 +1,27 @@
-verify pad/mask ids end-to-end
+Add a “single command” smoke test to catch broken checkpoint loading
 
-“Trace pad_token_id and mask_id through: dataset.py -> vocab -> collators -> model forward. Add assertions:
+Create scripts/smoke_ablation_pipeline.py that:
 
-- pad_token_id is consistent across train and val
+loads config
 
-- mask token exists in vocab and vocab.mask_id is valid
+turns on ablation enabled
 
-- padding mask in model uses pad_token_id correctly.
-  Add unit tests for KmerVocabulary.tokenize() and _sanitize_sequence().”
+sets tiny budgets: pretrain_max_steps=5, stage1_max_steps=5, stage2_max_steps=5, sample limits=64
 
-Acceptance:
+runs baseline end-to-end: pretrain → stage1(load ckpt) → stage2(load ckpt)
 
-- Unit tests pass.
+asserts:
 
-- Padding mask aligns with tokenization output.
+encoder checkpoint exists on disk
+
+stage1_auc/mcc are finite numbers
+
+stage2_auc/mcc are finite numbers
+
+prints “SMOKE OK” on success
+
+This should run in under a couple minutes.
+
+Checkpoint:
+
+python scripts/smoke_ablation_pipeline.py

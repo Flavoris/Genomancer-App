@@ -22,6 +22,7 @@ import logging
 import math
 import os
 import random
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,20 +39,17 @@ from tqdm.auto import tqdm
 
 from dataset import build_dataloaders
 from model import GeneWhispererStage1, DNAEncoder
+from numerics import cap_model_param_norm_
+from seed_utils import set_global_seed
 
 LOGGER = logging.getLogger("gene_whisperer.stage1")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
 
+# Note: set_seed is now a wrapper for set_global_seed from seed_utils
 def set_seed(seed: int) -> None:
-    """Set all random seeds for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    if hasattr(torch.backends, "cudnn"):
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    """Set all random seeds for reproducibility (wrapper for set_global_seed)."""
+    set_global_seed(seed)
 
 
 def load_config(path: Path) -> Dict:
@@ -352,6 +350,37 @@ def mixup_data(
     return tokens, mixed_engineered, labels, labels[index], lam
 
 
+def _binary_roc_auc(probabilities: np.ndarray, targets: np.ndarray) -> float:
+    """Compute ROC AUC for binary targets without external dependencies."""
+    probs = np.asarray(probabilities, dtype=np.float64).reshape(-1)
+    y = np.asarray(targets, dtype=np.float64).reshape(-1)
+    y = (y >= 0.5).astype(np.int32)
+
+    n_pos = int(y.sum())
+    n_neg = int(len(y) - n_pos)
+    if n_pos == 0 or n_neg == 0:
+        return 0.5
+
+    order = np.argsort(probs, kind="mergesort")  # stable for deterministic tie handling
+    sorted_probs = probs[order]
+    sorted_y = y[order]
+
+    n = len(sorted_probs)
+    ranks = np.empty(n, dtype=np.float64)
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and sorted_probs[j + 1] == sorted_probs[i]:
+            j += 1
+        avg_rank = (i + j + 2) / 2.0  # 1-based ranks
+        ranks[i : j + 1] = avg_rank
+        i = j + 1
+
+    rank_sum_pos = float(ranks[sorted_y == 1].sum())
+    auc = (rank_sum_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+    return float(auc)
+
+
 def calculate_metrics(probabilities: torch.Tensor, labels: torch.Tensor) -> Dict[str, float]:
     """Calculate classification metrics."""
     probs = probabilities.detach().cpu().reshape(-1)
@@ -377,6 +406,8 @@ def calculate_metrics(probabilities: torch.Tensor, labels: torch.Tensor) -> Dict
     
     # Specificity (true negative rate)
     specificity = tn / (tn + fp) if (tn + fp) else 0.0
+
+    roc_auc = _binary_roc_auc(probs.numpy(), targets.numpy())
     
     return {
         "accuracy": float(accuracy),
@@ -384,6 +415,7 @@ def calculate_metrics(probabilities: torch.Tensor, labels: torch.Tensor) -> Dict
         "recall": float(recall),
         "f1": float(f1),
         "mcc": float(mcc),
+        "roc_auc": float(roc_auc),
         "specificity": float(specificity),
     }
 
@@ -397,15 +429,37 @@ def run_epoch(
     scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
     desc: str = "Train",
     grad_accum_steps: int = 1,
+    max_optimizer_steps: Optional[int] = None,
     grad_clip_norm: float = 1.0,
     use_mixup: bool = False,
     mixup_alpha: float = 0.2,
     use_amp: bool = False,
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    param_norm_warn: float = 150.0,
+    param_norm_cap: float = 200.0,
 ) -> Dict[str, float]:
     """Run one epoch of training or evaluation."""
     is_train = optimizer is not None
     model.train(is_train)
+
+    use_cuda_amp = use_amp and device.type == "cuda"
+    if is_train and use_cuda_amp and scaler is None:
+        raise ValueError("use_amp=True on CUDA requires GradScaler (fp16 without scaling is unsafe)")
+    if is_train and use_cuda_amp:
+        LOGGER.info("%s: GradScaler scale = %.0f", desc, scaler.get_scale())
+
+    if is_train and max_optimizer_steps is not None and max_optimizer_steps <= 0:
+        return {
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "mcc": 0.0,
+            "roc_auc": 0.5,
+            "specificity": 0.0,
+            "loss": 0.0,
+            "optimizer_steps": 0,
+        }
     
     total_loss = 0.0
     total_samples = 0
@@ -414,6 +468,8 @@ def run_epoch(
     
     optimizer_step_count = 0
     accumulated_loss = 0.0
+    prev_param_norm: Optional[float] = None
+    hit_max_steps = False
     
     iterable = tqdm(loader, desc=desc, leave=False)
     for batch_idx, (tokens, engineered, labels) in enumerate(iterable):
@@ -431,30 +487,25 @@ def run_epoch(
         
         # Forward pass
         with torch.set_grad_enabled(is_train):
-            # Automatic mixed precision
-            if use_amp and device.type == "cuda":
+            # Automatic mixed precision: forward under autocast, loss outside autocast
+            if use_cuda_amp:
                 with torch.cuda.amp.autocast():
                     probs = model(tokens, engineered)
-                    probs = probs.clamp(min=1e-6, max=1 - 1e-6)
-                    
-                    if use_mixup and lam < 1.0:
-                        loss = lam * criterion(probs, labels) + (1 - lam) * criterion(probs, labels_b)
-                    else:
-                        loss = criterion(probs, labels)
             else:
                 probs = model(tokens, engineered)
-                probs = probs.clamp(min=1e-6, max=1 - 1e-6)
-                
-                if use_mixup and lam < 1.0:
-                    loss = lam * criterion(probs, labels) + (1 - lam) * criterion(probs, labels_b)
-                else:
-                    loss = criterion(probs, labels)
+
+            probs = probs.float().clamp(min=1e-6, max=1 - 1e-6)
+
+            if use_mixup and lam < 1.0:
+                loss = lam * criterion(probs, labels) + (1 - lam) * criterion(probs, labels_b)
+            else:
+                loss = criterion(probs, labels)
             
             # Backward pass with gradient accumulation
             if is_train:
                 loss_scaled = loss / grad_accum_steps
                 
-                if use_amp and scaler is not None:
+                if use_cuda_amp:
                     scaler.scale(loss_scaled).backward()
                 else:
                     loss_scaled.backward()
@@ -464,15 +515,49 @@ def run_epoch(
                 # Optimizer step every grad_accum_steps
                 if (batch_idx + 1) % grad_accum_steps == 0:
                     if grad_clip_norm > 0:
-                        if use_amp and scaler is not None:
+                        if use_cuda_amp:
                             scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+                        # Gradient clipping - returns the total norm BEFORE clipping
+                        unclipped_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+                        # After clipping, effective norm is min(unclipped, max_norm)
+                        clipped_grad_norm = min(unclipped_grad_norm.item(), grad_clip_norm)
+                        
+                        # Log gradient norms periodically (every 50 optimizer steps)
+                        if optimizer_step_count % 50 == 0:
+                            LOGGER.debug(
+                                "Step %d: grad_norm (unclipped=%.4f, clipped=%.4f)",
+                                optimizer_step_count, unclipped_grad_norm.item(), clipped_grad_norm
+                            )
                     
-                    if use_amp and scaler is not None:
+                    if use_cuda_amp:
                         scaler.step(optimizer)
                         scaler.update()
                     else:
                         optimizer.step()
+
+                    total_norm, scale = cap_model_param_norm_(model, max_norm=param_norm_cap)
+                    if scale < 1.0:
+                        LOGGER.warning(
+                            "Step %d: param_norm=%.2f exceeded cap=%.2f; scaled params by %.6f",
+                            optimizer_step_count,
+                            total_norm,
+                            param_norm_cap,
+                            scale,
+                        )
+                        prev_param_norm = param_norm_cap
+                    else:
+                        if (
+                            param_norm_warn > 0
+                            and (prev_param_norm is None or prev_param_norm <= param_norm_warn)
+                            and total_norm > param_norm_warn
+                        ):
+                            LOGGER.warning(
+                                "Step %d: param_norm=%.2f exceeded warn=%.2f",
+                                optimizer_step_count,
+                                total_norm,
+                                param_norm_warn,
+                            )
+                        prev_param_norm = total_norm
                     
                     optimizer.zero_grad()
                     
@@ -480,6 +565,8 @@ def run_epoch(
                         scheduler.step()
                     
                     optimizer_step_count += 1
+                    if max_optimizer_steps is not None and optimizer_step_count >= max_optimizer_steps:
+                        hit_max_steps = True
         
         batch_size = labels.size(0)
         total_loss += loss.item() * batch_size
@@ -488,12 +575,29 @@ def run_epoch(
         all_labels.append(labels.detach().cpu())
         
         iterable.set_postfix(loss=loss.item())
+
+        if hit_max_steps:
+            LOGGER.info("%s: reached max optimizer steps (%d); stopping early", desc, max_optimizer_steps)
+            break
     
     avg_loss = total_loss / total_samples if total_samples else 0.0
+    if total_samples == 0 or not all_probs:
+        return {
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "mcc": 0.0,
+            "roc_auc": 0.5,
+            "specificity": 0.0,
+            "loss": float(avg_loss),
+            "optimizer_steps": int(optimizer_step_count),
+        }
     probs_tensor = torch.cat(all_probs, dim=0)
     labels_tensor = torch.cat(all_labels, dim=0)
     metrics = calculate_metrics(probs_tensor, labels_tensor)
     metrics["loss"] = float(avg_loss)
+    metrics["optimizer_steps"] = int(optimizer_step_count)
     
     return metrics
 
@@ -624,6 +728,11 @@ def run_overfit_debug_stage1(
         probs = probs.clamp(min=1e-6, max=1 - 1e-6)
         loss = criterion(probs, labels)
         loss.backward()
+        
+        # Gradient clipping with norm logging
+        unclipped_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        clipped_grad_norm = min(unclipped_grad_norm.item(), 1.0)
+        
         optimizer.step()
         
         # Compute accuracy
@@ -705,23 +814,101 @@ def run_overfit_debug_stage1(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train Gene Whisperer Stage 1")
     parser.add_argument("--config", default="config.yaml", help="Path to YAML config")
-    parser.add_argument("--overfit_debug", action="store_true",
-                        help="Train on 32 samples for 200 steps to verify model can learn")
+    parser.add_argument(
+        "--overfit_debug",
+        action="store_true",
+        help="Train on 32 samples for 200 steps to verify model can learn",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility. Overrides config value.",
+    )
     args = parser.parse_args()
-    
+
     script_dir = Path(__file__).resolve().parent
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = (script_dir / config_path).resolve()
-    
+
     # Allow fallback to original config
     if not config_path.exists():
         fallback = script_dir / "config.yaml"
         if fallback.exists():
             config_path = fallback
             LOGGER.warning("Using fallback config: %s", config_path)
-    
+
     cfg = load_config(config_path)
+
+    overrides: Dict[str, Any] = {"_config_path": str(config_path)}
+    if args.seed is not None:
+        overrides["seed"] = args.seed
+    if args.overfit_debug:
+        overrides["overfit_debug"] = True
+
+    _ = run_stage1_training(cfg, overrides=overrides)
+    return
+
+
+def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
+    """Trains Stage1 and returns best val metrics + timing + params."""
+    start_time = time.perf_counter()
+
+    cfg_run = copy.copy(cfg) if isinstance(cfg, dict) else dict(cfg or {})
+    if overrides:
+        cfg_run.update(overrides)
+
+    if bool(cfg_run.get("ablation_disable_wandb", False)):
+        os.environ["WANDB_MODE"] = "disabled"
+        os.environ["WANDB_DISABLED"] = "true"
+
+    script_dir = Path(__file__).resolve().parent
+    config_path_value = cfg_run.get("_config_path") or cfg_run.get("config_path")
+    config_id = str(config_path_value) if config_path_value else "<in-memory>"
+
+    ablation_cfg = cfg_run.get("ablation")
+    if not isinstance(ablation_cfg, dict):
+        ablation_cfg = {}
+    ablation_enabled = bool(ablation_cfg.get("enabled", False))
+
+    epochs = int(cfg_run.get("epochs", 120))
+    if ablation_enabled and ablation_cfg.get("stage1_epochs") is not None:
+        epochs_raw = ablation_cfg.get("stage1_epochs")
+        try:
+            epochs = int(epochs_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"ablation.stage1_epochs must be an int, got {epochs_raw!r}") from exc
+        if epochs <= 0:
+            raise ValueError(f"ablation.stage1_epochs must be > 0, got {epochs}")
+
+    ablation_max_steps: Optional[int] = None
+    if ablation_enabled and ablation_cfg.get("stage1_max_steps") is not None:
+        max_steps_raw = ablation_cfg.get("stage1_max_steps")
+        try:
+            max_steps_int = int(max_steps_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"ablation.stage1_max_steps must be an int, got {max_steps_raw!r}") from exc
+        if max_steps_int < 0:
+            raise ValueError(f"ablation.stage1_max_steps must be >= 0, got {max_steps_int}")
+        if max_steps_int > 0:
+            ablation_max_steps = max_steps_int
+    else:
+        ablation_max_steps_raw = cfg_run.get("ablation_max_steps_stage1")
+        if ablation_max_steps_raw is not None:
+            try:
+                max_steps_int = int(ablation_max_steps_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"ablation_max_steps_stage1 must be an int, got {ablation_max_steps_raw!r}"
+                ) from exc
+            if max_steps_int < 0:
+                raise ValueError(f"ablation_max_steps_stage1 must be >= 0, got {max_steps_int}")
+            if max_steps_int > 0:
+                ablation_max_steps = max_steps_int
+
+    stage1_max_train_samples = ablation_cfg.get("stage1_max_train_samples") if ablation_enabled else None
+    stage1_max_val_samples = ablation_cfg.get("stage1_max_val_samples") if ablation_enabled else None
     
     # =========================================================================
     # Log resolved hyperparameters to runs/<timestamp>/resolved_config.json
@@ -733,64 +920,71 @@ def main() -> None:
     resolved_config: Dict[str, Any] = {
         "script": "train_stage1.py",
         "timestamp": timestamp,
-        "config_path": str(config_path),
+        "config_path": config_id,
+        # Ablations / debugging
+        "ablation_enabled": ablation_enabled,
+        "ablation_max_steps_stage1": ablation_max_steps,
+        "ablation_stage1_epochs": epochs if ablation_enabled else None,
+        "ablation_stage1_max_train_samples": stage1_max_train_samples if ablation_enabled else None,
+        "ablation_stage1_max_val_samples": stage1_max_val_samples if ablation_enabled else None,
+        "ablation_disable_wandb": bool(cfg_run.get("ablation_disable_wandb", False)),
         # Model architecture
-        "embedding_dim": int(cfg.get("embedding_dim", 256)),
-        "transformer_layers": int(cfg.get("transformer_layers", 6)),
-        "transformer_heads": int(cfg.get("transformer_heads", 8)),
-        "transformer_ff_dim": int(cfg.get("transformer_ff_dim", 1024)),
-        "transformer_dropout": float(cfg.get("transformer_dropout", 0.15)),
+        "embedding_dim": int(cfg_run.get("embedding_dim", 256)),
+        "transformer_layers": int(cfg_run.get("transformer_layers", 6)),
+        "transformer_heads": int(cfg_run.get("transformer_heads", 8)),
+        "transformer_ff_dim": int(cfg_run.get("transformer_ff_dim", 1024)),
+        "transformer_dropout": float(cfg_run.get("transformer_dropout", 0.15)),
         # Optimizer
-        "lr": float(cfg.get("lr", 2e-4)),
-        "weight_decay": float(cfg.get("weight_decay", 0.02)),
+        "lr": float(cfg_run.get("lr", 2e-4)),
+        "weight_decay": float(cfg_run.get("weight_decay", 0.02)),
         # Data
-        "batch_size": int(cfg.get("batch_size", 32)),
-        "max_bp_len": int(cfg.get("max_bp_len", 81)),
-        "kmer": int(cfg.get("kmer", 3)),
+        "batch_size": int(cfg_run.get("batch_size", 32)),
+        "max_bp_len": int(cfg_run.get("max_bp_len", 81)),
+        "kmer": int(cfg_run.get("kmer", 3)),
         # Engineered features
-        "stage1_use_engineered_features": bool(cfg.get("stage1_use_engineered_features", True)),
-        "stage1_engineered_dim": int(cfg.get("stage1_engineered_dim", 208)),
-        "engineered_mlp_hidden": int(cfg.get("engineered_mlp_hidden", 256)),
-        "engineered_mlp_output": int(cfg.get("engineered_mlp_output", 128)),
+        "stage1_use_engineered_features": bool(cfg_run.get("stage1_use_engineered_features", True)),
+        "stage1_engineered_dim": int(cfg_run.get("stage1_engineered_dim", 208)),
+        "engineered_mlp_hidden": int(cfg_run.get("engineered_mlp_hidden", 256)),
+        "engineered_mlp_output": int(cfg_run.get("engineered_mlp_output", 128)),
         # Augmentation
-        "reverse_complement_prob": float(cfg.get("stage1_reverse_complement_prob", 0.5)),
-        "use_mixup": bool(cfg.get("use_mixup", True)),
-        "mixup_alpha": float(cfg.get("mixup_alpha", 0.2)),
+        "reverse_complement_prob": float(cfg_run.get("stage1_reverse_complement_prob", 0.5)),
+        "use_mixup": bool(cfg_run.get("use_mixup", True)),
+        "mixup_alpha": float(cfg_run.get("mixup_alpha", 0.2)),
         # TCN
-        "use_tcn": bool(cfg.get("use_tcn", True)),
-        "tcn_hidden": int(cfg.get("tcn_hidden", 256)),
-        "tcn_levels": int(cfg.get("tcn_levels", 4)),
-        "tcn_kernel": int(cfg.get("tcn_kernel", 3)),
-        "multiscale_channels": int(cfg.get("multiscale_channels", 64)),
-        "multiscale_kernels": cfg.get("multiscale_kernels", [3, 5, 7, 9, 15]),
-        "lstm_hidden": int(cfg.get("lstm_hidden", 192)),
+        "use_tcn": bool(cfg_run.get("use_tcn", True)),
+        "tcn_hidden": int(cfg_run.get("tcn_hidden", 256)),
+        "tcn_levels": int(cfg_run.get("tcn_levels", 4)),
+        "tcn_kernel": int(cfg_run.get("tcn_kernel", 3)),
+        "multiscale_channels": int(cfg_run.get("multiscale_channels", 64)),
+        "multiscale_kernels": cfg_run.get("multiscale_kernels", [3, 5, 7, 9, 15]),
+        "lstm_hidden": int(cfg_run.get("lstm_hidden", 192)),
         # Training
-        "epochs": int(cfg.get("epochs", 120)),
-        "grad_accum_steps": int(cfg.get("grad_accum_steps", 4)),
-        "grad_clip_norm": float(cfg.get("grad_clip_norm", 1.0)),
-        "warmup_ratio": float(cfg.get("warmup_ratio", 0.15)),
-        "early_stopping_patience": int(cfg.get("early_stopping_patience", 25)),
-        "layer_lr_decay": float(cfg.get("layer_lr_decay", 0.8)),
-        "drop_path_rate": float(cfg.get("drop_path_rate", 0.1)),
+        "epochs": int(epochs),
+        "grad_accum_steps": int(cfg_run.get("grad_accum_steps", 4)),
+        "grad_clip_norm": float(cfg_run.get("grad_clip_norm", 1.0)),
+        "warmup_ratio": float(cfg_run.get("warmup_ratio", 0.15)),
+        "early_stopping_patience": int(cfg_run.get("early_stopping_patience", 25)),
+        "layer_lr_decay": float(cfg_run.get("layer_lr_decay", 0.8)),
+        "drop_path_rate": float(cfg_run.get("drop_path_rate", 0.1)),
         # Loss
-        "stage1_use_focal_loss": bool(cfg.get("stage1_use_focal_loss", True)),
-        "stage1_focal_alpha": float(cfg.get("stage1_focal_alpha", 0.5)),
-        "stage1_focal_gamma": float(cfg.get("stage1_focal_gamma", 2.0)),
-        "label_smoothing": float(cfg.get("label_smoothing", 0.05)),
+        "stage1_use_focal_loss": bool(cfg_run.get("stage1_use_focal_loss", True)),
+        "stage1_focal_alpha": float(cfg_run.get("stage1_focal_alpha", 0.5)),
+        "stage1_focal_gamma": float(cfg_run.get("stage1_focal_gamma", 2.0)),
+        "label_smoothing": float(cfg_run.get("label_smoothing", 0.05)),
         # SWA
-        "use_swa": bool(cfg.get("use_swa", True)),
-        "swa_start_epoch": int(cfg.get("swa_start_epoch", 60)),
-        "swa_lr": float(cfg.get("swa_lr", 5e-5)),
+        "use_swa": bool(cfg_run.get("use_swa", True)),
+        "swa_start_epoch": int(cfg_run.get("swa_start_epoch", 60)),
+        "swa_lr": float(cfg_run.get("swa_lr", 5e-5)),
         # Model options
-        "use_alibi": bool(cfg.get("use_alibi", True)),
-        "use_attention_pool": bool(cfg.get("use_attention_pool", True)),
-        "post_cnn_transformer_layers": int(cfg.get("post_cnn_transformer_layers", 3)),
-        "fusion_hidden": int(cfg.get("fusion_hidden", 256)),
+        "use_alibi": bool(cfg_run.get("use_alibi", True)),
+        "use_attention_pool": bool(cfg_run.get("use_attention_pool", True)),
+        "post_cnn_transformer_layers": int(cfg_run.get("post_cnn_transformer_layers", 3)),
+        "fusion_hidden": int(cfg_run.get("fusion_hidden", 256)),
         # Pretrained weights
-        "stage1_load_mlm_weights": bool(cfg.get("stage1_load_mlm_weights", True)),
-        "stage1_freeze_layers": int(cfg.get("stage1_freeze_layers", 0)),
+        "stage1_load_mlm_weights": bool(cfg_run.get("stage1_load_mlm_weights", True)),
+        "stage1_freeze_layers": int(cfg_run.get("stage1_freeze_layers", 0)),
         # Seed
-        "seed": int(cfg.get("seed", 1337)),
+        "seed": int(cfg_run.get("seed", 1337) or 1337),
     }
     
     resolved_config_path = run_dir / "resolved_config.json"
@@ -798,8 +992,9 @@ def main() -> None:
         json.dump(resolved_config, f, indent=2)
     LOGGER.info("Saved resolved config to %s", resolved_config_path)
     
-    seed = int(cfg.get("seed", 1337))
+    seed = int(cfg_run.get("seed", 1337) or 1337)
     set_seed(seed)
+    LOGGER.info("Using seed: %d", seed)
     
     # Device selection (optimized for M4)
     if torch.cuda.is_available():
@@ -812,16 +1007,16 @@ def main() -> None:
     LOGGER.info("Using device: %s", device)
     
     # Build dataloaders
-    dataloaders = build_dataloaders(cfg)
+    dataloaders = build_dataloaders(cfg_run)
     train_loader = dataloaders["stage1"]["train"]
     val_loader = dataloaders["stage1"]["val"]
     
     # Model configuration (enhanced defaults)
-    embedding_dim = int(cfg.get("embedding_dim", 192))
-    transformer_layers = int(cfg.get("transformer_layers", 6))
-    transformer_heads = int(cfg.get("transformer_heads", 8))
-    transformer_ff_dim = int(cfg.get("transformer_ff_dim", 384))
-    transformer_dropout = float(cfg.get("transformer_dropout", 0.15))
+    embedding_dim = int(cfg_run.get("embedding_dim", 192))
+    transformer_layers = int(cfg_run.get("transformer_layers", 6))
+    transformer_heads = int(cfg_run.get("transformer_heads", 8))
+    transformer_ff_dim = int(cfg_run.get("transformer_ff_dim", 384))
+    transformer_dropout = float(cfg_run.get("transformer_dropout", 0.15))
     
     train_dataset = train_loader.dataset
     stage1_vocab = getattr(train_dataset, "vocab", None)
@@ -832,26 +1027,26 @@ def main() -> None:
     pad_token_id = stage1_vocab.pad_id
     kmer = stage1_vocab.k
     
-    use_alibi = bool(cfg.get("use_alibi", True))
-    use_attention_pool = bool(cfg.get("use_attention_pool", True))
-    use_engineered_features = bool(cfg.get("stage1_use_engineered_features", True))
-    engineered_dim = int(cfg.get("stage1_engineered_dim", 208))
+    use_alibi = bool(cfg_run.get("use_alibi", True))
+    use_attention_pool = bool(cfg_run.get("use_attention_pool", True))
+    use_engineered_features = bool(cfg_run.get("stage1_use_engineered_features", True))
+    engineered_dim = int(cfg_run.get("stage1_engineered_dim", 208))
     
     # TCN configuration
-    use_tcn = bool(cfg.get("use_tcn", True))
-    tcn_hidden = int(cfg.get("tcn_hidden", 256))
-    tcn_levels = int(cfg.get("tcn_levels", 4))
-    tcn_kernel = int(cfg.get("tcn_kernel", 3))
-    multiscale_channels = int(cfg.get("multiscale_channels", 64))
-    multiscale_kernels_cfg = cfg.get("multiscale_kernels", [3, 5, 7, 9, 15])
+    use_tcn = bool(cfg_run.get("use_tcn", True))
+    tcn_hidden = int(cfg_run.get("tcn_hidden", 256))
+    tcn_levels = int(cfg_run.get("tcn_levels", 4))
+    tcn_kernel = int(cfg_run.get("tcn_kernel", 3))
+    multiscale_channels = int(cfg_run.get("multiscale_channels", 64))
+    multiscale_kernels_cfg = cfg_run.get("multiscale_kernels", [3, 5, 7, 9, 15])
     multiscale_kernels = tuple(multiscale_kernels_cfg)
-    lstm_hidden = int(cfg.get("lstm_hidden", 192))
+    lstm_hidden = int(cfg_run.get("lstm_hidden", 192))
     
     # New architecture parameters: post-CNN transformer, engineered MLP, fusion
-    post_cnn_transformer_layers = int(cfg.get("post_cnn_transformer_layers", 3))
-    engineered_mlp_hidden = int(cfg.get("engineered_mlp_hidden", 256))
-    engineered_mlp_output = int(cfg.get("engineered_mlp_output", 128))
-    fusion_hidden = int(cfg.get("fusion_hidden", 256))
+    post_cnn_transformer_layers = int(cfg_run.get("post_cnn_transformer_layers", 3))
+    engineered_mlp_hidden = int(cfg_run.get("engineered_mlp_hidden", 256))
+    engineered_mlp_output = int(cfg_run.get("engineered_mlp_output", 128))
+    fusion_hidden = int(cfg_run.get("fusion_hidden", 256))
     
     model = GeneWhispererStage1(
         vocab_size=vocab_size,
@@ -896,8 +1091,10 @@ def main() -> None:
     LOGGER.info("=" * 60)
     
     # Load pretrained MLM weights if available
-    load_mlm_weights = bool(cfg.get("stage1_load_mlm_weights", False))
-    mlm_checkpoint = cfg.get("mlm_encoder_checkpoint") or cfg.get("mlm_encoder_path")
+    load_mlm_weights = bool(cfg_run.get("stage1_load_mlm_weights", False))
+    mlm_encoder_path = cfg_run.get("mlm_encoder_path")
+    mlm_encoder_checkpoint = cfg_run.get("mlm_encoder_checkpoint")
+    mlm_checkpoint = mlm_encoder_path or mlm_encoder_checkpoint
     if load_mlm_weights and mlm_checkpoint:
         checkpoint_path = Path(mlm_checkpoint)
         if not checkpoint_path.is_absolute():
@@ -909,7 +1106,7 @@ def main() -> None:
             LOGGER.info("Pretrained weights loaded: embedding + %d transformer layers", 
                        post_cnn_transformer_layers)
             
-            freeze_layers = int(cfg.get("stage1_freeze_layers", 0))
+            freeze_layers = int(cfg_run.get("stage1_freeze_layers", 0))
             if freeze_layers > 0:
                 LOGGER.info("Freezing bottom %d encoder layers", freeze_layers)
                 model.encoder.freeze_bottom_layers(freeze_layers)
@@ -923,9 +1120,9 @@ def main() -> None:
                 total_params / 1e6, trainable_params / 1e6)
     
     # Optimizer with layer-wise learning rate decay
-    lr = float(cfg.get("lr", 2e-4))
-    weight_decay = float(cfg.get("weight_decay", 0.02))
-    layer_lr_decay = float(cfg.get("layer_lr_decay", 0.8))
+    lr = float(cfg_run.get("lr", 2e-4))
+    weight_decay = float(cfg_run.get("weight_decay", 0.02))
+    layer_lr_decay = float(cfg_run.get("layer_lr_decay", 0.8))
     
     # Use LLRD if we loaded pretrained weights
     if load_mlm_weights and mlm_checkpoint:
@@ -947,8 +1144,7 @@ def main() -> None:
         )
     
     # Scheduler with warmup
-    epochs = int(cfg.get("epochs", 120))
-    warmup_ratio = float(cfg.get("warmup_ratio", 0.15))
+    warmup_ratio = float(cfg_run.get("warmup_ratio", 0.15))
     steps_per_epoch = len(train_loader)
     total_steps = epochs * steps_per_epoch
     warmup_steps = int(warmup_ratio * total_steps)
@@ -962,9 +1158,9 @@ def main() -> None:
     LOGGER.info("Using cosine schedule with %d warmup steps", warmup_steps)
     
     # SWA setup for breaking plateaus
-    use_swa = bool(cfg.get("use_swa", True))
-    swa_start_epoch = int(cfg.get("swa_start_epoch", 60))
-    swa_lr = float(cfg.get("swa_lr", 5e-5))
+    use_swa = bool(cfg_run.get("use_swa", True))
+    swa_start_epoch = int(cfg_run.get("swa_start_epoch", 60))
+    swa_lr = float(cfg_run.get("swa_lr", 5e-5))
     swa_model = None
     swa_scheduler = None
     
@@ -974,10 +1170,10 @@ def main() -> None:
         LOGGER.info("SWA enabled: starts at epoch %d with LR %.2e", swa_start_epoch, swa_lr)
     
     # Loss function with label smoothing
-    label_smoothing = float(cfg.get("label_smoothing", 0.05))
-    use_focal_loss = bool(cfg.get("stage1_use_focal_loss", True))
-    focal_alpha = float(cfg.get("stage1_focal_alpha", 0.5))
-    focal_gamma = float(cfg.get("stage1_focal_gamma", 2.0))
+    label_smoothing = float(cfg_run.get("label_smoothing", 0.05))
+    use_focal_loss = bool(cfg_run.get("stage1_use_focal_loss", True))
+    focal_alpha = float(cfg_run.get("stage1_focal_alpha", 0.5))
+    focal_gamma = float(cfg_run.get("stage1_focal_gamma", 2.0))
     
     if use_focal_loss:
         criterion = FocalLossWithSmoothing(
@@ -993,7 +1189,7 @@ def main() -> None:
     # =========================================================================
     # OVERFIT DEBUG MODE: Train on 32 samples for 200 steps
     # =========================================================================
-    if args.overfit_debug:
+    if bool(cfg_run.get("overfit_debug", False)):
         LOGGER.info("Running OVERFIT DEBUG mode")
         # Use simple BCE for overfit test (no label smoothing or focal loss)
         simple_criterion = nn.BCELoss()
@@ -1006,14 +1202,30 @@ def main() -> None:
             lr=1e-3,
         )
         LOGGER.info("Overfit debug complete. Exiting.")
-        return
+        return {
+            "overfit_debug": True,
+            "stage1_acc": float("nan"),
+            "stage1_auc": float("nan"),
+            "stage1_mcc": float("nan"),
+            "best_ckpt_path": None,
+            "stage1_seconds": float(time.perf_counter() - start_time),
+            "params": int(total_params),
+            "best_val_acc": float("nan"),
+            "best_val_auc": float("nan"),
+            "best_val_mcc": float("nan"),
+            "best_epoch": 0,
+        }
     
     # Training settings
-    grad_accum_steps = int(cfg.get("grad_accum_steps", 2))
-    grad_clip_norm = float(cfg.get("grad_clip_norm", 1.0))
-    use_mixup = bool(cfg.get("use_mixup", True))
-    mixup_alpha = float(cfg.get("mixup_alpha", 0.2))
-    patience = int(cfg.get("early_stopping_patience", 15))
+    grad_accum_steps = int(cfg_run.get("grad_accum_steps", 2))
+    grad_clip_norm = float(cfg_run.get("grad_clip_norm", 1.0))
+    param_norm_warn = float(cfg_run.get("param_norm_warn", 150.0))
+    param_norm_cap = float(cfg_run.get("param_norm_cap", 200.0))
+    use_mixup = bool(cfg_run.get("use_mixup", True))
+    mixup_alpha = float(cfg_run.get("mixup_alpha", 0.2))
+    patience = int(cfg_run.get("early_stopping_patience", 15))
+
+    global_optimizer_steps = 0
     
     class_balance = compute_class_balance(train_loader)
     LOGGER.info(
@@ -1025,7 +1237,7 @@ def main() -> None:
     
     # Paths
     artifacts_root = (script_dir / "../artifacts").resolve()
-    checkpoint_name = cfg.get("stage1_checkpoint_name") or f"stage1_k{kmer}.pt"
+    checkpoint_name = cfg_run.get("stage1_checkpoint_name") or f"stage1_k{kmer}.pt"
     checkpoint_path = artifacts_root / "checkpoints" / checkpoint_name
     report_path = artifacts_root / f"stage1_report_k{kmer}.json"
     
@@ -1051,6 +1263,7 @@ def main() -> None:
         phase_str = "[SWA]" if in_swa_phase else ""
         LOGGER.info("Epoch %d/%d %s (LR: %.2e)", epoch, epochs, phase_str, current_lr)
         
+        remaining_steps = None if ablation_max_steps is None else max(ablation_max_steps - global_optimizer_steps, 0)
         train_metrics = run_epoch(
             train_loader,
             model,
@@ -1060,10 +1273,15 @@ def main() -> None:
             scheduler=None if in_swa_phase else scheduler,  # Use SWA scheduler in SWA phase
             desc="Train",
             grad_accum_steps=grad_accum_steps,
+            max_optimizer_steps=remaining_steps,
             grad_clip_norm=grad_clip_norm,
+            param_norm_warn=param_norm_warn,
+            param_norm_cap=param_norm_cap,
             use_mixup=use_mixup and not in_swa_phase,  # Disable mixup in SWA phase
             mixup_alpha=mixup_alpha,
         )
+        global_optimizer_steps += int(train_metrics.get("optimizer_steps", 0))
+        reached_max_steps = ablation_max_steps is not None and global_optimizer_steps >= ablation_max_steps
         
         # Update SWA model and scheduler
         if in_swa_phase and swa_model is not None:
@@ -1175,6 +1393,13 @@ def main() -> None:
             if patience_counter >= effective_patience:
                 LOGGER.info("Early stopping triggered at epoch %d", epoch)
                 break
+
+        if reached_max_steps:
+            LOGGER.info(
+                "Reached ablation_max_steps_stage1=%d (optimizer steps); stopping after validation",
+                ablation_max_steps,
+            )
+            break
     
     # Final report
     if best_val_metrics is None:
@@ -1183,7 +1408,7 @@ def main() -> None:
         best_epoch = epochs
     
     report = {
-        "config": str(config_path),
+        "config": config_id,
         "best_epoch": best_epoch,
         "train_metrics": best_train_metrics,
         "val_metrics": best_val_metrics,
@@ -1217,7 +1442,9 @@ def main() -> None:
             "use_swa": use_swa,
             "swa_start_epoch": swa_start_epoch if use_swa else None,
             "swa_lr": swa_lr if use_swa else None,
-            "drop_path_rate": float(cfg.get("drop_path_rate", 0.1)),
+            "drop_path_rate": float(cfg_run.get("drop_path_rate", 0.1)),
+            "ablation_max_steps_stage1": ablation_max_steps,
+            "ablation_disable_wandb": bool(cfg_run.get("ablation_disable_wandb", False)),
         },
     }
     
@@ -1234,6 +1461,21 @@ def main() -> None:
     if use_swa:
         LOGGER.info("SWA was %s", "active" if swa_started else "not triggered (training ended early)")
     LOGGER.info("=" * 60)
+
+    stage1_seconds = float(time.perf_counter() - start_time)
+    best_val_auc = float(best_val_metrics.get("roc_auc", 0.5)) if best_val_metrics else 0.5
+    return {
+        "stage1_acc": float(best_val_acc),
+        "stage1_auc": best_val_auc,
+        "stage1_mcc": float(best_val_mcc),
+        "best_val_acc": float(best_val_acc),
+        "best_val_auc": best_val_auc,
+        "best_val_mcc": float(best_val_mcc),
+        "best_epoch": int(best_epoch),
+        "best_ckpt_path": str(checkpoint_path),
+        "stage1_seconds": stage1_seconds,
+        "params": int(total_params),
+    }
 
 
 if __name__ == "__main__":

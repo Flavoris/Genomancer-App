@@ -1,0 +1,56 @@
+{
+  "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config_smoke.yaml",
+  "best_epoch": 1,
+  "train_metrics": {
+    "accuracy": 0.421875,
+    "precision": 0.40425531914893614,
+    "recall": 0.6785714285714286,
+    "f1": 0.5066666666666666,
+    "mcc": -0.11142851539596063,
+    "roc_auc": 0.4871031746031746,
+    "specificity": 0.2222222222222222,
+    "loss": 0.10060487687587738,
+    "optimizer_steps": 0
+  },
+  "val_metrics": {
+    "accuracy": 0.484375,
+    "precision": 0.48148148148148145,
+    "recall": 0.8387096774193549,
+    "f1": 0.6117647058823529,
+    "mcc": -0.013454429991568964,
+    "roc_auc": 0.41935483870967744,
+    "specificity": 0.15151515151515152,
+    "loss": 0.09657815471291542,
+    "optimizer_steps": 0
+  },
+  "class_balance": {
+    "total": 64,
+    "positive": 28,
+    "negative": 36,
+    "positive_ratio": 0.4375
+  },
+  "device": "cpu",
+  "seed": 1337,
+  "model_params": {
+    "total": 11260961,
+    "trainable": 11260961,
+    "embedding_dim": 256,
+    "layers": 6,
+    "heads": 8,
+    "kmer": 3,
+    "stage2_engineered_dim": 192,
+    "stage2_use_engineered_features": true
+  },
+  "training_enhancements": {
+    "layer_wise_lr_decay": 0.8,
+    "label_smoothing": 0.05,
+    "mixup_alpha": 0.2,
+    "use_swa": true,
+    "swa_start_epoch": 60,
+    "swa_lr": 5e-05,
+    "drop_path_rate": 0.1,
+    "ablation_max_steps_stage2": 5,
+    "ablation_disable_wandb": false,
+    "stage1_ckpt": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_smoke_pipeline.pt"
+  }
+}
