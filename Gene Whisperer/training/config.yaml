@@ -20,7 +20,7 @@ stage1_train: ../data/stage1_train.tsv
 stage1_val: ../data/stage1_val.tsv
 stage2_train: ../data/stage2_train.tsv
 stage2_val: ../data/stage2_val.tsv
-stage2_test: ../data/stage2_test.tsv
+stage2_test: ../data/stage2_val.tsv
 
 # Stage 2 strength mapping
 stage2_strength_positive: 1
@@ -157,6 +157,8 @@ swa_anneal_epochs: 10  # Anneal to SWA LR over 10 epochs
 
 stage1_load_mlm_weights: true
 stage2_load_mlm_weights: false
+stage1_mlm_transfer_mode: embed_only
+stage2_mlm_transfer_mode: embed_only
 stage1_freeze_layers: 0  # Don't freeze - let all layers adapt
 stage1_unfreeze_epoch: null
 mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k3.pt
@@ -235,6 +237,14 @@ use_multi_scale: true
 multi_scale_kmers: [3, 4, 5, 6]
 
 # =============================================================================
+# TRANSFER SMOKETEST (Tiny transfer sanity run)
+# =============================================================================
+# Optimizer step budgets used by training/transfer_smoketest.py
+smoketest_steps_pretrain: 300
+smoketest_steps_stage1: 300
+smoketest_steps_stage2: 300
+
+# =============================================================================
 # ABLATION / SCORING (Safe defaults; no behavior change)
 # =============================================================================
 # Proxy budgets and scoring knobs for fast ablation runs.
@@ -261,6 +271,10 @@ ablation:
 
   # Transfer efficiency
   compute_transfer_efficiency: true
+  transfer_efficiency_mode: per_total_second  # per_pretrain_second | per_total_second | per_deploy_param
+
+  # Cost proxy for distillation ("deploy_params", "deploy_params_sum", "train_time")
+  cost_mode: deploy_params
 
   # Scoring weights (multi-objective)
   score_weights:
@@ -271,5 +285,6 @@ ablation:
     cost: 0.10
 
   # Distillation thresholds
-  negligible_score_drop: 0.01   # within 1% of best composite score = "safe to remove"
+  distill_base_variant: baseline  # reference variant for score/cost deltas
+  negligible_score_drop: 0.01   # within 1% of base composite score = "safe to remove"
   min_cost_improvement: 0.03    # requires >=3% cost improvement to recommend removal

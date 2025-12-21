@@ -982,6 +982,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "fusion_hidden": int(cfg_run.get("fusion_hidden", 256)),
         # Pretrained weights
         "stage1_load_mlm_weights": bool(cfg_run.get("stage1_load_mlm_weights", True)),
+        "stage1_mlm_transfer_mode": str(cfg_run.get("stage1_mlm_transfer_mode", "embed_only")),
         "stage1_freeze_layers": int(cfg_run.get("stage1_freeze_layers", 0)),
         # Seed
         "seed": int(cfg_run.get("seed", 1337) or 1337),
@@ -1092,19 +1093,38 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     
     # Load pretrained MLM weights if available
     load_mlm_weights = bool(cfg_run.get("stage1_load_mlm_weights", False))
+    transfer_mode = str(cfg_run.get("stage1_mlm_transfer_mode", "embed_only"))
+    if transfer_mode not in {"none", "embed_only", "embed_plus_adapter"}:
+        raise ValueError(f"Invalid stage1_mlm_transfer_mode: {transfer_mode}")
     mlm_encoder_path = cfg_run.get("mlm_encoder_path")
     mlm_encoder_checkpoint = cfg_run.get("mlm_encoder_checkpoint")
     mlm_checkpoint = mlm_encoder_path or mlm_encoder_checkpoint
-    if load_mlm_weights and mlm_checkpoint:
+    should_load_mlm = load_mlm_weights and transfer_mode != "none"
+    with torch.no_grad():
+        emb_before = model.embedding.weight.detach().float().clone()
+        emb_before_norm = emb_before.norm().item()
+    load_attempted = False
+    if should_load_mlm and mlm_checkpoint:
         checkpoint_path = Path(mlm_checkpoint)
         if not checkpoint_path.is_absolute():
             checkpoint_path = (script_dir / checkpoint_path).resolve()
         if checkpoint_path.exists():
-            LOGGER.info("Loading MLM encoder weights from %s", checkpoint_path)
-            # Use new method that transfers both embedding and transformer layers
-            model.load_pretrained_weights(checkpoint_path, strict=False)
-            LOGGER.info("Pretrained weights loaded: embedding + %d transformer layers", 
-                       post_cnn_transformer_layers)
+            LOGGER.info(
+                "Loading MLM encoder weights from %s (transfer_mode=%s)",
+                checkpoint_path,
+                transfer_mode,
+            )
+            load_attempted = True
+            model.load_pretrained_weights(
+                checkpoint_path, strict=False, transfer_mode=transfer_mode
+            )
+            if transfer_mode == "embed_plus_adapter":
+                LOGGER.info(
+                    "Pretrained weights loaded: embedding + %d transformer layers",
+                    post_cnn_transformer_layers,
+                )
+            else:
+                LOGGER.info("Pretrained weights loaded: embedding only")
             
             freeze_layers = int(cfg_run.get("stage1_freeze_layers", 0))
             if freeze_layers > 0:
@@ -1112,6 +1132,21 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 model.encoder.freeze_bottom_layers(freeze_layers)
         else:
             LOGGER.warning("MLM checkpoint not found at %s, training from scratch", checkpoint_path)
+    elif load_mlm_weights and transfer_mode == "none":
+        LOGGER.info("stage1_mlm_transfer_mode=none; skipping MLM weight load")
+    with torch.no_grad():
+        emb_after = model.embedding.weight.detach().float()
+        emb_after_norm = emb_after.norm().item()
+        diff_norm = (emb_after - emb_before).norm().item()
+    LOGGER.info(
+        "Load sanity: embedding norm before=%.6f after=%.6f diff_norm=%.6f (load_attempted=%s)",
+        emb_before_norm,
+        emb_after_norm,
+        diff_norm,
+        load_attempted,
+    )
+    if load_attempted and diff_norm < 1e-6:
+        LOGGER.warning("Pretrain load had no effect (likely key mismatch or already loaded).")
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -1125,7 +1160,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     layer_lr_decay = float(cfg_run.get("layer_lr_decay", 0.8))
     
     # Use LLRD if we loaded pretrained weights
-    if load_mlm_weights and mlm_checkpoint:
+    if should_load_mlm and mlm_checkpoint:
         LOGGER.info("Using layer-wise LR decay (factor=%.2f) for pretrained model", layer_lr_decay)
         param_groups = get_layer_wise_lr_groups(
             model, 

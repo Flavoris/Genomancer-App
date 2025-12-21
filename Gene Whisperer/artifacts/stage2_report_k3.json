@@ -1,39 +1,39 @@
 {
-  "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config_smoke.yaml",
+  "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config.yaml",
   "best_epoch": 1,
   "train_metrics": {
-    "accuracy": 0.421875,
-    "precision": 0.40425531914893614,
-    "recall": 0.6785714285714286,
-    "f1": 0.5066666666666666,
-    "mcc": -0.11142851539596063,
-    "roc_auc": 0.4871031746031746,
-    "specificity": 0.2222222222222222,
-    "loss": 0.10060487687587738,
-    "optimizer_steps": 0
+    "accuracy": 0.48583984375,
+    "precision": 0.45394736842105265,
+    "recall": 0.42724458204334365,
+    "f1": 0.44019138755980863,
+    "mcc": -0.034451064325455125,
+    "roc_auc": 0.48187701986799303,
+    "specificity": 0.5384615384615384,
+    "loss": 0.09709408739581704,
+    "optimizer_steps": 16
   },
   "val_metrics": {
-    "accuracy": 0.484375,
-    "precision": 0.48148148148148145,
-    "recall": 0.8387096774193549,
-    "f1": 0.6117647058823529,
-    "mcc": -0.013454429991568964,
-    "roc_auc": 0.41935483870967744,
-    "specificity": 0.15151515151515152,
-    "loss": 0.09657815471291542,
+    "accuracy": 0.5117994100294986,
+    "precision": 0.4887640449438202,
+    "recall": 0.8181818181818182,
+    "f1": 0.6119577960140681,
+    "mcc": 0.07045931302576847,
+    "roc_auc": 0.5477336034439099,
+    "specificity": 0.2395543175487465,
+    "loss": 0.08843451439455195,
     "optimizer_steps": 0
   },
   "class_balance": {
-    "total": 64,
-    "positive": 28,
-    "negative": 36,
-    "positive_ratio": 0.4375
+    "total": 2048,
+    "positive": 969,
+    "negative": 1079,
+    "positive_ratio": 0.47314453125
   },
-  "device": "cpu",
+  "device": "mps",
   "seed": 1337,
   "model_params": {
-    "total": 11260961,
-    "trainable": 11260961,
+    "total": 9391617,
+    "trainable": 9391617,
     "embedding_dim": 256,
     "layers": 6,
     "heads": 8,
@@ -49,8 +49,8 @@
     "swa_start_epoch": 60,
     "swa_lr": 5e-05,
     "drop_path_rate": 0.1,
-    "ablation_max_steps_stage2": 5,
+    "ablation_max_steps_stage2": 300,
     "ablation_disable_wandb": false,
-    "stage1_ckpt": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_smoke_pipeline.pt"
+    "stage1_ckpt": null
   }
 }

@@ -1,39 +1,39 @@
 {
-  "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config_smoke.yaml",
-  "best_epoch": 1,
+  "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config.yaml",
+  "best_epoch": 4,
   "train_metrics": {
-    "accuracy": 0.484375,
-    "precision": 0.3870967741935484,
-    "recall": 0.46153846153846156,
-    "f1": 0.42105263157894735,
-    "mcc": -0.03779786830012622,
-    "roc_auc": 0.41700404858299595,
-    "specificity": 0.5,
-    "loss": 0.10469318926334381,
-    "optimizer_steps": 0
+    "accuracy": 0.6162109375,
+    "precision": 0.6233905579399142,
+    "recall": 0.5718503937007874,
+    "f1": 0.5965092402464066,
+    "mcc": 0.2326679814691201,
+    "roc_auc": 0.6597864402124153,
+    "specificity": 0.6598837209302325,
+    "loss": 0.07792034198064357,
+    "optimizer_steps": 16
   },
   "val_metrics": {
-    "accuracy": 0.546875,
-    "precision": 0.6285714285714286,
-    "recall": 0.5789473684210527,
-    "f1": 0.6027397260273972,
-    "mcc": 0.0778902520624173,
-    "roc_auc": 0.5506072874493927,
-    "specificity": 0.5,
-    "loss": 0.0872015506029129,
+    "accuracy": 0.7717872968980798,
+    "precision": 0.7839506172839507,
+    "recall": 0.7503692762186115,
+    "f1": 0.7667924528301887,
+    "mcc": 0.5440739908659572,
+    "roc_auc": 0.8370624594996171,
+    "specificity": 0.793205317577548,
+    "loss": 0.06431037435195294,
     "optimizer_steps": 0
   },
   "class_balance": {
-    "total": 64,
-    "positive": 26,
-    "negative": 38,
-    "positive_ratio": 0.40625
+    "total": 2048,
+    "positive": 1016,
+    "negative": 1032,
+    "positive_ratio": 0.49609375
   },
-  "device": "cpu",
+  "device": "mps",
   "seed": 1337,
   "model_params": {
-    "total": 11265057,
-    "trainable": 11265057,
+    "total": 9395713,
+    "trainable": 9395713,
     "embedding_dim": 256,
     "layers": 6,
     "heads": 8,
@@ -41,7 +41,7 @@
   },
   "architecture_v4": {
     "order": "Embedding \u2192 CNN/TCN \u2192 Transformer \u2192 Pool \u2192 Fusion \u2192 Classifier",
-    "use_tcn": true,
+    "use_tcn": false,
     "tcn_hidden": 256,
     "tcn_levels": 4,
     "multiscale_kernels": [
@@ -65,7 +65,7 @@
     "swa_start_epoch": 60,
     "swa_lr": 5e-05,
     "drop_path_rate": 0.1,
-    "ablation_max_steps_stage1": 5,
+    "ablation_max_steps_stage1": 300,
     "ablation_disable_wandb": false
   }
 }
