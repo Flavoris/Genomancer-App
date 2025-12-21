@@ -671,7 +671,20 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         ablation_seed,
         "stage2 val",
     )
-    stage2_test_df = _load_dataframe(_cfg_value(cfg, "stage2_test"), delimiter)
+    stage2_test_path = _cfg_value(cfg, "stage2_test")
+    stage2_test_df = None
+    if stage2_test_path:
+        if Path(stage2_test_path).exists():
+            stage2_test_df = _load_dataframe(stage2_test_path, delimiter)
+        else:
+            LOGGER.info(
+                "Stage 2 test set not found at %s; reusing stage2_val for test loader",
+                stage2_test_path,
+            )
+            stage2_test_df = stage2_val_df
+    else:
+        LOGGER.info("Stage 2 test set not configured; reusing stage2_val for test loader")
+        stage2_test_df = stage2_val_df
 
     pos_strength = float(_cfg_value(cfg, "stage2_strength_positive", 1))
     neg_strength = float(_cfg_value(cfg, "stage2_strength_negative", 0))

@@ -84,6 +84,8 @@ stage1_focal_gamma: 2.0
 stage1_freeze_layers: 0
 stage1_load_mlm_weights: true
 stage2_load_mlm_weights: false
+stage1_mlm_transfer_mode: embed_only
+stage2_mlm_transfer_mode: embed_only
 stage1_reverse_complement_prob: 0.5
 stage1_train: ../data/stage1_train.tsv
 stage1_unfreeze_epoch: null
@@ -92,7 +94,7 @@ stage1_use_focal_loss: true
 stage1_val: ../data/stage1_val.tsv
 stage2_strength_negative: 0
 stage2_strength_positive: 1
-stage2_test: ../data/stage2_test.tsv
+stage2_test: ../data/stage2_val.tsv
 stage2_train: ../data/stage2_train.tsv
 stage2_val: ../data/stage2_val.tsv
 swa_anneal_epochs: 10

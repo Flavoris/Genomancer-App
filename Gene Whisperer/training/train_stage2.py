@@ -271,6 +271,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "use_attention_pool": bool(cfg_run.get("use_attention_pool", True)),
         "use_tcn": bool(cfg_run.get("use_tcn", True)),
         "post_cnn_transformer_layers": int(cfg_run.get("post_cnn_transformer_layers", 3)),
+        "stage2_mlm_transfer_mode": str(cfg_run.get("stage2_mlm_transfer_mode", "embed_only")),
         # Seed
         "seed": int(cfg_run.get("seed", 1337) or 1337),
     }
@@ -385,14 +386,35 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("=" * 60)
 
     load_mlm_weights = bool(cfg_run.get("stage2_load_mlm_weights", False))
+    transfer_mode = str(cfg_run.get("stage2_mlm_transfer_mode", "embed_only"))
+    if transfer_mode not in {"none", "embed_only", "embed_plus_adapter"}:
+        raise ValueError(f"Invalid stage2_mlm_transfer_mode: {transfer_mode}")
     mlm_loaded = False
     mlm_checkpoint = cfg_run.get("mlm_encoder_checkpoint") or cfg_run.get("mlm_encoder_path")
-    if load_mlm_weights and mlm_checkpoint:
+    should_load_mlm = load_mlm_weights and transfer_mode != "none"
+    with torch.no_grad():
+        emb_before = model.embedding.weight.detach().float().clone()
+        emb_before_norm = emb_before.norm().item()
+    load_attempted = False
+    if should_load_mlm and mlm_checkpoint:
         checkpoint_path = _resolve_optional_path(mlm_checkpoint, base_dir=script_dir)
         if checkpoint_path and checkpoint_path.exists():
-            LOGGER.info("Loading MLM encoder weights from %s", checkpoint_path)
-            model.load_pretrained_weights(checkpoint_path, strict=False)
-            LOGGER.info("Pretrained MLM weights loaded (embedding + %d transformer layers)", post_cnn_transformer_layers)
+            LOGGER.info(
+                "Loading MLM encoder weights from %s (transfer_mode=%s)",
+                checkpoint_path,
+                transfer_mode,
+            )
+            load_attempted = True
+            model.load_pretrained_weights(
+                checkpoint_path, strict=False, transfer_mode=transfer_mode
+            )
+            if transfer_mode == "embed_plus_adapter":
+                LOGGER.info(
+                    "Pretrained MLM weights loaded (embedding + %d transformer layers)",
+                    post_cnn_transformer_layers,
+                )
+            else:
+                LOGGER.info("Pretrained MLM weights loaded (embedding only)")
             mlm_loaded = True
             freeze_layers = int(cfg_run.get("stage2_freeze_layers", cfg_run.get("stage1_freeze_layers", 0)) or 0)
             if freeze_layers > 0:
@@ -400,6 +422,21 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 model.encoder.freeze_bottom_layers(freeze_layers)
         else:
             LOGGER.warning("MLM checkpoint not found; training without MLM init (path=%s)", checkpoint_path)
+    elif load_mlm_weights and transfer_mode == "none":
+        LOGGER.info("stage2_mlm_transfer_mode=none; skipping MLM weight load")
+    with torch.no_grad():
+        emb_after = model.embedding.weight.detach().float()
+        emb_after_norm = emb_after.norm().item()
+        diff_norm = (emb_after - emb_before).norm().item()
+    LOGGER.info(
+        "Load sanity: embedding norm before=%.6f after=%.6f diff_norm=%.6f (load_attempted=%s)",
+        emb_before_norm,
+        emb_after_norm,
+        diff_norm,
+        load_attempted,
+    )
+    if load_attempted and diff_norm < 1e-6:
+        LOGGER.warning("Pretrain load had no effect (likely key mismatch or already loaded).")
 
     stage1_ckpt_loaded = False
     if stage1_ckpt_path and stage1_ckpt_path.exists():

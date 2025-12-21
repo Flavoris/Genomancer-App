@@ -1211,27 +1211,39 @@ class GeneWhispererStage1(nn.Module):
         """Compatibility property for MLM weight loading."""
         return self._full_encoder
     
-    def load_pretrained_weights(self, checkpoint_path: Union[str, Path], strict: bool = False) -> None:
+    def load_pretrained_weights(
+        self,
+        checkpoint_path: Union[str, Path],
+        strict: bool = False,
+        transfer_mode: str = "embed_only",
+    ) -> None:
         """
         Load pretrained MLM weights into the model.
         
         This properly transfers:
         1. Embedding weights (directly used in forward pass)
-        2. Transformer layer weights (into post_cnn_transformer adapter)
+        2. Transformer layer weights (into post_cnn_transformer adapter) when requested
         
         Args:
             checkpoint_path: Path to pretrained encoder checkpoint
             strict: Whether to require exact match
+            transfer_mode: One of ["embed_only", "embed_plus_adapter", "none"]
         """
+        if transfer_mode == "none":
+            LOGGER.info("Skipping MLM weight loading (transfer_mode=none)")
+            return
+        if transfer_mode not in {"embed_only", "embed_plus_adapter"}:
+            raise ValueError(f"Unsupported transfer_mode: {transfer_mode}")
         # Load into the full encoder first
         self._full_encoder.load_mlm_weights(checkpoint_path, strict=strict)
         
         # The embedding is already shared (self.embedding.weight = self._full_encoder.embedding.weight)
         
         # Transfer transformer layers to post_cnn_transformer
-        num_layers = len(self.post_cnn_transformer.layers)
-        loaded = self.post_cnn_transformer.load_pretrained_layers(self._full_encoder, num_layers)
-        LOGGER.info("Transferred %d transformer layers to post-CNN adapter", loaded)
+        if transfer_mode == "embed_plus_adapter":
+            num_layers = len(self.post_cnn_transformer.layers)
+            loaded = self.post_cnn_transformer.load_pretrained_layers(self._full_encoder, num_layers)
+            LOGGER.info("Transferred %d transformer layers to post-CNN adapter", loaded)
     
     def _get_padding_mask(self, tokens: torch.Tensor) -> Optional[torch.Tensor]:
         """Generate padding mask from tokens."""
@@ -1353,3 +1365,101 @@ class MultiScaleEnsemble(nn.Module):
         stacked = torch.stack(outputs, dim=0)
         return stacked.mean(dim=0)
 
+
+def _post_cnn_checksums(model: GeneWhispererStage1) -> dict:
+    checksums = {}
+    for name, param in model.post_cnn_transformer.named_parameters():
+        checksums[name] = param.detach().float().mean().item()
+    return checksums
+
+
+def _diff_checksums(before: dict, after: dict, atol: float = 1e-12) -> list:
+    changed = []
+    for name, before_val in before.items():
+        after_val = after.get(name)
+        if after_val is None:
+            changed.append(name)
+            continue
+        if abs(after_val - before_val) > atol:
+            changed.append(name)
+    return changed
+
+
+if __name__ == "__main__":
+    import argparse
+
+    try:
+        import yaml
+    except ImportError as exc:
+        raise SystemExit("PyYAML is required for the debug utility") from exc
+
+    parser = argparse.ArgumentParser(
+        description="Verify MLM transfer modes for post-CNN transformer adapter weights."
+    )
+    parser.add_argument(
+        "--mlm-checkpoint",
+        required=True,
+        help="Path to pretrained MLM encoder checkpoint",
+    )
+    parser.add_argument(
+        "--config",
+        default=str(Path(__file__).resolve().parent / "config.yaml"),
+        help="Path to config.yaml for model settings",
+    )
+    args = parser.parse_args()
+
+    checkpoint_path = Path(args.mlm_checkpoint).expanduser().resolve()
+    if not checkpoint_path.exists():
+        raise SystemExit(f"Checkpoint not found: {checkpoint_path}")
+
+    config_path = Path(args.config).expanduser().resolve()
+    cfg = {}
+    if config_path.exists():
+        with config_path.open("r", encoding="utf-8") as handle:
+            cfg = yaml.safe_load(handle) or {}
+    else:
+        LOGGER.warning("Config not found at %s; using model defaults", config_path)
+
+    model = GeneWhispererStage1(
+        vocab_size=int(cfg.get("vocab_size", 67)),
+        kmer=int(cfg.get("kmer", 3)),
+        embedding_dim=int(cfg.get("embedding_dim", 192)),
+        num_layers=int(cfg.get("transformer_layers", 6)),
+        num_heads=int(cfg.get("transformer_heads", 8)),
+        ff_dim=int(cfg.get("transformer_ff_dim", 384)),
+        dropout=float(cfg.get("transformer_dropout", 0.15)),
+        use_alibi=bool(cfg.get("use_alibi", True)),
+        pad_token_id=cfg.get("pad_token_id"),
+        engineered_dim=int(cfg.get("stage1_engineered_dim", 208)),
+        use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
+        use_attention_pool=bool(cfg.get("use_attention_pool", True)),
+        use_tcn=bool(cfg.get("use_tcn", True)),
+        tcn_hidden=int(cfg.get("tcn_hidden", 256)),
+        tcn_levels=int(cfg.get("tcn_levels", 4)),
+        tcn_kernel=int(cfg.get("tcn_kernel", 3)),
+        multiscale_channels=int(cfg.get("multiscale_channels", 64)),
+        multiscale_kernels=tuple(cfg.get("multiscale_kernels", [3, 5, 7, 9, 15])),
+        lstm_hidden=int(cfg.get("lstm_hidden", 192)),
+        post_cnn_transformer_layers=int(cfg.get("post_cnn_transformer_layers", 3)),
+        engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 256)),
+        engineered_mlp_output=int(cfg.get("engineered_mlp_output", 128)),
+        fusion_hidden=int(cfg.get("fusion_hidden", 256)),
+    )
+
+    before = _post_cnn_checksums(model)
+    model.load_pretrained_weights(checkpoint_path, strict=False, transfer_mode="embed_only")
+    after_embed_only = _post_cnn_checksums(model)
+    embed_only_changes = _diff_checksums(before, after_embed_only)
+    if embed_only_changes:
+        raise SystemExit(
+            "embed_only changed post_cnn_transformer weights: "
+            + ", ".join(embed_only_changes[:5])
+        )
+    print("embed_only: post_cnn_transformer weights unchanged")
+
+    model.load_pretrained_weights(checkpoint_path, strict=False, transfer_mode="embed_plus_adapter")
+    after_adapter = _post_cnn_checksums(model)
+    adapter_changes = _diff_checksums(after_embed_only, after_adapter)
+    if not adapter_changes:
+        raise SystemExit("embed_plus_adapter did not change post_cnn_transformer weights")
+    print("embed_plus_adapter: post_cnn_transformer weights changed")

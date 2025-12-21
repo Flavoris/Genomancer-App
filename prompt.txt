@@ -1,27 +1,23 @@
-Add a “single command” smoke test to catch broken checkpoint loading
+Add a “tiny transfer test” command (fast sanity run)
 
-Create scripts/smoke_ablation_pipeline.py that:
+This prevents wasting hours on a broken “pretrain isn’t actually helping” pipeline.
 
-loads config
+Add a new script training/transfer_smoketest.py.
 
-turns on ablation enabled
+Behavior:
+- Loads config.yaml
+- Runs MLM pretrain for a tiny budget (e.g. 200-500 optimizer steps)
+- Runs stage1 for a tiny budget (e.g. 1 epoch or 300 steps) twice:
+   A) with pretrained encoder loaded
+   B) from scratch
+- Prints: stage1_mcc_pretrained, stage1_mcc_scratch, delta
+Repeat for stage2 similarly (if stage2 script supports short runs).
 
-sets tiny budgets: pretrain_max_steps=5, stage1_max_steps=5, stage2_max_steps=5, sample limits=64
+Add config knobs:
+- smoketest_steps_pretrain
+- smoketest_steps_stage1
+- smoketest_steps_stage2
 
-runs baseline end-to-end: pretrain → stage1(load ckpt) → stage2(load ckpt)
-
-asserts:
-
-encoder checkpoint exists on disk
-
-stage1_auc/mcc are finite numbers
-
-stage2_auc/mcc are finite numbers
-
-prints “SMOKE OK” on success
-
-This should run in under a couple minutes.
-
-Checkpoint:
-
-python scripts/smoke_ablation_pipeline.py
+CHECKPOINT:
+- Run transfer_smoketest.py and verify delta is not ~0.000 every time.
+If it is, print whether the encoder weights are actually changing the model outputs (e.g., compare first batch logits).

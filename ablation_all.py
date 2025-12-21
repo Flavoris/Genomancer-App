@@ -36,6 +36,8 @@ DEFAULT_SCORE_WEIGHTS: dict[str, float] = {
     "cost": 0.10,
 }
 
+TRANSFER_EFFICIENCY_MODES = {"per_pretrain_second", "per_total_second", "per_deploy_param"}
+
 
 def _parse_seeds(value: str) -> list[int]:
     parts: list[int] = []
@@ -266,6 +268,18 @@ def _summarize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "transfer_efficiency_std": _mean_std(
                     _finite(row["transfer_efficiency"] for row in variant_rows)
                 )[1],
+                "deploy_params_mean": _mean_std(
+                    _finite(row["deploy_params"] for row in variant_rows)
+                )[0],
+                "deploy_params_std": _mean_std(
+                    _finite(row["deploy_params"] for row in variant_rows)
+                )[1],
+                "train_seconds_total_mean": _mean_std(
+                    _finite(row["train_seconds_total"] for row in variant_rows)
+                )[0],
+                "train_seconds_total_std": _mean_std(
+                    _finite(row["train_seconds_total"] for row in variant_rows)
+                )[1],
                 "cost_mean": _mean_std(_finite(row["cost"] for row in variant_rows))[0],
                 "cost_std": _mean_std(_finite(row["cost"] for row in variant_rows))[1],
                 "score_mean": _mean_std(_finite(row["score"] for row in variant_rows))[0],
@@ -343,6 +357,7 @@ def _run_full_pipeline(
     seed: int,
     config_path: Path,
     compute_transfer_efficiency: bool,
+    transfer_efficiency_mode: str,
     run_mlm_pretrain: Any,
     run_stage1_training: Any,
     run_stage2_training: Any,
@@ -365,12 +380,17 @@ def _run_full_pipeline(
     pretrain_seconds = _expect_float(pretrain_report, "pretrain_seconds", f"{variant_name} pretrain")
     pretrain_params = int(pretrain_report.get("params", 0))
 
+    stage1_transfer_mode = variant_overrides.get(
+        "stage1_mlm_transfer_mode",
+        cfg_run.get("stage1_mlm_transfer_mode", "embed_only"),
+    )
     stage1_overrides = dict(base_overrides)
     stage1_overrides.update(variant_overrides)
     stage1_overrides.update(
         {
             "mlm_encoder_path": encoder_ckpt_path,
             "stage1_load_mlm_weights": True,
+            "stage1_mlm_transfer_mode": stage1_transfer_mode,
         }
     )
     stage1_report = run_stage1_training(cfg_run, overrides=stage1_overrides)
@@ -380,12 +400,17 @@ def _run_full_pipeline(
     stage1_seconds = float(stage1_report.get("stage1_seconds", 0.0))
     stage1_params = int(stage1_report.get("params", 0))
 
+    stage2_transfer_mode = variant_overrides.get(
+        "stage2_mlm_transfer_mode",
+        cfg_run.get("stage2_mlm_transfer_mode", "embed_only"),
+    )
     stage2_overrides = dict(base_overrides)
     stage2_overrides.update(variant_overrides)
     stage2_overrides.update(
         {
             "mlm_encoder_path": encoder_ckpt_path,
             "stage2_load_mlm_weights": True,
+            "stage2_mlm_transfer_mode": stage2_transfer_mode,
         }
     )
     stage2_report = run_stage2_training(cfg_run, overrides=stage2_overrides)
@@ -394,6 +419,9 @@ def _run_full_pipeline(
     stage2_acc = _expect_float(stage2_report, "stage2_acc", f"{variant_name} stage2")
     stage2_seconds = float(stage2_report.get("stage2_seconds", 0.0))
     stage2_params = int(stage2_report.get("params", 0))
+
+    deploy_params = max(stage1_params, stage2_params)
+    train_seconds_total = pretrain_seconds + stage1_seconds + stage2_seconds
 
     stage1_mcc_scratch = float("nan")
     stage1_auc_scratch = float("nan")
@@ -409,6 +437,7 @@ def _run_full_pipeline(
         stage1_scratch_overrides = dict(base_overrides)
         stage1_scratch_overrides.update(variant_overrides)
         stage1_scratch_overrides["stage1_load_mlm_weights"] = False
+        stage1_scratch_overrides["stage1_mlm_transfer_mode"] = "none"
         stage1_scratch_report = run_stage1_training(cfg_run, overrides=stage1_scratch_overrides)
         stage1_mcc_scratch = _expect_float(
             stage1_scratch_report, "stage1_mcc", f"{variant_name} stage1 scratch"
@@ -423,6 +452,7 @@ def _run_full_pipeline(
         stage2_scratch_overrides = dict(base_overrides)
         stage2_scratch_overrides.update(variant_overrides)
         stage2_scratch_overrides["stage2_load_mlm_weights"] = False
+        stage2_scratch_overrides["stage2_mlm_transfer_mode"] = "none"
         stage2_scratch_report = run_stage2_training(cfg_run, overrides=stage2_scratch_overrides)
         stage2_mcc_scratch = _expect_float(
             stage2_scratch_report, "stage2_mcc", f"{variant_name} stage2 scratch"
@@ -440,9 +470,15 @@ def _run_full_pipeline(
         transfer_gain_auc = 0.5 * (
             (stage1_auc - stage1_auc_scratch) + (stage2_auc - stage2_auc_scratch)
         )
-        transfer_efficiency = transfer_gain_mcc / max(pretrain_seconds, 1e-6)
+        if transfer_efficiency_mode == "per_deploy_param":
+            denom = max(float(deploy_params), 1e-6)
+        elif transfer_efficiency_mode in {"per_pretrain_second", "per_total_second"}:
+            denom = max(train_seconds_total, 1e-9)
+        else:
+            raise ValueError(f"Unknown transfer_efficiency_mode: {transfer_efficiency_mode}")
+        transfer_efficiency = transfer_gain_mcc / denom
 
-    cost = float(pretrain_params)
+    cost = float(deploy_params)
 
     return {
         "variant": variant_name,
@@ -461,6 +497,8 @@ def _run_full_pipeline(
         "stage2_mcc": stage2_mcc,
         "stage2_seconds": stage2_seconds,
         "stage2_params": stage2_params,
+        "deploy_params": deploy_params,
+        "train_seconds_total": train_seconds_total,
         "stage1_acc_scratch": stage1_acc_scratch,
         "stage1_auc_scratch": stage1_auc_scratch,
         "stage1_mcc_scratch": stage1_mcc_scratch,
@@ -499,6 +537,10 @@ def main() -> int:
     if not isinstance(ablation_cfg, dict):
         ablation_cfg = {}
         cfg["ablation"] = ablation_cfg
+    base_variant_name = ablation_cfg.get("distill_base_variant", "baseline")
+    if base_variant_name is None:
+        base_variant_name = "baseline"
+    base_variant_name = str(base_variant_name).strip() or "baseline"
 
     if args.seeds is None:
         seeds = _coerce_seed_list(ablation_cfg.get("seeds")) or [1337]
@@ -506,6 +548,11 @@ def main() -> int:
         seeds = args.seeds
 
     variants_by_name = dict(VARIANTS)
+    if base_variant_name not in variants_by_name:
+        raise SystemExit(
+            "Unknown ablation.distill_base_variant: "
+            f"{base_variant_name!r}. Choose from: {sorted(variants_by_name)}"
+        )
     if args.variants is None:
         selected_variants = VARIANTS
     else:
@@ -519,12 +566,18 @@ def main() -> int:
             if name not in seen:
                 requested.append(name)
                 seen.add(name)
-        if "baseline" not in seen:
-            print("Note: adding baseline to variants for scoring and distillation.")
-            requested.insert(0, "baseline")
+        if base_variant_name not in seen:
+            print(f"Note: adding {base_variant_name} to variants for scoring and distillation.")
+            requested.insert(0, base_variant_name)
         selected_variants = [(name, variants_by_name[name]) for name in requested]
 
     compute_transfer_efficiency = bool(ablation_cfg.get("compute_transfer_efficiency", False))
+    transfer_efficiency_mode = str(ablation_cfg.get("transfer_efficiency_mode", "per_total_second"))
+    if transfer_efficiency_mode not in TRANSFER_EFFICIENCY_MODES:
+        raise SystemExit(
+            "Unknown ablation.transfer_efficiency_mode: "
+            f"{transfer_efficiency_mode!r}. Choose from: {sorted(TRANSFER_EFFICIENCY_MODES)}"
+        )
     score_weights = _resolve_score_weights(ablation_cfg)
     negligible_score_drop = float(ablation_cfg.get("negligible_score_drop", 0.01))
     min_cost_improvement = float(ablation_cfg.get("min_cost_improvement", 0.03))
@@ -542,6 +595,7 @@ def main() -> int:
                     seed=seed,
                     config_path=config_path,
                     compute_transfer_efficiency=compute_transfer_efficiency,
+                    transfer_efficiency_mode=transfer_efficiency_mode,
                     run_mlm_pretrain=run_mlm_pretrain,
                     run_stage1_training=run_stage1_training,
                     run_stage2_training=run_stage2_training,
@@ -552,20 +606,18 @@ def main() -> int:
     summary_rows = _summarize_rows(run_rows)
 
     summary_by_name = {row["variant"]: row for row in summary_rows}
-    baseline_summary = summary_by_name.get("baseline")
-    finite_scores = [
-        float(row["score_mean"])
-        for row in summary_rows
-        if math.isfinite(float(row.get("score_mean", float("nan"))))
-    ]
-    best_score = max(finite_scores) if finite_scores else float("nan")
+    base_summary = summary_by_name.get(base_variant_name)
+    base_score = float("nan")
+    base_cost = float("nan")
+    if base_summary is not None:
+        base_score = float(base_summary.get("score_mean", float("nan")))
+        base_cost = float(base_summary.get("cost_mean", float("nan")))
 
     removable: list[dict[str, Any]] = []
-    minimal_overrides: dict[str, Any] = {}
-    if baseline_summary is not None and math.isfinite(float(baseline_summary["cost_mean"])):
-        baseline_cost = float(baseline_summary["cost_mean"])
+    removable_variants: list[str] = []
+    if math.isfinite(base_score) and math.isfinite(base_cost):
         for name, overrides in selected_variants:
-            if name == "baseline":
+            if name == base_variant_name:
                 continue
             summary = summary_by_name.get(name)
             if summary is None:
@@ -574,25 +626,34 @@ def main() -> int:
             cost_mean = float(summary["cost_mean"])
             if not math.isfinite(score_mean) or not math.isfinite(cost_mean):
                 continue
-            score_drop = best_score - score_mean
+            score_drop = base_score - score_mean
+            if score_mean >= base_score:
+                score_drop = 0.0
             cost_improvement = 0.0
-            if baseline_cost > 0:
-                cost_improvement = (baseline_cost - cost_mean) / baseline_cost
+            if base_cost > 0:
+                cost_improvement = (base_cost - cost_mean) / base_cost
             if score_drop <= negligible_score_drop and cost_improvement >= min_cost_improvement:
                 removable.append(
                     {
                         "name": name,
                         "score_drop": score_drop,
                         "cost_improvement": cost_improvement,
+                        "score_mean": score_mean,
+                        "cost_mean": cost_mean,
+                        "delta_score": score_mean - base_score,
+                        "delta_cost": cost_mean - base_cost,
                     }
                 )
-                minimal_overrides.update(overrides)
+                removable_variants.append(name)
+
+    minimal_overrides: dict[str, Any] = {}
+    for name in removable_variants:
+        minimal_overrides.update(variants_by_name[name])
 
     artifacts_root = (training_dir / "../artifacts").resolve()
     artifacts_root.mkdir(parents=True, exist_ok=True)
 
-    minimal_cfg = _materialize_config_for_export(cfg, base_dir=config_path.parent)
-    minimal_cfg.update(minimal_overrides)
+    minimal_cfg = _materialize_config_for_export(minimal_overrides, base_dir=config_path.parent)
     minimal_override_path = artifacts_root / "minimal_pipeline_override.yaml"
     with minimal_override_path.open("w", encoding="utf-8") as handle:
         handle.write("# Generated by ablation_all.py\n")
@@ -602,7 +663,7 @@ def main() -> int:
             f"{negligible_score_drop:.6f} AND cost_improvement >= {min_cost_improvement:.6f}\n"
         )
         handle.write(
-            "# Removable: " + (", ".join(r["name"] for r in removable) if removable else "<none>") + "\n"
+            "# Removable: " + (", ".join(r["name"] for r in removable) if removable else "none") + "\n"
         )
         yaml.safe_dump(minimal_cfg, handle, sort_keys=False)
 
@@ -614,12 +675,13 @@ def main() -> int:
         seed=diet_seed,
         config_path=config_path,
         compute_transfer_efficiency=compute_transfer_efficiency,
+        transfer_efficiency_mode=transfer_efficiency_mode,
         run_mlm_pretrain=run_mlm_pretrain,
         run_stage1_training=run_stage1_training,
         run_stage2_training=run_stage2_training,
     )
     run_rows.append(diet_row)
-    # Reuse baseline variant ranges so diet_combo is comparable without reshuffling scores.
+    # Reuse variant ranges so diet_combo is comparable without reshuffling scores.
     _score_rows([diet_row], seeds=[diet_seed], weights=score_weights, ranges=ranges)
 
     summary_rows = _summarize_rows(run_rows)
@@ -644,6 +706,8 @@ def main() -> int:
         "stage2_mcc",
         "stage2_seconds",
         "stage2_params",
+        "deploy_params",
+        "train_seconds_total",
         "stage1_acc_scratch",
         "stage1_auc_scratch",
         "stage1_mcc_scratch",
@@ -677,6 +741,10 @@ def main() -> int:
         "stage2_auc_std",
         "transfer_efficiency_mean",
         "transfer_efficiency_std",
+        "deploy_params_mean",
+        "deploy_params_std",
+        "train_seconds_total_mean",
+        "train_seconds_total_std",
         "cost_mean",
         "cost_std",
         "score_mean",
@@ -723,14 +791,30 @@ def main() -> int:
             )
     print("-" * 80)
     print("Distillation suggestion")
+    if math.isfinite(base_score) and math.isfinite(base_cost):
+        print(f"Base ({base_variant_name}) score {base_score:.4f} | cost {base_cost:.0f}")
+    print(
+        "Criteria: score_drop <= "
+        f"{negligible_score_drop:.4f} AND cost_improvement >= {min_cost_improvement:.4f}"
+    )
     if removable:
         for row in removable:
             print(
-                f"- {row['name']} (score_drop {row['score_drop']:.4f}, "
-                f"cost_improvement {row['cost_improvement']:.3f})"
+                f"- {row['name']:<24} "
+                f"score {row['score_mean']:.4f} | "
+                f"cost {row['cost_mean']:.0f} | "
+                f"delta_score {row['delta_score']:+.4f} | "
+                f"delta_cost {row['delta_cost']:+.0f}"
             )
     else:
-        print("Removable components: <none>")
+        print("Removable components: none")
+    print("Minimal overrides (diet_combo):")
+    if minimal_overrides:
+        formatted_overrides = yaml.safe_dump(minimal_overrides, sort_keys=False).rstrip()
+        for line in formatted_overrides.splitlines():
+            print(f"  {line}")
+    else:
+        print("  none")
     print(f"Minimal override: {minimal_override_path}")
     print(f"Diet combo seed: {diet_seed}")
     print("-" * 80)

@@ -105,6 +105,8 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     # MLM pretraining
     "stage1_load_mlm_weights": bool,
     "stage2_load_mlm_weights": bool,
+    "stage1_mlm_transfer_mode": str,
+    "stage2_mlm_transfer_mode": str,
     "stage1_freeze_layers": int,
     "stage1_unfreeze_epoch": (int, type(None)),  # Can be null
     "mlm_encoder_checkpoint": str,
