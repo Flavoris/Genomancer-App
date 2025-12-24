@@ -35,9 +35,6 @@ BASES: Tuple[str, ...] = ("A", "C", "G", "T")
 BASES_SET: set = {"A", "C", "G", "T"}  # For fast membership checks
 TRI_KMER_VOCAB: List[str] = ["".join(kmer) for kmer in product(BASES, repeat=3)]
 TRI_KMER_TO_IDX: Dict[str, int] = {kmer: idx for idx, kmer in enumerate(TRI_KMER_VOCAB)}
-# Dinucleotide vocabulary for CKSNAP
-DI_NUCS: List[str] = [a + b for a in "ACGT" for b in "ACGT"]
-DI_INDEX: Dict[str, int] = {d: i for i, d in enumerate(DI_NUCS)}
 EIIP_VALUES: Dict[str, float] = {
     "A": 0.1260,
     "C": 0.1340,
@@ -220,23 +217,6 @@ def compute_tnc(sequence: str) -> torch.FloatTensor:
     return torch.from_numpy(counts)
 
 
-def compute_pstnp(sequence: str) -> torch.FloatTensor:
-    sums = np.zeros(len(TRI_KMER_VOCAB), dtype=np.float32)
-    occurrence = np.zeros(len(TRI_KMER_VOCAB), dtype=np.float32)
-    kmers = list(_iter_kmers(sequence, 3))
-    total = len(kmers)
-    if total == 0:
-        return torch.from_numpy(sums)
-    for idx, kmer in enumerate(kmers):
-        kmer_idx = TRI_KMER_TO_IDX[kmer]
-        normalized_pos = float(idx + 1) / float(total)
-        sums[kmer_idx] += normalized_pos
-        occurrence[kmer_idx] += 1.0
-    occurrence[occurrence == 0] = 1.0
-    means = sums / occurrence
-    return torch.from_numpy(means.astype(np.float32))
-
-
 def compute_eiip(sequence: str) -> torch.FloatTensor:
     accum = np.zeros(len(TRI_KMER_VOCAB), dtype=np.float32)
     kmers = list(_iter_kmers(sequence, 3))
@@ -279,32 +259,6 @@ def compute_pseeiip(sequence: str, lag: int = 3) -> torch.FloatTensor:
     vec = np.zeros(64, dtype=np.float32)
     vec[:len(features)] = features
     return torch.from_numpy(vec)
-
-
-def compute_cksnap(sequence: str, max_k: int = 3) -> torch.FloatTensor:
-    """
-    Compute CKSNAP (k-spaced Nucleotide Pair Composition) features.
-    
-    Computes k-spaced pair composition with k=0..max_k, normalized.
-    Returns a 16-dim vector (one for each dinucleotide pair).
-    """
-    seq = _sanitize_sequence(sequence)
-    L = len(seq)
-    if L < 2:
-        return torch.zeros(len(DI_NUCS), dtype=torch.float32)
-
-    counts = np.zeros(len(DI_NUCS), dtype=np.float32)
-    for k in range(0, max_k + 1):
-        for i in range(L - k - 1):
-            pair = seq[i] + seq[i + k + 1]
-            idx = DI_INDEX.get(pair)
-            if idx is not None:
-                counts[idx] += 1.0
-    
-    total = counts.sum()
-    if total > 0:
-        counts /= total
-    return torch.from_numpy(counts)
 
 
 def _load_dataframe(path: Optional[str], delimiter: str) -> Optional[pd.DataFrame]:
@@ -431,9 +385,9 @@ class PromoterDatasetStage1(Dataset):
     2. Random base substitution (5% per base) - Sequencing error simulation
     3. Random indels (2% per base) - Optional, more aggressive augmentation
     
-    Features: TNC(64) + PSTNP(64) + PseEIIP(64) + CKSNAP(16) = 208
+    Features: TNC(64) + PseEIIP(64) = 128
     """
-    ENGINEERED_DIM = 64 + 64 + 64 + 16
+    ENGINEERED_DIM = 64 + 64
 
     def __init__(
         self,
@@ -442,9 +396,8 @@ class PromoterDatasetStage1(Dataset):
         vocab: KmerVocabulary,
         use_engineered_features: bool = True,
         feature_enable_tnc: bool = True,
-        feature_enable_pstnp: bool = True,
         feature_enable_pseeiip: bool = True,
-        feature_enable_cksnap: bool = True,
+        engineered_dim: int = ENGINEERED_DIM,
         reverse_complement_prob: float = 0.5,
         base_substitution_prob: float = 0.0,  # Set > 0 for training augmentation
         base_indel_prob: float = 0.0,  # Usually 0 for promoter prediction
@@ -457,33 +410,36 @@ class PromoterDatasetStage1(Dataset):
         self.vocab = vocab
         self.use_engineered_features = use_engineered_features
         self.feature_enable_tnc = bool(feature_enable_tnc)
-        self.feature_enable_pstnp = bool(feature_enable_pstnp)
         self.feature_enable_pseeiip = bool(feature_enable_pseeiip)
-        self.feature_enable_cksnap = bool(feature_enable_cksnap)
+        self.engineered_dim = int(engineered_dim)
         self.reverse_complement_prob = max(0.0, min(1.0, reverse_complement_prob))
         self.base_substitution_prob = max(0.0, min(0.2, base_substitution_prob))
         self.base_indel_prob = max(0.0, min(0.1, base_indel_prob))
-        self._zero_engineered = torch.zeros(self.ENGINEERED_DIM, dtype=torch.float32)
+        self._zero_engineered = torch.zeros(self.engineered_dim, dtype=torch.float32)
 
     def __len__(self) -> int:
         return len(self.sequences)
 
     def _build_engineered_features(self, sequence: str) -> torch.FloatTensor:
         if not self.use_engineered_features:
-            return self._zero_engineered.clone()
+            engineered = self._zero_engineered.clone()
+            assert engineered.shape[-1] == self.engineered_dim, (
+                f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
+                f"expected {self.engineered_dim}"
+            )
+            return engineered
         tnc = compute_tnc(sequence)           # 64-dim
-        pstnp = compute_pstnp(sequence)       # 64-dim
         pseeiip = compute_pseeiip(sequence)   # 64-dim
-        cksnap = compute_cksnap(sequence)     # 16-dim
         if not self.feature_enable_tnc:
             tnc = torch.zeros_like(tnc)
-        if not self.feature_enable_pstnp:
-            pstnp = torch.zeros_like(pstnp)
         if not self.feature_enable_pseeiip:
             pseeiip = torch.zeros_like(pseeiip)
-        if not self.feature_enable_cksnap:
-            cksnap = torch.zeros_like(cksnap)
-        return torch.cat([tnc, pstnp, pseeiip, cksnap], dim=0)
+        engineered = torch.cat([tnc, pseeiip], dim=0)
+        assert engineered.shape[-1] == self.engineered_dim, (
+            f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
+            f"expected {self.engineered_dim}"
+        )
+        return engineered
 
     def _augment_sequence(self, sequence: str) -> str:
         """Apply augmentation chain."""
@@ -521,6 +477,7 @@ class PromoterDatasetStage2(Dataset):
         positive_strength: float,
         negative_strength: float,
         vocab: KmerVocabulary,
+        engineered_dim: int = PromoterDatasetStage1.ENGINEERED_DIM,
     ):
         if "sequence" not in df or "strength" not in df:
             raise ValueError("Stage 2 data requires 'sequence' and 'strength' columns")
@@ -528,6 +485,7 @@ class PromoterDatasetStage2(Dataset):
         self.labels = [self._to_label(val, positive_strength, negative_strength) for val in df["strength"].tolist()]
         self.max_bp_len = max_bp_len
         self.vocab = vocab
+        self.engineered_dim = int(engineered_dim)
 
     @staticmethod
     def _to_label(value, positive_strength: float, negative_strength: float) -> float:
@@ -554,10 +512,14 @@ class PromoterDatasetStage2(Dataset):
         sequence = self.sequences[idx]
         tokens = self.vocab.tokenize(sequence, self.max_bp_len)
         tnc = compute_tnc(sequence)
-        pstnp = compute_pstnp(sequence)
-        eiip = compute_eiip(sequence)
+        pseeiip = compute_pseeiip(sequence)
         label = torch.tensor(float(self.labels[idx]), dtype=torch.float32)
-        return tokens, tnc, pstnp, eiip, label
+        engineered = torch.cat([tnc, pseeiip], dim=0)
+        assert engineered.shape[-1] == self.engineered_dim, (
+            f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
+            f"expected {self.engineered_dim}"
+        )
+        return tokens, engineered, label
 
 
 def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
@@ -570,9 +532,8 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     pin_memory = bool(_cfg_value(cfg, "pin_memory", False)) and torch.cuda.is_available()
     stage1_use_engineered = bool(_cfg_value(cfg, "stage1_use_engineered_features", True))
     stage1_feature_enable_tnc = bool(_cfg_value(cfg, "stage1_feature_enable_tnc", True))
-    stage1_feature_enable_pstnp = bool(_cfg_value(cfg, "stage1_feature_enable_pstnp", True))
     stage1_feature_enable_pseeiip = bool(_cfg_value(cfg, "stage1_feature_enable_pseeiip", True))
-    stage1_feature_enable_cksnap = bool(_cfg_value(cfg, "stage1_feature_enable_cksnap", True))
+    engineered_dim = int(_cfg_value(cfg, "engineered_dim", PromoterDatasetStage1.ENGINEERED_DIM))
     stage1_rc_prob = float(_cfg_value(cfg, "stage1_reverse_complement_prob", 0.5))
     kmer = int(_cfg_value(cfg, "kmer", 3))
     vocab_cache_dir = Path(_cfg_value(cfg, "vocab_cache_dir", "../artifacts/vocabs")).resolve()
@@ -620,9 +581,8 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         vocab=stage1_vocab,
         use_engineered_features=stage1_use_engineered,
         feature_enable_tnc=stage1_feature_enable_tnc,
-        feature_enable_pstnp=stage1_feature_enable_pstnp,
         feature_enable_pseeiip=stage1_feature_enable_pseeiip,
-        feature_enable_cksnap=stage1_feature_enable_cksnap,
+        engineered_dim=engineered_dim,
         reverse_complement_prob=stage1_rc_prob,
     )
     stage1_val_ds = PromoterDatasetStage1(
@@ -631,9 +591,8 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         vocab=stage1_vocab,
         use_engineered_features=stage1_use_engineered,
         feature_enable_tnc=stage1_feature_enable_tnc,
-        feature_enable_pstnp=stage1_feature_enable_pstnp,
         feature_enable_pseeiip=stage1_feature_enable_pseeiip,
-        feature_enable_cksnap=stage1_feature_enable_cksnap,
+        engineered_dim=engineered_dim,
         reverse_complement_prob=0.0,
     )
     stage1_sampler = _maybe_sampler(stage1_train_ds.labels)
@@ -689,10 +648,31 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     pos_strength = float(_cfg_value(cfg, "stage2_strength_positive", 1))
     neg_strength = float(_cfg_value(cfg, "stage2_strength_negative", 0))
 
-    stage2_train_ds = PromoterDatasetStage2(stage2_train_df, max_bp_len, pos_strength, neg_strength, stage1_vocab)
-    stage2_val_ds = PromoterDatasetStage2(stage2_val_df, max_bp_len, pos_strength, neg_strength, stage1_vocab)
+    stage2_train_ds = PromoterDatasetStage2(
+        stage2_train_df,
+        max_bp_len,
+        pos_strength,
+        neg_strength,
+        stage1_vocab,
+        engineered_dim=engineered_dim,
+    )
+    stage2_val_ds = PromoterDatasetStage2(
+        stage2_val_df,
+        max_bp_len,
+        pos_strength,
+        neg_strength,
+        stage1_vocab,
+        engineered_dim=engineered_dim,
+    )
     stage2_test_ds = (
-        PromoterDatasetStage2(stage2_test_df, max_bp_len, pos_strength, neg_strength, stage1_vocab)
+        PromoterDatasetStage2(
+            stage2_test_df,
+            max_bp_len,
+            pos_strength,
+            neg_strength,
+            stage1_vocab,
+            engineered_dim=engineered_dim,
+        )
         if stage2_test_df is not None
         else None
     )

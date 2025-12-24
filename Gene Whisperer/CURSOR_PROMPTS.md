@@ -50,11 +50,10 @@ Create Gene Whisperer/training/dataset.py:
 - Build 64-size 3-mer vocab (AAA..TTT) with deterministic ordering.
 - tokenize_kmers(seq,max_bp_len): uppercase/strip, pad/truncate bp to max_bp_len, make overlapping 3-mers, map to ids, pad/truncate to max_tokens=max_bp_len-2, return LongTensor.
 - compute_tnc(seq): 64-dim normalized tri-nucleotide frequency.
-- compute_pstnp(seq): mean position-specific 3-mer distribution to 64 dims.
-- compute_eiip(seq): 64-dim EIIP frequency using published EIIP constants; unknowns -> zero.
+- compute_pseeiip(seq): 64-dim PseEIIP features using published EIIP constants; unknowns -> zero.
 - TSV/CSV loading using cfg.delimiter.
-- PromoterDatasetStage1 returns (tokens, label_float) for columns sequence,is_promoter (0/1).
-- PromoterDatasetStage2 returns (tokens, tnc[64], pstnp[64], eiip[64], label_float) for columns sequence,strength using cfg.stage2_strength_positive (1=strong) and cfg.stage2_strength_negative (0=weak).
+- PromoterDatasetStage1 returns (tokens, engineered[128], label_float) for columns sequence,is_promoter (0/1).
+- PromoterDatasetStage2 returns (tokens, engineered[128], label_float) for columns sequence,strength using cfg.stage2_strength_positive (1=strong) and cfg.stage2_strength_negative (0=weak).
 - build_dataloaders(cfg): returns train/val/test loaders for both stages; random split if val missing; use WeightedRandomSampler when imbalance >20%.
 Include minimal validation/logging and seeds.
 ```
@@ -64,7 +63,7 @@ Include minimal validation/logging and seeds.
 Create Gene Whisperer/training/model.py:
 - TransformerBackbone: embedding_dim=48, vocab=64, learned positional embeddings up to max_tokens, 4 encoder layers with LayerNorm -> MHA (heads=4, dropout=0.1) + residual -> LayerNorm -> FFN 48->64->48 + residual.
 - PromoterClassifier head: Conv1d(48->128,k=5,pad=2)+ReLU -> BiLSTM(128 per dir) -> global max pool -> Dense128+ReLU -> Dropout0.5 -> Dense1 sigmoid.
-- StrengthClassifier head: Conv1d(48->96,k=5,pad=2)+ReLU -> LSTM(128) -> global avg pool -> concat with TNC/PSTNP/EIIP (each 64-dim) -> Dense128+ReLU -> Dropout0.5 -> Dense1 sigmoid.
+- StrengthClassifier head: Conv1d(48->96,k=5,pad=2)+ReLU -> LSTM(128) -> global avg pool -> concat with TNC/PseEIIP (each 64-dim) -> Dense128+ReLU -> Dropout0.5 -> Dense1 sigmoid.
 - GeneWhispererStage1(backbone+head) and GeneWhispererStage2(backbone+head) share backbone; Stage2 exposes freeze_lower_layers() to freeze bottom half (layers 0-1).
 No custom ops.
 ```
@@ -102,7 +101,7 @@ Create Gene Whisperer/training/inference.py:
 ```
 Create Gene Whisperer/training/export_coreml.py:
 - Load stage1_best.pt and stage2_best.pt.
-- Dummy inputs: tokens (1,max_tokens) for Stage1; tokens plus tnc/pstnp/eiip (1,64 each) for Stage2.
+- Dummy inputs: tokens (1,max_tokens) plus engineered (1,128) for Stage1/Stage2.
 - Convert with coremltools.convert to two models:
   - GeneWhispererPromoter.mlmodel/mlpackage
   - GeneWhispererStrength.mlmodel/mlpackage
@@ -121,7 +120,7 @@ Add a note in Gene Whisperer/training/README.md reminding:
 ```
 Add apps/ios/Genomancer/Genomancer/App/GeneWhispererPredictor.swift:
 - Shared 3-mer tokenizer mirroring Python (pad/truncate to max_bp_len, overlapping 3-mers -> ids).
-- Feature builders for TNC, PSTNP (mean position-averaged 3-mer distribution), EIIP (64-dim) matching Python.
+- Feature builders for TNC and PseEIIP (64-dim each) matching Python.
 - Load two CoreML models (promoter + strength).
 - predictPromoter(sequence) -> (isPromoter: Bool, score: Double); predictStrength(sequence) -> (isStrong: Bool, score: Double).
 - Caller should skip predictStrength if predictPromoter is false.

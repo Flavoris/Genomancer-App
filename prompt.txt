@@ -1,23 +1,15 @@
-Add a “tiny transfer test” command (fast sanity run)
+Wire config.yaml to include all 3 genomes
 
-This prevents wasting hours on a broken “pretrain isn’t actually helping” pipeline.
+Goal: you can flip between single-genome and multi-genome runs safely.
 
-Add a new script training/transfer_smoketest.py.
+Update config.yaml handling:
+- Keep backward compatibility with mlm_fasta_path (single string)
+- Prefer mlm_fasta_paths (list) when present
 
-Behavior:
-- Loads config.yaml
-- Runs MLM pretrain for a tiny budget (e.g. 200-500 optimizer steps)
-- Runs stage1 for a tiny budget (e.g. 1 epoch or 300 steps) twice:
-   A) with pretrained encoder loaded
-   B) from scratch
-- Prints: stage1_mcc_pretrained, stage1_mcc_scratch, delta
-Repeat for stage2 similarly (if stage2 script supports short runs).
+Set defaults (reasonable for MacBook):
+- mlm_steps_per_epoch: 5000
+- mlm_species_weights: [0.45, 0.35, 0.20] (E coli, B subtilis, yeast) OR dict keyed by filename
+- mlm_unknown_base_strategy: "random"
 
-Add config knobs:
-- smoketest_steps_pretrain
-- smoketest_steps_stage1
-- smoketest_steps_stage2
-
-CHECKPOINT:
-- Run transfer_smoketest.py and verify delta is not ~0.000 every time.
-If it is, print whether the encoder weights are actually changing the model outputs (e.g., compare first batch logits).
+Checkpoint:
+- Start pretraining and confirm it loads all three genomes and reports species sampling stats.

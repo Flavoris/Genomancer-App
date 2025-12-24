@@ -23,7 +23,6 @@ Your original model plateaued at ~79% accuracy due to several limitations:
 |-------|--------|----------|
 | Single k-mer (k=3) | Misses longer motifs | Multi-scale k-mer or larger model |
 | Max pooling | Loses position info | Attention pooling |
-| Simple positional encoding | Poor motif localization | ALiBi relative positions |
 | No learning rate warmup | Training instability | Warmup + cosine decay |
 | No label smoothing | Overconfident predictions | Label smoothing (0.05) |
 
@@ -57,25 +56,7 @@ class AttentionPooling(nn.Module):
 
 **Expected Impact:** +2-4% accuracy
 
-### 3. **ALiBi Positional Encoding** ⭐⭐⭐⭐
-
-**Problem:** Learned positional embeddings don't generalize well to different sequence lengths.
-
-**Solution:** ALiBi (Attention with Linear Biases) adds position-dependent biases to attention scores:
-
-```python
-# Position bias decays linearly with distance
-alibi_bias[i,j] = -slope * |i - j|
-```
-
-**Benefits:**
-- Memory efficient (no positional embedding matrix)
-- Better extrapolation to different lengths
-- Works well on Apple M4 (MPS backend)
-
-**Expected Impact:** +1-2% accuracy
-
-### 4. **Label Smoothing + Focal Loss** ⭐⭐⭐
+### 3. **Label Smoothing + Focal Loss** ⭐⭐⭐
 
 **Problem:** Model becomes overconfident, hurting generalization.
 
@@ -90,7 +71,7 @@ loss = -alpha * (1 - p_t)^gamma * log(p_t)
 
 **Expected Impact:** +1-2% accuracy
 
-### 5. **Warmup + Cosine Decay Schedule** ⭐⭐⭐
+### 4. **Warmup + Cosine Decay Schedule** ⭐⭐⭐
 
 **Problem:** Starting with high learning rate causes instability.
 
@@ -103,7 +84,7 @@ LR Schedule:
 
 **Expected Impact:** +1-2% accuracy, faster convergence
 
-### 6. **Mixup Augmentation** ⭐⭐
+### 5. **Mixup Augmentation** ⭐⭐
 
 **Problem:** Limited training data (5,410 samples).
 
@@ -122,7 +103,7 @@ mixed_label = λ * label_a + (1-λ) * label_b
 embedding_dim: 192        # was 160
 transformer_layers: 6     # was 4
 transformer_ff_dim: 384   # was 256
-use_alibi: true           # NEW
+engineered_dim: 128       # TNC + PseEIIP
 use_attention_pool: true  # NEW
 label_smoothing: 0.05     # NEW
 use_mixup: true           # NEW
@@ -210,7 +191,7 @@ python export_coreml.py --config config.yaml \
 
 | File | Description |
 |------|-------------|
-| `model.py` | Enhanced model with ALiBi, attention pooling |
+| `model.py` | Enhanced model with attention pooling |
 | `train_stage1.py` | Training script with warmup, mixup, label smoothing |
 | `pretrain_mlm.py` | MLM pretraining script |
 | `config.yaml` | Optimized hyperparameters for 90%+ accuracy |

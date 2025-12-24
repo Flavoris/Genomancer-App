@@ -216,7 +216,6 @@ def main() -> int:
     seeds: list[int] = args.seeds
 
     ablations: list[tuple[str, dict[str, Any]]] = [
-        ("no_alibi", {"use_alibi": False}),
         ("no_attention_pool", {"use_attention_pool": False}),
         ("no_tcn", {"use_tcn": False}),
         ("no_postcnn_transformer", {"post_cnn_transformer_layers": 0}),
@@ -362,7 +361,6 @@ def main() -> int:
     )
     if overall_candidates is not None:
         stage1_shared_overrides: dict[str, dict[str, Any]] = {
-            "no_alibi": {"use_alibi": False},
             "no_attention_pool": {"use_attention_pool": False},
             "no_tcn": {"use_tcn": False},
             "no_postcnn_transformer": {"post_cnn_transformer_layers": 0},

@@ -14,7 +14,7 @@ from dataset import build_dataloaders
 from model import GeneWhispererStage1
 from pretrain_mlm import run_mlm_pretrain
 from train_stage1 import load_config, run_stage1_training
-from train_stage2 import STAGE2_ENGINEERED_DIM, run_stage2_training
+from train_stage2 import run_stage2_training
 
 
 SMALL_DELTA_THRESHOLD = 1e-3
@@ -121,7 +121,6 @@ def _build_stage1_model(cfg: dict, *, engineered_dim: int, use_engineered: bool)
         num_heads=int(cfg.get("transformer_heads", 8)),
         ff_dim=int(cfg.get("transformer_ff_dim", 1024)),
         dropout=float(cfg.get("transformer_dropout", 0.15)),
-        use_alibi=bool(cfg.get("use_alibi", True)),
         pad_token_id=pad_token_id,
         engineered_dim=engineered_dim,
         use_engineered_features=use_engineered,
@@ -145,9 +144,9 @@ def _first_batch_from_loader(loader) -> Tuple[torch.Tensor, Optional[torch.Tenso
     if isinstance(batch, (tuple, list)) and len(batch) == 3:
         tokens, engineered, _ = batch
         return tokens, engineered
-    if isinstance(batch, (tuple, list)) and len(batch) == 5:
-        tokens, tnc, pstnp, eiip, _ = batch
-        engineered = torch.cat([tnc, pstnp, eiip], dim=1)
+    if isinstance(batch, (tuple, list)) and len(batch) == 4:
+        tokens, tnc, pseeiip, _ = batch
+        engineered = torch.cat([tnc, pseeiip], dim=1)
         return tokens, engineered
     raise ValueError(f"Unexpected batch format: {type(batch)} len={getattr(batch, '__len__', None)}")
 
@@ -298,7 +297,7 @@ def main() -> int:
             pretrained_ckpt=stage1_pre_ckpt,
             scratch_ckpt=stage1_scratch_ckpt,
             use_engineered=use_engineered_stage1,
-            engineered_dim=int(cfg_stage1_pre.get("stage1_engineered_dim", 208)),
+            engineered_dim=int(cfg_stage1_pre.get("engineered_dim", 128)),
         )
 
     cfg_stage2_pre = copy.deepcopy(cfg)
@@ -354,7 +353,7 @@ def main() -> int:
             pretrained_ckpt=stage2_pre_ckpt,
             scratch_ckpt=stage2_scratch_ckpt,
             use_engineered=use_engineered_stage2,
-            engineered_dim=STAGE2_ENGINEERED_DIM,
+            engineered_dim=int(cfg_stage2_pre.get("engineered_dim", 128)),
         )
 
     return 0

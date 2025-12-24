@@ -7,16 +7,21 @@ Key improvements for reaching lower loss (<1.0):
 4. Gradient accumulation for larger effective batch size
 5. Label smoothing for better generalization
 """
+# README: pretraining map -> dataset (MLMDataset + prepare_dataset), trainer (run_mlm_pretrain).
+# Train/val loss: run_mlm_pretrain epoch summary + run_validation; grad accumulation scales loss only for backward.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import copy
+import csv
 import json
 import logging
 import math
 import os
 import random
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -27,7 +32,7 @@ import torch.nn.functional as F
 import yaml
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset, IterableDataset, random_split
 
 from dataset import KmerVocabulary
 from model import DNAEncoder
@@ -53,11 +58,11 @@ from numerics import (
     cap_model_param_norm_,
     detect_nan_in_model,
 )
+from genome_io import read_fasta_records, sanitize_unknown_bases
 
 LOGGER = logging.getLogger("gene_whisperer.pretrain_mlm")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
-ALLOWED_BASES = {"A", "C", "G", "T"}
 REV_COMP_MAP = str.maketrans("ACGT", "TGCA")
 
 
@@ -73,24 +78,18 @@ def set_seed(seed: int) -> None:
     set_global_seed(seed)
 
 
-def read_fasta_sequence(path: Path) -> str:
-    sequence_parts: List[str] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line or line.startswith(">"):
-                continue
-            sequence_parts.append(line.upper())
-    return "".join(sequence_parts)
-
-
-def extract_windows(sequence: str, window_size: int, stride: int) -> List[str]:
+def extract_windows(
+    sequence: str,
+    window_size: int,
+    stride: int,
+    *,
+    unknown_base_strategy: str,
+) -> List[str]:
     windows: List[str] = []
-    max_start = len(sequence) - window_size + 1
+    sanitized = sanitize_unknown_bases(sequence, unknown_base_strategy)
+    max_start = len(sanitized) - window_size + 1
     for start in range(0, max_start, stride):
-        window = sequence[start : start + window_size]
-        if not set(window) <= ALLOWED_BASES:
-            continue
+        window = sanitized[start : start + window_size]
         windows.append(window)
     return windows
 
@@ -106,6 +105,38 @@ def _resolve_cfg_path(path_value: str | Path | None, *, base_dir: Path) -> Path:
     return path
 
 
+def _normalize_unknown_base_strategy(raw_strategy: Any) -> str:
+    if raw_strategy is None:
+        return "random"
+    if isinstance(raw_strategy, list):
+        if len(raw_strategy) != 1:
+            raise ValueError("mlm_unknown_base_strategy must be a single value")
+        raw_strategy = raw_strategy[0]
+    if not isinstance(raw_strategy, str):
+        raise ValueError("mlm_unknown_base_strategy must be a string")
+    strategy = raw_strategy.strip().lower()
+    if strategy != "random":
+        raise ValueError(f"Unsupported mlm_unknown_base_strategy: {raw_strategy!r}")
+    return strategy
+
+
+def _apply_bp_limit(records: List[Tuple[str, str]], bp_limit: int) -> List[Tuple[str, str]]:
+    if bp_limit <= 0:
+        return records
+    limited: List[Tuple[str, str]] = []
+    remaining = bp_limit
+    for record_id, sequence in records:
+        if remaining <= 0:
+            break
+        if len(sequence) <= remaining:
+            limited.append((record_id, sequence))
+            remaining -= len(sequence)
+        else:
+            limited.append((record_id, sequence[:remaining]))
+            remaining = 0
+    return limited
+
+
 class MLMDataset(Dataset):
     def __init__(self, token_tensors: List[torch.LongTensor]):
         self.samples = token_tensors
@@ -115,6 +146,208 @@ class MLMDataset(Dataset):
 
     def __getitem__(self, idx: int) -> torch.LongTensor:
         return self.samples[idx]
+
+
+class GenomeMLMIterableDataset(IterableDataset):
+    """On-the-fly MLM sampling across multiple genomes."""
+
+    def __init__(
+        self,
+        corpus: List[Tuple[str, str, str]],
+        window_bp: int,
+        kmer: int,
+        steps_per_epoch: int | None,
+        mask_config: Dict[str, Any],
+        reverse_complement_prob: float,
+        unknown_base_strategy: Any,
+        *,
+        species_weights: Dict[str, float] | None = None,
+        return_metadata: bool = False,
+    ) -> None:
+        if window_bp <= 0:
+            raise ValueError(f"window_bp must be > 0, got {window_bp}")
+        if kmer <= 0:
+            raise ValueError(f"kmer must be > 0, got {kmer}")
+        if kmer > window_bp:
+            raise ValueError(f"kmer ({kmer}) must be <= window_bp ({window_bp})")
+        if not 0.0 <= reverse_complement_prob <= 1.0:
+            raise ValueError(
+                f"reverse_complement_prob must be in [0, 1], got {reverse_complement_prob}"
+            )
+        if steps_per_epoch is not None:
+            steps_int = int(steps_per_epoch)
+            if steps_int <= 0:
+                raise ValueError(f"steps_per_epoch must be > 0, got {steps_per_epoch}")
+            steps_per_epoch = steps_int
+
+        vocab = mask_config.get("vocab")
+        if vocab is None:
+            raise ValueError("mask_config must include 'vocab'")
+
+        self.window_bp = int(window_bp)
+        self.kmer = int(kmer)
+        self.steps_per_epoch = steps_per_epoch
+        self.vocab = vocab
+        self.mask_prob = float(mask_config.get("mask_prob", 0.15))
+        self.max_span_len = int(mask_config.get("max_span_len", 3))
+        self.span_distribution = str(mask_config.get("span_distribution", "geometric"))
+        self.mean_span = float(mask_config.get("mean_span", 3.0))
+        self.exclude_special_from_labels = bool(mask_config.get("exclude_special_from_labels", True))
+        self.track_spans = bool(mask_config.get("track_spans", False))
+        self.debug = bool(mask_config.get("debug", False))
+        self.reverse_complement_prob = float(reverse_complement_prob)
+        self.unknown_base_strategy = _normalize_unknown_base_strategy(unknown_base_strategy)
+        self.return_metadata = bool(return_metadata)
+        self._debug_ran = False
+
+        if self.return_metadata and self.track_spans:
+            raise ValueError("return_metadata is incompatible with track_spans")
+
+        batch_size = mask_config.get("batch_size")
+        if batch_size is not None:
+            batch_size = int(batch_size)
+        self._samples_per_epoch = None
+        if self.steps_per_epoch is not None and batch_size:
+            self._samples_per_epoch = self.steps_per_epoch * batch_size
+
+        records_by_species: Dict[str, List[Tuple[str, str]]] = {}
+        species_order: List[str] = []
+        skipped_short = 0
+        for species_name, record_id, sequence in corpus:
+            if len(sequence) < self.window_bp:
+                skipped_short += 1
+                continue
+            if species_name not in records_by_species:
+                records_by_species[species_name] = []
+                species_order.append(species_name)
+            records_by_species[species_name].append((record_id, sequence))
+
+        if not records_by_species:
+            raise ValueError(
+                "No sequences long enough for window_bp after filtering; "
+                f"skipped_short={skipped_short}"
+            )
+
+        if skipped_short > 0:
+            LOGGER.warning("Skipped %d records shorter than window_bp=%d", skipped_short, self.window_bp)
+
+        if species_weights is None:
+            species_weights = {species: 1.0 for species in species_order}
+
+        missing = [name for name in species_order if name not in species_weights]
+        if missing:
+            raise ValueError(f"Species weights missing entries for: {missing}")
+
+        self._species_names = [name for name in species_order if name in records_by_species]
+        self._species_weights = [float(species_weights[name]) for name in self._species_names]
+        for name, weight in zip(self._species_names, self._species_weights):
+            if weight <= 0:
+                raise ValueError(f"Species weight must be > 0 (species={name}, weight={weight})")
+
+        self._records_by_species = records_by_species
+
+    def __len__(self) -> int:
+        if self._samples_per_epoch is None:
+            raise TypeError("GenomeMLMIterableDataset length requires steps_per_epoch and batch_size")
+        return self._samples_per_epoch
+
+    def _sample_tokens(self) -> Tuple[torch.LongTensor, Dict[str, Any]]:
+        species_name = random.choices(self._species_names, weights=self._species_weights, k=1)[0]
+        record_id, sequence = random.choice(self._records_by_species[species_name])
+        max_start = len(sequence) - self.window_bp
+        if max_start < 0:
+            raise RuntimeError(
+                f"Record shorter than window_bp after filtering (species={species_name}, record={record_id})"
+            )
+        start = random.randint(0, max_start)
+        window = sequence[start : start + self.window_bp]
+        window = sanitize_unknown_bases(window, self.unknown_base_strategy)
+        rc_used = False
+        if self.reverse_complement_prob > 0 and random.random() < self.reverse_complement_prob:
+            window = reverse_complement(window)
+            rc_used = True
+        tokens = self.vocab.tokenize(window, self.window_bp)
+        metadata = {
+            "species": species_name,
+            "record_id": record_id,
+            "start": start,
+            "reverse_complement": rc_used,
+        }
+        return tokens, metadata
+
+    def sample_raw_tokens(self, num_samples: int) -> List[torch.LongTensor]:
+        return [self._sample_tokens()[0] for _ in range(num_samples)]
+
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if self._samples_per_epoch is None:
+            samples_to_yield = None
+        elif worker_info is None:
+            samples_to_yield = self._samples_per_epoch
+        else:
+            base = self._samples_per_epoch // worker_info.num_workers
+            extra = self._samples_per_epoch % worker_info.num_workers
+            samples_to_yield = base + (1 if worker_info.id < extra else 0)
+
+        yielded = 0
+        while samples_to_yield is None or yielded < samples_to_yield:
+            original_tokens, metadata = self._sample_tokens()
+            batch_tokens = original_tokens.unsqueeze(0)
+            if self.track_spans:
+                masked_inputs, labels, span_lengths = mask_tokens_span(
+                    batch_tokens,
+                    self.vocab,
+                    mask_prob=self.mask_prob,
+                    max_span_len=self.max_span_len,
+                    track_spans=True,
+                    span_distribution=self.span_distribution,
+                    mean_span=self.mean_span,
+                    exclude_special_from_labels=self.exclude_special_from_labels,
+                )
+            else:
+                masked_inputs, labels = mask_tokens_span(
+                    batch_tokens,
+                    self.vocab,
+                    mask_prob=self.mask_prob,
+                    max_span_len=self.max_span_len,
+                    track_spans=False,
+                    span_distribution=self.span_distribution,
+                    mean_span=self.mean_span,
+                    exclude_special_from_labels=self.exclude_special_from_labels,
+                )
+                span_lengths = []
+
+            masked_inputs = masked_inputs.squeeze(0)
+            labels = labels.squeeze(0)
+
+            if self.debug and not self._debug_ran:
+                self._debug_ran = True
+                self._run_debug_verification(original_tokens, masked_inputs, labels)
+
+            if self.return_metadata:
+                yield masked_inputs, labels, metadata
+            elif self.track_spans:
+                yield masked_inputs, labels, span_lengths
+            else:
+                yield masked_inputs, labels
+            yielded += 1
+
+    def _run_debug_verification(
+        self,
+        original: torch.LongTensor,
+        masked_input: torch.LongTensor,
+        labels: torch.LongTensor,
+    ) -> None:
+        masked_positions = labels != -100
+        if masked_positions.any():
+            assert torch.equal(labels[masked_positions], original[masked_positions]), (
+                "Label debug failed: masked labels do not match original tokens"
+            )
+        unmasked_positions = ~masked_positions
+        if unmasked_positions.any():
+            assert torch.all(labels[unmasked_positions] == -100), (
+                "Label debug failed: unmasked positions should be -100"
+            )
 
 
 def sample_span_length_geometric(max_span_len: int, mean_span: float = 3.0) -> int:
@@ -854,6 +1087,28 @@ class MLMCollator:
         print("=" * 80)
 
 
+def collate_mlm_streaming(
+    batch: Iterable[Tuple[torch.LongTensor, torch.LongTensor] | Tuple[torch.LongTensor, torch.LongTensor, Any]]
+) -> Tuple[torch.LongTensor, torch.LongTensor] | Tuple[torch.LongTensor, torch.LongTensor, Any]:
+    batch_list = list(batch)
+    if not batch_list:
+        raise ValueError("Empty batch in collate_mlm_streaming")
+    sample = batch_list[0]
+    if len(sample) == 2:
+        inputs, labels = zip(*batch_list)
+        return torch.stack(inputs), torch.stack(labels)
+    if len(sample) == 3:
+        inputs, labels, extras = zip(*batch_list)
+        stacked_inputs = torch.stack(inputs)
+        stacked_labels = torch.stack(labels)
+        first_extra = extras[0]
+        if isinstance(first_extra, (list, tuple)):
+            flat_spans = [span for spans in extras for span in spans]
+            return stacked_inputs, stacked_labels, flat_spans
+        return stacked_inputs, stacked_labels, list(extras)
+    raise ValueError(f"Unexpected batch sample length: {len(sample)}")
+
+
 def collate_mlm(
     batch: Iterable[torch.LongTensor],
     vocab: KmerVocabulary,
@@ -1391,6 +1646,58 @@ def load_or_build_vocab(windows: List[str], k: int, vocab_path: Path) -> KmerVoc
     return vocab
 
 
+def _build_windows_from_records(
+    records: List[Tuple[str, str]],
+    *,
+    window_size: int,
+    stride: int,
+    unknown_base_strategy: str,
+    include_reverse_complements: bool,
+    label: str | None = None,
+) -> List[str]:
+    windows: List[str] = []
+    for _, sequence in records:
+        windows.extend(
+            extract_windows(
+                sequence,
+                window_size,
+                stride,
+                unknown_base_strategy=unknown_base_strategy,
+            )
+        )
+    if not windows:
+        suffix = f" for {label}" if label else ""
+        raise ValueError(f"No valid windows generated from genome{suffix}")
+    forward_count = len(windows)
+    if include_reverse_complements:
+        rc_windows = [reverse_complement(window) for window in windows]
+        windows.extend(rc_windows)
+        rc_fraction = len(rc_windows) / max(1, len(windows))
+        if label:
+            LOGGER.info(
+                "Extracted %d %s windows (%d + RC=%d, rc_frac=%.3f)",
+                len(windows),
+                label,
+                forward_count,
+                len(rc_windows),
+                rc_fraction,
+            )
+        else:
+            LOGGER.info(
+                "Extracted %d windows (%d + RC=%d, rc_frac=%.3f)",
+                len(windows),
+                forward_count,
+                len(rc_windows),
+                rc_fraction,
+            )
+    else:
+        if label:
+            LOGGER.info("Extracted %d %s windows (rc_frac=0.000)", forward_count, label)
+        else:
+            LOGGER.info("Extracted %d windows (rc_frac=0.000)", forward_count)
+    return windows
+
+
 def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], KmerVocabulary]:
     script_dir = Path(__file__).resolve().parent
     fasta_path = _resolve_cfg_path(cfg.get("mlm_fasta_path"), base_dir=script_dir)
@@ -1399,14 +1706,18 @@ def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], KmerVocabulary]:
     window_size = int(cfg.get("mlm_window_size", 81))
     stride = int(cfg.get("mlm_stride", 20))
     k = int(cfg.get("mlm_kmer", 3))
+    unknown_base_strategy = _normalize_unknown_base_strategy(cfg.get("mlm_unknown_base_strategy"))
     include_reverse_complements = bool(cfg.get("include_reverse_complements", cfg.get("mlm_include_reverse_complements", False)))
     vocab_path = _resolve_cfg_path(
         cfg.get("mlm_vocab_path", f"../artifacts/vocabs/k{k}_mlm_vocab.json"),
         base_dir=script_dir,
     )
 
-    LOGGER.info("Reading genome from %s", fasta_path)
-    genome_sequence = read_fasta_sequence(fasta_path)
+    LOGGER.info("Reading FASTA records from %s", fasta_path)
+    records = read_fasta_records(fasta_path)
+    if not records:
+        raise ValueError(f"No FASTA records found in {fasta_path}")
+    LOGGER.info("Found %d FASTA record(s)", len(records))
     ablation_cfg = cfg.get("ablation") if isinstance(cfg, dict) else None
     if isinstance(ablation_cfg, dict) and bool(ablation_cfg.get("enabled", False)):
         bp_limit_raw = ablation_cfg.get("pretrain_bp_limit")
@@ -1418,28 +1729,538 @@ def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], KmerVocabulary]:
             if bp_limit < 0:
                 raise ValueError(f"ablation.pretrain_bp_limit must be >= 0, got {bp_limit}")
             if bp_limit > 0:
-                genome_sequence = genome_sequence[:bp_limit]
-                LOGGER.info("Ablation enabled: using first %d bp from FASTA", len(genome_sequence))
-    windows = extract_windows(genome_sequence, window_size, stride)
-    if not windows:
-        raise ValueError("No valid windows generated from genome")
-    forward_count = len(windows)
-    if include_reverse_complements:
-        rc_windows = [reverse_complement(window) for window in windows]
-        windows.extend(rc_windows)
-        rc_fraction = len(rc_windows) / max(1, len(windows))
-        LOGGER.info(
-            "Extracted %d windows (%d + RC=%d, rc_frac=%.3f)",
-            len(windows),
-            forward_count,
-            len(rc_windows),
-            rc_fraction,
-        )
-    else:
-        LOGGER.info("Extracted %d windows (rc_frac=0.000)", forward_count)
+                records = _apply_bp_limit(records, bp_limit)
+                total_bp = sum(len(seq) for _, seq in records)
+                LOGGER.info("Ablation enabled: using first %d bp from FASTA", total_bp)
+    windows = _build_windows_from_records(
+        records,
+        window_size=window_size,
+        stride=stride,
+        unknown_base_strategy=unknown_base_strategy,
+        include_reverse_complements=include_reverse_complements,
+    )
     vocab = load_or_build_vocab(windows, k=k, vocab_path=vocab_path)
     token_tensors = [vocab.tokenize(window, window_size) for window in windows]
     return token_tensors, vocab
+
+
+def _should_use_streaming(cfg: Dict[str, Any]) -> bool:
+    raw_paths = cfg.get("mlm_fasta_paths")
+    if isinstance(raw_paths, list):
+        if any(str(p).strip() for p in raw_paths):
+            return True
+    elif isinstance(raw_paths, str) and raw_paths.strip():
+        return True
+
+    steps = cfg.get("mlm_steps_per_epoch")
+    if steps is None:
+        return False
+    try:
+        return int(steps) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _resolve_mlm_fasta_paths(cfg: Dict[str, Any], *, base_dir: Path) -> List[Path]:
+    raw_paths: List[Any] = []
+    configured = cfg.get("mlm_fasta_paths")
+    if isinstance(configured, list):
+        raw_paths = [p for p in configured if str(p).strip()]
+    elif isinstance(configured, str) and configured.strip():
+        raw_paths = [configured]
+
+    if not raw_paths:
+        fallback = cfg.get("mlm_fasta_path")
+        if fallback and str(fallback).strip():
+            raw_paths = [fallback]
+
+    if not raw_paths:
+        raise ValueError("Provide mlm_fasta_paths or mlm_fasta_path in config")
+
+    resolved: List[Path] = []
+    for raw in raw_paths:
+        path = _resolve_cfg_path(raw, base_dir=base_dir)
+        if not path.exists():
+            raise FileNotFoundError(f"FASTA file not found at {path}")
+        resolved.append(path)
+    return resolved
+
+
+def _build_mlm_corpus(fasta_paths: List[Path]) -> Tuple[List[Tuple[str, str, str]], List[str]]:
+    corpus: List[Tuple[str, str, str]] = []
+    species_names: List[str] = []
+    used_names: Dict[str, int] = {}
+
+    for path in fasta_paths:
+        records = read_fasta_records(path)
+        if not records:
+            raise ValueError(f"No FASTA records found in {path}")
+        base_name = path.stem
+        if base_name in used_names:
+            used_names[base_name] += 1
+            species_name = f"{base_name}_{used_names[base_name]}"
+        else:
+            used_names[base_name] = 1
+            species_name = base_name
+        species_names.append(species_name)
+        for record_id, sequence in records:
+            corpus.append((species_name, record_id, sequence))
+    return corpus, species_names
+
+
+def _stable_species_seed(seed: int, species_name: str) -> int:
+    payload = f"{seed}:{species_name}".encode("utf-8")
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    return int.from_bytes(digest, "big")
+
+
+def _split_records_for_species(
+    records: List[Tuple[str, str]],
+    *,
+    window_bp: int,
+    val_ratio: float,
+    seed: int,
+    species_name: str,
+    exclude_patterns: List[str] | None = None,
+    min_val_records: int = 1,
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    total = len(records)
+    if total == 0:
+        return [], []
+    if total == 1:
+        record_id, sequence = records[0]
+        seq_len = len(sequence)
+        gap = window_bp
+        desired_val_bp = max(int(seq_len * val_ratio), 10 * window_bp)
+        desired_val_bp = min(desired_val_bp, seq_len - (2 * window_bp + gap))
+        if desired_val_bp < window_bp:
+            LOGGER.warning(
+                "Single-record species %s too short to split safely (len=%d, window_bp=%d); using all-train.",
+                species_name,
+                seq_len,
+                window_bp,
+            )
+            return [(record_id, sequence)], []
+        train_end = seq_len - desired_val_bp - gap
+        val_start = train_end + gap
+        train_seq = sequence[:train_end]
+        val_seq = sequence[val_start:]
+        return [(f"{record_id}|train", train_seq)], [(f"{record_id}|val", val_seq)]
+
+    if min_val_records < 1:
+        min_val_records = 1
+
+    patterns = [pattern.lower() for pattern in (exclude_patterns or []) if pattern]
+    eligible: List[Tuple[str, str]] = []
+    excluded: List[Tuple[str, str]] = []
+    if patterns:
+        for record_id, sequence in records:
+            record_id_lower = record_id.lower()
+            if any(pattern in record_id_lower for pattern in patterns):
+                excluded.append((record_id, sequence))
+            else:
+                eligible.append((record_id, sequence))
+    else:
+        eligible = list(records)
+
+    if patterns and not eligible:
+        eligible = list(records)
+        excluded = []
+
+    val_count = max(1, int(total * val_ratio))
+    val_count = max(val_count, min_val_records)
+    if val_count >= total:
+        val_count = total - 1
+
+    rng = random.Random(_stable_species_seed(seed, species_name))
+    val_records: List[Tuple[str, str]] = []
+    train_records: List[Tuple[str, str]] = []
+
+    if eligible and val_count > 0:
+        eligible_indices = list(range(len(eligible)))
+        rng.shuffle(eligible_indices)
+        first_idx = eligible_indices[0]
+        val_records.append(eligible[first_idx])
+        remaining_pool = [record for idx, record in enumerate(eligible) if idx != first_idx]
+        remaining_pool.extend(excluded)
+        remaining_needed = val_count - 1
+    else:
+        remaining_pool = list(eligible)
+        remaining_pool.extend(excluded)
+        remaining_needed = val_count
+
+    if remaining_needed > 0:
+        remaining_indices = list(range(len(remaining_pool)))
+        rng.shuffle(remaining_indices)
+        val_indices = set(remaining_indices[:remaining_needed])
+        val_records.extend(
+            record for idx, record in enumerate(remaining_pool) if idx in val_indices
+        )
+        train_records.extend(
+            record for idx, record in enumerate(remaining_pool) if idx not in val_indices
+        )
+    else:
+        train_records.extend(remaining_pool)
+
+    return train_records, val_records
+
+
+def _split_mlm_corpus_by_record(
+    fasta_paths: List[Path],
+    *,
+    window_bp: int,
+    val_ratio: float,
+    seed: int,
+    single_record_val_ratio: float | None = None,
+    exclude_patterns: List[str] | None = None,
+    min_val_records: int = 1,
+) -> Tuple[
+    List[Tuple[str, str, str]],
+    List[Tuple[str, str, str]],
+    List[str],
+    Dict[str, Tuple[int, int, int]],
+]:
+    train_corpus: List[Tuple[str, str, str]] = []
+    val_corpus: List[Tuple[str, str, str]] = []
+    species_names: List[str] = []
+    split_counts: Dict[str, Tuple[int, int, int]] = {}
+    used_names: Dict[str, int] = {}
+
+    for path in fasta_paths:
+        records = read_fasta_records(path, keep_header=True)
+        if not records:
+            raise ValueError(f"No FASTA records found in {path}")
+        base_name = path.stem
+        if base_name in used_names:
+            used_names[base_name] += 1
+            species_name = f"{base_name}_{used_names[base_name]}"
+        else:
+            used_names[base_name] = 1
+            species_name = base_name
+        species_names.append(species_name)
+        effective_val_ratio = val_ratio
+        if len(records) == 1 and single_record_val_ratio is not None:
+            effective_val_ratio = single_record_val_ratio
+        train_records, val_records = _split_records_for_species(
+            records,
+            window_bp=window_bp,
+            val_ratio=effective_val_ratio,
+            seed=seed,
+            species_name=species_name,
+            exclude_patterns=exclude_patterns,
+            min_val_records=min_val_records,
+        )
+        if len(records) == 1 and val_records:
+            total_count = len(train_records) + len(val_records)
+        else:
+            total_count = len(records)
+        split_counts[species_name] = (len(train_records), len(val_records), total_count)
+        for record_id, sequence in train_records:
+            train_corpus.append((species_name, record_id, sequence))
+        for record_id, sequence in val_records:
+            val_corpus.append((species_name, record_id, sequence))
+    return train_corpus, val_corpus, species_names, split_counts
+
+
+def _log_record_split(
+    species_names: List[str],
+    split_counts: Dict[str, Tuple[int, int, int]],
+) -> None:
+    LOGGER.info("Record split per species (train/val):")
+    empty_val: List[str] = []
+    for species_name in species_names:
+        train_count, val_count, total = split_counts[species_name]
+        LOGGER.info(
+            "  %s: train=%d val=%d total=%d",
+            species_name,
+            train_count,
+            val_count,
+            total,
+        )
+        if val_count == 0:
+            empty_val.append(species_name)
+    if empty_val:
+        LOGGER.warning(
+            "Validation split empty for species: %s",
+            ", ".join(empty_val),
+        )
+
+
+def _group_corpus_by_species(
+    corpus: List[Tuple[str, str, str]],
+) -> Dict[str, List[Tuple[str, str]]]:
+    grouped: Dict[str, List[Tuple[str, str]]] = {}
+    for species_name, record_id, sequence in corpus:
+        grouped.setdefault(species_name, []).append((record_id, sequence))
+    return grouped
+
+
+def _matches_markers(species_name: str, record_ids: List[str], markers: List[str]) -> bool:
+    species_lower = species_name.lower()
+    for marker in markers:
+        if marker in species_lower:
+            return True
+    for record_id in record_ids:
+        record_lower = record_id.lower()
+        for marker in markers:
+            if marker in record_lower:
+                return True
+    return False
+
+
+def _log_split_validation_check(
+    species_names: List[str],
+    train_corpus: List[Tuple[str, str, str]],
+    val_corpus: List[Tuple[str, str, str]],
+) -> None:
+    train_by_species = _group_corpus_by_species(train_corpus)
+    val_by_species = _group_corpus_by_species(val_corpus)
+
+    print("Split validation check:")
+    for species_name in species_names:
+        train_records = train_by_species.get(species_name, [])
+        val_records = val_by_species.get(species_name, [])
+        val_ids = [record_id for record_id, _ in val_records][:3]
+        print(
+            f"{species_name}: train={len(train_records)} val={len(val_records)} val_ids={val_ids}"
+        )
+        train_bp = sum(
+            len(sequence)
+            for record_id, sequence in train_records
+            if record_id.endswith("|train")
+        )
+        val_bp = sum(
+            len(sequence)
+            for record_id, sequence in val_records
+            if record_id.endswith("|val")
+        )
+        if train_bp or val_bp:
+            print(f"  {species_name}: train_bp={train_bp} val_bp={val_bp}")
+
+    targets = {
+        "e_coli": ["escherichia coli", "e. coli", "ecoli", "gcf_000005845"],
+        "b_subtilis": ["bacillus subtilis", "b. subtilis", "subtilis"],
+        "yeast": ["saccharomyces cerevisiae", "s. cerevisiae", "cerevisiae", "yeast"],
+    }
+    resolved: Dict[str, str | None] = {label: None for label in targets}
+    for species_name in species_names:
+        record_ids = [
+            record_id
+            for record_id, _ in train_by_species.get(species_name, [])
+            + val_by_species.get(species_name, [])
+        ]
+        for label, markers in targets.items():
+            if resolved[label] is None and _matches_markers(species_name, record_ids, markers):
+                resolved[label] = species_name
+
+    for label, species_name in resolved.items():
+        if species_name is None:
+            continue
+        val_ids = [record_id for record_id, _ in val_by_species.get(species_name, [])]
+        if label in {"e_coli", "b_subtilis"}:
+            if not val_ids:
+                raise AssertionError(f"{label} validation split empty for species {species_name}")
+        if label == "yeast":
+            if not val_ids:
+                raise AssertionError(f"yeast validation split empty for species {species_name}")
+            if all("mitochond" in record_id.lower() for record_id in val_ids):
+                raise AssertionError(
+                    f"yeast validation split contains only mitochondrion for species {species_name}"
+                )
+
+
+def _build_species_records(
+    corpus: List[Tuple[str, str, str]],
+    *,
+    window_bp: int,
+) -> Tuple[Dict[str, List[Tuple[str, str]]], List[str], int]:
+    records_by_species: Dict[str, List[Tuple[str, str]]] = {}
+    species_order: List[str] = []
+    skipped_short = 0
+    for species_name, record_id, sequence in corpus:
+        if len(sequence) < window_bp:
+            skipped_short += 1
+            continue
+        if species_name not in records_by_species:
+            records_by_species[species_name] = []
+            species_order.append(species_name)
+        records_by_species[species_name].append((record_id, sequence))
+    return records_by_species, species_order, skipped_short
+
+
+def _normalize_species_weights(
+    raw_weights: Any,
+    species_names: List[str],
+) -> Dict[str, float]:
+    if raw_weights is None or raw_weights == {} or raw_weights == []:
+        return {name: 1.0 for name in species_names}
+
+    if isinstance(raw_weights, dict):
+        missing = [name for name in species_names if name not in raw_weights]
+        extra = [name for name in raw_weights if name not in species_names]
+        if missing:
+            raise ValueError(f"mlm_species_weights missing entries for: {missing}")
+        if extra:
+            raise ValueError(f"mlm_species_weights contains unknown species: {extra}")
+        return {name: float(raw_weights[name]) for name in species_names}
+
+    if isinstance(raw_weights, list):
+        if len(raw_weights) != len(species_names):
+            raise ValueError(
+                f"mlm_species_weights length ({len(raw_weights)}) does not match "
+                f"mlm_fasta_paths ({len(species_names)})"
+            )
+        return {name: float(weight) for name, weight in zip(species_names, raw_weights)}
+
+    raise ValueError("mlm_species_weights must be a dict or list")
+
+
+def _resolve_reverse_complement_prob(cfg: Dict[str, Any]) -> float:
+    include_rc = bool(cfg.get("include_reverse_complements", cfg.get("mlm_include_reverse_complements", False)))
+    return 0.5 if include_rc else 0.0
+
+
+def _load_or_build_vocab_for_streaming(
+    cfg: Dict[str, Any],
+    *,
+    corpus: List[Tuple[str, str, str]],
+    window_bp: int,
+    kmer: int,
+    base_dir: Path,
+    reverse_complement_prob: float,
+    unknown_base_strategy: str,
+    species_weights: Dict[str, float],
+) -> KmerVocabulary:
+    vocab_path = _resolve_cfg_path(
+        cfg.get("mlm_vocab_path", f"../artifacts/vocabs/mlm_k{kmer}_vocab.json"),
+        base_dir=base_dir,
+    )
+    if vocab_path.exists():
+        LOGGER.info("Loading existing vocabulary from %s", vocab_path)
+        return KmerVocabulary.load(vocab_path)
+
+    LOGGER.warning("Vocabulary not found at %s; sampling windows to build one", vocab_path)
+    records_by_species, species_order, skipped_short = _build_species_records(corpus, window_bp=window_bp)
+    if skipped_short > 0:
+        LOGGER.warning("Skipped %d records shorter than window_bp=%d for vocab sampling", skipped_short, window_bp)
+
+    if not records_by_species:
+        raise ValueError("No records available for vocab sampling")
+
+    weights = [species_weights[name] for name in species_order]
+    sample_count = 10000
+    windows: List[str] = []
+    for _ in range(sample_count):
+        species_name = random.choices(species_order, weights=weights, k=1)[0]
+        record_id, sequence = random.choice(records_by_species[species_name])
+        max_start = len(sequence) - window_bp
+        if max_start < 0:
+            continue
+        start = random.randint(0, max_start)
+        window = sequence[start : start + window_bp]
+        window = sanitize_unknown_bases(window, unknown_base_strategy)
+        if reverse_complement_prob > 0 and random.random() < reverse_complement_prob:
+            window = reverse_complement(window)
+        windows.append(window)
+
+    if not windows:
+        raise ValueError("Failed to sample windows for vocab building")
+
+    return load_or_build_vocab(windows, k=kmer, vocab_path=vocab_path)
+
+
+def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
+    script_dir = Path(__file__).resolve().parent
+    fasta_paths = _resolve_mlm_fasta_paths(cfg, base_dir=script_dir)
+    val_ratio = float(cfg.get("mlm_val_ratio", 0.1))
+    single_record_val_ratio = float(cfg.get("mlm_single_record_val_ratio", val_ratio))
+    exclude_patterns = cfg.get("mlm_val_exclude_patterns", ["mitochond"])
+    min_val_records = int(cfg.get("mlm_min_val_records_per_species", 1))
+    seed = int(cfg.get("seed", 1337) or 1337)
+    window_bp = int(cfg.get("mlm_window_size", 81))
+    train_corpus, val_corpus, species_names, split_counts = _split_mlm_corpus_by_record(
+        fasta_paths,
+        window_bp=window_bp,
+        val_ratio=val_ratio,
+        seed=seed,
+        single_record_val_ratio=single_record_val_ratio,
+        exclude_patterns=exclude_patterns,
+        min_val_records=min_val_records,
+    )
+    _log_record_split(species_names, split_counts)
+    _log_split_validation_check(species_names, train_corpus, val_corpus)
+    if not val_corpus:
+        LOGGER.warning("Validation corpus empty after record split; dry run uses train corpus.")
+    kmer = int(cfg.get("mlm_kmer", 3))
+    reverse_complement_prob = _resolve_reverse_complement_prob(cfg)
+    unknown_base_strategy = _normalize_unknown_base_strategy(cfg.get("mlm_unknown_base_strategy"))
+    species_weights = _normalize_species_weights(cfg.get("mlm_species_weights"), species_names)
+    vocab = _load_or_build_vocab_for_streaming(
+        cfg,
+        corpus=train_corpus,
+        window_bp=window_bp,
+        kmer=kmer,
+        base_dir=script_dir,
+        reverse_complement_prob=reverse_complement_prob,
+        unknown_base_strategy=unknown_base_strategy,
+        species_weights=species_weights,
+    )
+
+    batch_size = int(cfg.get("mlm_batch_size", 128))
+    mask_prob = float(cfg.get("mlm_mask_prob", 0.15))
+    mask_config = {
+        "vocab": vocab,
+        "mask_prob": mask_prob,
+        "track_spans": False,
+        "batch_size": batch_size,
+    }
+    train_dataset = GenomeMLMIterableDataset(
+        corpus=train_corpus,
+        window_bp=window_bp,
+        kmer=kmer,
+        steps_per_epoch=None,
+        mask_config=mask_config,
+        reverse_complement_prob=reverse_complement_prob,
+        unknown_base_strategy=unknown_base_strategy,
+        species_weights=species_weights,
+        return_metadata=True,
+    )
+    val_corpus_for_dataset = val_corpus or train_corpus
+    val_dataset = GenomeMLMIterableDataset(
+        corpus=val_corpus_for_dataset,
+        window_bp=window_bp,
+        kmer=kmer,
+        steps_per_epoch=None,
+        mask_config=mask_config,
+        reverse_complement_prob=reverse_complement_prob,
+        unknown_base_strategy=unknown_base_strategy,
+        species_weights=species_weights,
+        return_metadata=True,
+    )
+
+    def _run_batches(dataset: GenomeMLMIterableDataset, label: str) -> None:
+        masked_fractions: List[float] = []
+        species_counts: Counter[str] = Counter()
+        iterator = iter(dataset)
+        for batch_idx in range(3):
+            batch_samples = [next(iterator) for _ in range(batch_size)]
+            inputs = torch.stack([item[0] for item in batch_samples])
+            labels = torch.stack([item[1] for item in batch_samples])
+            metadata = [item[2] for item in batch_samples]
+            species_counts.update([item["species"] for item in metadata])
+            masked_fraction = (labels != -100).sum().item() / labels.numel()
+            masked_fractions.append(masked_fraction)
+            print(
+                f"{label} batch {batch_idx + 1}: inputs={tuple(inputs.shape)} "
+                f"labels={tuple(labels.shape)}"
+            )
+
+        mean_masked_fraction = sum(masked_fractions) / max(1, len(masked_fractions))
+        print(f"{label} masked_fraction mean: {mean_masked_fraction:.4f}")
+        print(f"{label} species distribution counts: {dict(species_counts)}")
+
+    _run_batches(train_dataset, "train")
+    _run_batches(val_dataset, "val")
 
 
 def select_device() -> torch.device:
@@ -1457,51 +2278,90 @@ def run_validation(
     autocast_device: str | None,
     autocast_dtype: torch.dtype | None,
 ) -> Dict[str, float]:
-    """Run validation and return metrics dict with loss, accuracy, perplexity."""
+    """Run validation and return metrics dict with loss, accuracy, perplexity, masked stats."""
+    was_training = model.training
     model.eval()
-    total_loss = 0.0
-    total_correct = 0
-    total_masked = 0
-    
-    with torch.no_grad():
-        for batch_data in val_loader:
-            if len(batch_data) == 3:
-                inputs, labels, _span_lengths = batch_data
-            else:
-                inputs, labels = batch_data
+    LOGGER.info("Val loop: model.training=%s", model.training)
+    try:
+        total_loss = 0.0
+        total_correct = 0
+        total_masked = 0
+        total_tokens = 0
 
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+        with torch.no_grad():
+            for batch_data in val_loader:
+                if len(batch_data) == 3:
+                    inputs, labels, _span_lengths = batch_data
+                else:
+                    inputs, labels = batch_data
 
-            if autocast_device and autocast_dtype is not None:
-                with torch.autocast(autocast_device, dtype=autocast_dtype):
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                if autocast_device and autocast_dtype is not None:
+                    with torch.autocast(autocast_device, dtype=autocast_dtype):
+                        logits, _ = model(inputs, labels=None)
+                else:
                     logits, _ = model(inputs, labels=None)
-            else:
-                logits, _ = model(inputs, labels=None)
 
-            # Loss computation outside autocast for numerical stability
-            loss = F.cross_entropy(
-                logits.float().view(-1, logits.size(-1)),
-                labels.view(-1),
-                ignore_index=-100,
-            )
-            
-            total_loss += loss.item() * inputs.size(0)
-            
-            # Compute accuracy on masked tokens
-            preds = logits.argmax(dim=-1)
-            mask = labels != -100
-            total_correct += (preds[mask] == labels[mask]).sum().item()
-            total_masked += mask.sum().item()
-    
-    avg_loss = total_loss / len(val_loader.dataset)
-    accuracy = total_correct / max(1, total_masked)
-    perplexity = math.exp(min(avg_loss, 100))  # Cap to avoid overflow
-    
+                # Loss computation outside autocast for numerical stability
+                loss = F.cross_entropy(
+                    logits.float().view(-1, logits.size(-1)),
+                    labels.view(-1),
+                    ignore_index=-100,
+                )
+
+                total_loss += loss.item() * inputs.size(0)
+
+                # Compute accuracy on masked tokens
+                preds = logits.argmax(dim=-1)
+                mask = labels != -100
+                total_correct += (preds[mask] == labels[mask]).sum().item()
+                total_masked += mask.sum().item()
+                total_tokens += labels.numel()
+
+        avg_loss = total_loss / len(val_loader.dataset)
+        accuracy = total_correct / max(1, total_masked)
+        perplexity = math.exp(min(avg_loss, 100))  # Cap to avoid overflow
+        masked_fraction = total_masked / max(1, total_tokens)
+
+        return {
+            'loss': avg_loss,
+            'accuracy': accuracy,
+            'perplexity': perplexity,
+            'loss_masked_only': avg_loss,
+            'masked_token_accuracy': accuracy,
+            'masked_fraction': masked_fraction,
+        }
+    finally:
+        model.train(was_training)
+
+
+def compute_masked_batch_metrics(
+    logits: torch.Tensor,
+    labels: torch.LongTensor,
+) -> Dict[str, float]:
+    """Compute masked-only loss, accuracy, and masked fraction for a single batch."""
+    loss = F.cross_entropy(
+        logits.float().view(-1, logits.size(-1)),
+        labels.view(-1),
+        ignore_index=-100,
+    )
+    mask = labels != -100
+    total_tokens = labels.numel()
+    masked_tokens = mask.sum().item()
+    masked_fraction = masked_tokens / max(1, total_tokens)
+
+    if masked_tokens > 0:
+        preds = logits.argmax(dim=-1)
+        masked_token_accuracy = (preds[mask] == labels[mask]).float().mean().item()
+    else:
+        masked_token_accuracy = 0.0
+
     return {
-        'loss': avg_loss,
-        'accuracy': accuracy,
-        'perplexity': perplexity,
+        "loss_masked_only": loss.item(),
+        "masked_token_accuracy": masked_token_accuracy,
+        "masked_fraction": masked_fraction,
     }
 
 
@@ -2007,13 +2867,20 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     leakage_test = bool(cfg_run.get("leakage_test", False))
     generate_golden_batch = bool(cfg_run.get("generate_golden_batch", False))
     topk_debug = bool(cfg_run.get("topk_debug", False))
+    debug_batch = bool(cfg_run.get("debug_batch", False))
     golden_batch_path = cfg_run.get("golden_batch_path")
+    mask_prob = float(cfg_run.get("mlm_mask_prob", 0.15))
+    dry_run = bool(cfg_run.get("mlm_dry_run", False))
+    use_streaming = _should_use_streaming(cfg_run)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = (script_dir / "../runs" / f"mlm_{timestamp}").resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
     length_curriculum_config = LengthCurriculumConfig.from_config(cfg_run)
+    if use_streaming and length_curriculum_config.enabled:
+        LOGGER.warning("Length curriculum disabled for streaming datasets")
+        length_curriculum_config.enabled = False
 
     resolved_config: Dict[str, Any] = {
         "script": "pretrain_mlm.py",
@@ -2034,18 +2901,24 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         "lr": float(cfg_run.get("mlm_lr", 3e-4)),
         "weight_decay": float(cfg_run.get("mlm_weight_decay", 0.01)),
         # MLM-specific
-        "mask_prob": 0.15,  # Fixed in code
+        "mask_prob": mask_prob,
         "max_span_len": 3,  # Fixed in mask_tokens_span
         # Data
         "batch_size": int(cfg_run.get("mlm_batch_size", 128)),
         "max_bp_len": int(cfg_run.get("mlm_window_size", 81)),
         "kmer": int(cfg_run.get("mlm_kmer", 3)),
+        "streaming_enabled": use_streaming,
+        "mlm_fasta_path": cfg_run.get("mlm_fasta_path"),
+        "mlm_fasta_paths": cfg_run.get("mlm_fasta_paths"),
+        "mlm_species_weights": cfg_run.get("mlm_species_weights"),
+        "mlm_steps_per_epoch": cfg_run.get("mlm_steps_per_epoch"),
         "include_reverse_complements": bool(
             cfg_run.get(
                 "include_reverse_complements",
                 cfg_run.get("mlm_include_reverse_complements", False),
             )
         ),
+        "reverse_complement_prob": _resolve_reverse_complement_prob(cfg_run),
         # Training
         "epochs": epochs,
         "grad_accum_steps": int(cfg_run.get("mlm_grad_accum_steps", 4)),
@@ -2059,7 +2932,6 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         "use_output_norm": bool(cfg_run.get("mlm_use_output_norm", True)),
         "use_layer_lr_decay": bool(cfg_run.get("mlm_use_layer_lr_decay", True)),
         "layer_lr_decay": float(cfg_run.get("mlm_layer_lr_decay", 0.9)),
-        "use_alibi": bool(cfg_run.get("use_alibi", True)),
         # Seed
         "seed": int(cfg_run.get("seed", 1337) or 1337),
         # Length curriculum
@@ -2075,19 +2947,6 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     set_seed(seed)
     LOGGER.info("Using seed: %d", seed)
 
-    token_tensors, vocab = prepare_dataset(cfg_run)
-    full_dataset = MLMDataset(token_tensors)
-
-    val_ratio = float(cfg_run.get("mlm_val_ratio", 0.1))
-    val_size = int(len(full_dataset) * val_ratio)
-    train_size = len(full_dataset) - val_size
-    train_dataset, val_dataset = random_split(
-        full_dataset,
-        [train_size, val_size],
-        generator=torch.Generator().manual_seed(seed),
-    )
-    LOGGER.info("Dataset split: %d train, %d val", train_size, val_size)
-
     batch_size = int(cfg_run.get("mlm_batch_size", 128))
     grad_accum_steps = int(cfg_run.get("mlm_grad_accum_steps", 2))
     effective_batch = batch_size * grad_accum_steps
@@ -2098,8 +2957,229 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         effective_batch,
     )
 
+    val_ratio = float(cfg_run.get("mlm_val_ratio", 0.1))
+    reverse_complement_prob = _resolve_reverse_complement_prob(cfg_run)
+    unknown_base_strategy = _normalize_unknown_base_strategy(cfg_run.get("mlm_unknown_base_strategy"))
+
+    if dry_run:
+        run_streaming_dry_run(cfg_run)
+        return {
+            "mlm_loss": float("nan"),
+            "mlm_steps": 0,
+            "encoder_ckpt_path": "",
+            "pretrain_seconds": float(time.perf_counter() - start_time),
+            "params": 0,
+        }
+
+    token_tensors: List[torch.LongTensor] | None = None
+    steps_per_epoch = None
+    vocab_path: Path | None = None
+
+    if use_streaming:
+        steps_raw = cfg_run.get("mlm_steps_per_epoch")
+        if steps_raw is None:
+            raise ValueError("mlm_steps_per_epoch is required when using streaming datasets")
+        try:
+            steps_per_epoch = int(steps_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"mlm_steps_per_epoch must be an int, got {steps_raw!r}") from exc
+        if steps_per_epoch <= 0:
+            raise ValueError(f"mlm_steps_per_epoch must be > 0, got {steps_per_epoch}")
+
+        fasta_paths = _resolve_mlm_fasta_paths(cfg_run, base_dir=script_dir)
+        window_bp = int(cfg_run.get("mlm_window_size", 81))
+        single_record_val_ratio = float(cfg_run.get("mlm_single_record_val_ratio", val_ratio))
+        exclude_patterns = cfg_run.get("mlm_val_exclude_patterns", ["mitochond"])
+        min_val_records = int(cfg_run.get("mlm_min_val_records_per_species", 1))
+        train_corpus, val_corpus, species_names, split_counts = _split_mlm_corpus_by_record(
+            fasta_paths,
+            window_bp=window_bp,
+            val_ratio=val_ratio,
+            seed=seed,
+            single_record_val_ratio=single_record_val_ratio,
+            exclude_patterns=exclude_patterns,
+            min_val_records=min_val_records,
+        )
+        _log_record_split(species_names, split_counts)
+        species_weights = _normalize_species_weights(cfg_run.get("mlm_species_weights"), species_names)
+
+        if ablation_enabled and ablation_cfg.get("pretrain_bp_limit") is not None:
+            LOGGER.warning("Ablation pretrain_bp_limit not supported in streaming mode; ignoring.")
+
+        kmer = int(cfg_run.get("mlm_kmer", 3))
+        vocab_path = _resolve_cfg_path(
+            cfg_run.get("mlm_vocab_path", f"../artifacts/vocabs/mlm_k{kmer}_vocab.json"),
+            base_dir=script_dir,
+        )
+        vocab = _load_or_build_vocab_for_streaming(
+            cfg_run,
+            corpus=train_corpus,
+            window_bp=window_bp,
+            kmer=kmer,
+            base_dir=script_dir,
+            reverse_complement_prob=reverse_complement_prob,
+            unknown_base_strategy=unknown_base_strategy,
+            species_weights=species_weights,
+        )
+
+        train_records_by_species, train_species_order, train_skipped_short = _build_species_records(
+            train_corpus,
+            window_bp=window_bp,
+        )
+        train_total_records = sum(len(records) for records in train_records_by_species.values())
+        LOGGER.info(
+            "Streaming train corpus: %d species, %d records (skipped_short=%d)",
+            len(train_species_order),
+            train_total_records,
+            train_skipped_short,
+        )
+        val_corpus_for_dataset = val_corpus
+        if not val_corpus_for_dataset:
+            LOGGER.warning(
+                "Validation corpus empty after record split; using train corpus for validation (leakage)."
+            )
+            val_corpus_for_dataset = train_corpus
+        else:
+            val_records_by_species, val_species_order, val_skipped_short = _build_species_records(
+                val_corpus_for_dataset,
+                window_bp=window_bp,
+            )
+            val_total_records = sum(len(records) for records in val_records_by_species.values())
+            LOGGER.info(
+                "Streaming val corpus: %d species, %d records (skipped_short=%d)",
+                len(val_species_order),
+                val_total_records,
+                val_skipped_short,
+            )
+
+        train_mask_config = {
+            "vocab": vocab,
+            "mask_prob": mask_prob,
+            "track_spans": True,
+            "batch_size": batch_size,
+            "debug": label_debug,
+        }
+        train_dataset = GenomeMLMIterableDataset(
+            corpus=train_corpus,
+            window_bp=window_bp,
+            kmer=kmer,
+            steps_per_epoch=steps_per_epoch,
+            mask_config=train_mask_config,
+            reverse_complement_prob=reverse_complement_prob,
+            unknown_base_strategy=unknown_base_strategy,
+            species_weights=species_weights,
+        )
+
+        val_steps_per_epoch = max(1, int(steps_per_epoch * val_ratio))
+        val_mask_config = {
+            "vocab": vocab,
+            "mask_prob": mask_prob,
+            "track_spans": False,
+            "batch_size": batch_size,
+        }
+        val_dataset = GenomeMLMIterableDataset(
+            corpus=val_corpus_for_dataset,
+            window_bp=window_bp,
+            kmer=kmer,
+            steps_per_epoch=val_steps_per_epoch,
+            mask_config=val_mask_config,
+            reverse_complement_prob=reverse_complement_prob,
+            unknown_base_strategy=unknown_base_strategy,
+            species_weights=species_weights,
+        )
+        LOGGER.info(
+            "Streaming dataset: steps_per_epoch=%d, val_steps_per_epoch=%d",
+            steps_per_epoch,
+            val_steps_per_epoch,
+        )
+    else:
+        fasta_path = _resolve_cfg_path(cfg_run.get("mlm_fasta_path"), base_dir=script_dir)
+        LOGGER.info("Reading FASTA records from %s", fasta_path)
+        records = read_fasta_records(fasta_path, keep_header=True)
+        if not records:
+            raise ValueError(f"No FASTA records found in {fasta_path}")
+        LOGGER.info("Found %d FASTA record(s)", len(records))
+        if ablation_enabled and ablation_cfg.get("pretrain_bp_limit") is not None:
+            bp_limit_raw = ablation_cfg.get("pretrain_bp_limit")
+            try:
+                bp_limit = int(bp_limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"ablation.pretrain_bp_limit must be an int, got {bp_limit_raw!r}"
+                ) from exc
+            if bp_limit < 0:
+                raise ValueError(f"ablation.pretrain_bp_limit must be >= 0, got {bp_limit}")
+            if bp_limit > 0:
+                records = _apply_bp_limit(records, bp_limit)
+                total_bp = sum(len(seq) for _, seq in records)
+                LOGGER.info("Ablation enabled: using first %d bp from FASTA", total_bp)
+
+        window_size = int(cfg_run.get("mlm_window_size", 81))
+        stride = int(cfg_run.get("mlm_stride", 20))
+        k = int(cfg_run.get("mlm_kmer", 3))
+        include_reverse_complements = reverse_complement_prob > 0
+        vocab_path = _resolve_cfg_path(
+            cfg_run.get("mlm_vocab_path", f"../artifacts/vocabs/k{k}_mlm_vocab.json"),
+            base_dir=script_dir,
+        )
+        species_name = fasta_path.stem
+        single_record_val_ratio = float(cfg_run.get("mlm_single_record_val_ratio", val_ratio))
+        exclude_patterns = cfg_run.get("mlm_val_exclude_patterns", ["mitochond"])
+        min_val_records = int(cfg_run.get("mlm_min_val_records_per_species", 1))
+        effective_val_ratio = single_record_val_ratio if len(records) == 1 else val_ratio
+        train_records, val_records = _split_records_for_species(
+            records,
+            window_bp=window_size,
+            val_ratio=effective_val_ratio,
+            seed=seed,
+            species_name=species_name,
+            exclude_patterns=exclude_patterns,
+            min_val_records=min_val_records,
+        )
+        if len(records) == 1 and val_records:
+            total_count = len(train_records) + len(val_records)
+        else:
+            total_count = len(records)
+        split_counts = {species_name: (len(train_records), len(val_records), total_count)}
+        _log_record_split([species_name], split_counts)
+
+        train_windows = _build_windows_from_records(
+            train_records,
+            window_size=window_size,
+            stride=stride,
+            unknown_base_strategy=unknown_base_strategy,
+            include_reverse_complements=include_reverse_complements,
+            label="train",
+        )
+        if val_records:
+            val_windows = _build_windows_from_records(
+                val_records,
+                window_size=window_size,
+                stride=stride,
+                unknown_base_strategy=unknown_base_strategy,
+                include_reverse_complements=include_reverse_complements,
+                label="val",
+            )
+        else:
+            LOGGER.warning(
+                "Validation records empty after record split; using train windows for validation (leakage)."
+            )
+            val_windows = train_windows
+
+        vocab = load_or_build_vocab(train_windows, k=k, vocab_path=vocab_path)
+        train_token_tensors = [vocab.tokenize(window, window_size) for window in train_windows]
+        val_token_tensors = [vocab.tokenize(window, window_size) for window in val_windows]
+        token_tensors = train_token_tensors
+        train_dataset = MLMDataset(train_token_tensors)
+        val_dataset = MLMDataset(val_token_tensors)
+        LOGGER.info(
+            "Dataset split (record-level): %d train, %d val",
+            len(train_dataset),
+            len(val_dataset),
+        )
+
     num_workers = int(cfg_run.get("num_workers", 0))
-    steps_per_epoch_approx = len(train_dataset) // batch_size
+    steps_per_epoch_approx = steps_per_epoch if use_streaming else len(train_dataset) // batch_size
     total_steps_for_curriculum = epochs * steps_per_epoch_approx // grad_accum_steps
     if max_steps is not None:
         total_steps_for_curriculum = min(total_steps_for_curriculum, max_steps)
@@ -2122,36 +3202,56 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             vocab=vocab,
             total_steps=total_steps_for_curriculum,
             cfg=cfg_run,
-            mask_prob=0.15,
+            mask_prob=mask_prob,
             track_spans=True,
             debug=label_debug,
         )
     else:
         LOGGER.info("Length curriculum: DISABLED (using fixed length)")
-        collator = MLMCollator(vocab, mask_prob=0.15, debug=label_debug, track_spans=True)
+        collator = MLMCollator(vocab, mask_prob=mask_prob, debug=label_debug, track_spans=True)
 
     deterministic_kwargs = get_deterministic_dataloader_kwargs(seed, num_workers=num_workers)
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=collator,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
-        **deterministic_kwargs,
-    )
+    if use_streaming:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate_mlm_streaming,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=True,
+            **deterministic_kwargs,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate_mlm_streaming,
+            num_workers=0,
+            pin_memory=True,
+        )
+    else:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=collator,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=True,
+            **deterministic_kwargs,
+        )
 
-    val_collator = MLMCollator(vocab, mask_prob=0.15)
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=val_collator,
-        num_workers=0,
-        pin_memory=True,
-    )
+        val_collator = MLMCollator(vocab, mask_prob=mask_prob)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=val_collator,
+            num_workers=0,
+            pin_memory=True,
+        )
 
     if label_debug:
         LOGGER.info("Running LABEL DEBUG mode - verifying first batch then exiting")
@@ -2196,7 +3296,6 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             num_heads=transformer_heads,
             ff_dim=transformer_ff_dim,
             dropout=transformer_dropout,
-            use_alibi=bool(cfg_run.get("use_alibi", True)),
             pad_token_id=vocab.pad_id,
             drop_path_rate=0.0,
         )
@@ -2242,7 +3341,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         train_loader=train_loader,
         vocab=vocab,
         num_batches=5,
-        target_mask_prob=0.15,
+        target_mask_prob=mask_prob,
     )
 
     if not sanity_passed:
@@ -2275,8 +3374,11 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     if debug_mode:
         LOGGER.info("Running in DEBUG mode - analyzing masking on one batch")
-        raw_batch = [train_dataset[i] for i in range(min(batch_size, len(train_dataset)))]
-        debug_masking(vocab, raw_batch, mask_prob=0.15, max_span_len=3)
+        if use_streaming:
+            raw_batch = train_dataset.sample_raw_tokens(batch_size)
+        else:
+            raw_batch = [train_dataset[i] for i in range(min(batch_size, len(train_dataset)))]
+        debug_masking(vocab, raw_batch, mask_prob=mask_prob, max_span_len=3)
         LOGGER.info("Debug mode complete. Exiting.")
         return {
             "mlm_loss": float("nan"),
@@ -2312,7 +3414,6 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         num_heads=transformer_heads,
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
-        use_alibi=bool(cfg_run.get("use_alibi", True)),
         pad_token_id=vocab.pad_id,
         drop_path_rate=0.0,
     )
@@ -2354,7 +3455,10 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     if overfit_debug:
         LOGGER.info("Running OVERFIT DEBUG mode")
-        overfit_samples = token_tensors[:32]
+        if use_streaming:
+            overfit_samples = train_dataset.sample_raw_tokens(32)
+        else:
+            overfit_samples = token_tensors[:32]
         run_overfit_debug(
             model=model,
             train_samples=overfit_samples,
@@ -2400,9 +3504,12 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         )
     LOGGER.info("=" * 60)
 
-    batches_per_epoch = len(train_loader)
-    steps_per_epoch = batches_per_epoch // grad_accum_steps
-    total_steps = epochs * steps_per_epoch
+    if use_streaming and steps_per_epoch is not None:
+        batches_per_epoch = steps_per_epoch
+    else:
+        batches_per_epoch = len(train_loader)
+    optimizer_steps_per_epoch = batches_per_epoch // grad_accum_steps
+    total_steps = epochs * optimizer_steps_per_epoch
     if max_steps is not None:
         total_steps = min(total_steps, max_steps)
 
@@ -2416,7 +3523,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("  Epochs:                  %d", epochs)
     LOGGER.info("  Batches per epoch:       %d", batches_per_epoch)
     LOGGER.info("  Grad accum steps:        %d", grad_accum_steps)
-    LOGGER.info("  Optimizer steps/epoch:   %d", steps_per_epoch)
+    LOGGER.info("  Optimizer steps/epoch:   %d", optimizer_steps_per_epoch)
     LOGGER.info("  Total optimizer steps:   %d", total_steps)
     LOGGER.info("=" * 60)
 
@@ -2455,6 +3562,44 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 "MPS autocast bf16 not available; disabling autocast to avoid fp16 without GradScaler."
             )
 
+    if debug_batch:
+        LOGGER.info("Running DEBUG BATCH check (one train batch + one val batch)")
+        was_training = model.training
+        model.eval()
+
+        def log_one_batch(label: str, loader: DataLoader) -> None:
+            for batch_data in loader:
+                if len(batch_data) == 3:
+                    inputs, labels, _span_lengths = batch_data
+                else:
+                    inputs, labels = batch_data
+
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                with torch.no_grad():
+                    if autocast_device and autocast_dtype is not None:
+                        with torch.autocast(autocast_device, dtype=autocast_dtype):
+                            logits, _ = model(inputs, labels=None)
+                    else:
+                        logits, _ = model(inputs, labels=None)
+
+                metrics = compute_masked_batch_metrics(logits, labels)
+                LOGGER.info(
+                    "Debug batch (%s): masked_fraction=%.4f, loss_masked_only=%.4f, masked_token_accuracy=%.4f",
+                    label,
+                    metrics["masked_fraction"],
+                    metrics["loss_masked_only"],
+                    metrics["masked_token_accuracy"],
+                )
+                break
+
+        log_one_batch("train", train_loader)
+        log_one_batch("val", val_loader)
+
+        if was_training:
+            model.train()
+
     best_val_loss = float("inf")
     best_val_acc = 0.0
     patience = int(cfg_run.get("mlm_patience", 25))
@@ -2468,10 +3613,25 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         base_dir=script_dir,
     )
     encoder_path.parent.mkdir(parents=True, exist_ok=True)
+    encoder_metadata_path = encoder_path.with_suffix(".metadata.json")
+
+    def _save_encoder_checkpoint(best_loss: float) -> None:
+        torch.save(model.encoder.state_dict(), encoder_path)
+        metadata = {
+            "config_snapshot": resolved_config,
+            "vocab_path": str(vocab_path) if vocab_path is not None else None,
+            "kmer": int(vocab.k),
+            "embedding_dim": embedding_dim,
+            "num_layers": transformer_layers,
+            "heads": transformer_heads,
+            "best_val_loss": float(best_loss),
+        }
+        with encoder_metadata_path.open("w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
 
     LOGGER.info("=" * 60)
     LOGGER.info("STARTING MLM PRETRAINING")
-    LOGGER.info("Epochs: %d, LR: %.2e, Mask prob: 15%%", epochs, lr)
+    LOGGER.info("Epochs: %d, LR: %.2e, Mask prob: %.1f%%", epochs, lr, mask_prob * 100)
     if max_steps is not None:
         LOGGER.info("Ablation enabled: stopping after %d optimizer steps", max_steps)
     LOGGER.info("=" * 60)
@@ -2481,21 +3641,46 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         run_dir=run_dir,
         vocab=vocab,
         log_every_n_steps=health_log_interval,
-        target_mask_prob=0.15,
+        target_mask_prob=mask_prob,
     )
     health_dashboard.print_table_header()
 
     numerics_checker = NumericsChecker(enabled=True)
     LOGGER.info("Numerics checker enabled - will fail fast on NaN/Inf")
 
+    # Gap monitor: CSV file for tracking train-val gap and other metrics
+    gap_csv_path = (script_dir / "../artifacts/mlm_metrics.csv").resolve()
+    gap_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    gap_csv_columns = [
+        "epoch",
+        "train_loss",
+        "val_loss",
+        "gap_loss",
+        "train_masked_acc",
+        "val_masked_acc",
+        "gap_acc",
+        "embedding_weight_norm",
+        "grad_norm",
+        "lr",
+    ]
+    # Write CSV header (overwrite any existing file)
+    with gap_csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=gap_csv_columns)
+        writer.writeheader()
+    LOGGER.info("Gap monitor CSV initialized: %s", gap_csv_path)
+
     best_train_loss = float("inf")
     reached_max_steps = False
+    # Track last gradient norm for epoch-level logging
+    last_grad_norm = 0.0
 
     for epoch in range(1, epochs + 1):
         model.train()
-        total_loss = 0.0
+        LOGGER.info("Train loop: model.training=%s", model.training)
+        total_loss_unscaled = 0.0
         total_correct = 0
         total_masked = 0
+        total_tokens = 0
         samples_seen = 0
         optimizer.zero_grad()
 
@@ -2527,6 +3712,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             inputs = inputs.to(device)
             labels = labels.to(device)
             samples_seen += int(inputs.size(0))
+            total_tokens += labels.numel()
 
             current_lr = optimizer.param_groups[0]["lr"]
             numerics_checker.set_context(
@@ -2543,25 +3729,25 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             else:
                 logits, _ = model(inputs, labels=None)
 
-            loss = F.cross_entropy(
+            loss_unscaled = F.cross_entropy(
                 logits.float().view(-1, logits.size(-1)),
                 labels.view(-1),
                 ignore_index=-100,
             )
-            numerics_checker.check_forward(logits, loss)
+            numerics_checker.check_forward(logits, loss_unscaled)
 
-            scaled_loss = loss / grad_accum_steps
+            loss_scaled = loss_unscaled / grad_accum_steps
             if scaler is not None:
-                scaler.scale(scaled_loss).backward()
+                scaler.scale(loss_scaled).backward()
             else:
-                scaled_loss.backward()
+                loss_scaled.backward()
 
             if scaler is not None:
                 numerics_checker.check_backward(model, check_grads=False)
             else:
                 numerics_checker.check_backward(model)
 
-            total_loss += loss.item() * inputs.size(0)
+            total_loss_unscaled += loss_unscaled.item() * inputs.size(0)
 
             preds = logits.argmax(dim=-1)
             mask = labels != -100
@@ -2569,7 +3755,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             total_masked += mask.sum().item()
 
             health_dashboard.accumulate_batch(
-                loss=loss.item(),
+                loss=loss_unscaled.item(),
                 logits=logits.detach(),
                 labels=labels,
                 masked_inputs=inputs,
@@ -2580,6 +3766,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 if scaler is not None:
                     scaler.unscale_(optimizer)
                 unclipped_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                last_grad_norm = unclipped_grad_norm.item() if hasattr(unclipped_grad_norm, 'item') else float(unclipped_grad_norm)
 
                 if scaler is not None:
                     scaler.step(optimizer)
@@ -2655,13 +3842,14 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                     epoch,
                     batch_idx,
                     len(train_loader),
-                    loss.item(),
+                    loss_unscaled.item(),
                     batch_acc * 100,
                     current_lr,
                 )
 
-        train_loss = total_loss / max(1, samples_seen)
+        train_loss = total_loss_unscaled / max(1, samples_seen)
         train_acc = total_correct / max(1, total_masked)
+        train_masked_fraction = total_masked / max(1, total_tokens)
         train_ppl = math.exp(min(train_loss, 100)) if math.isfinite(train_loss) else float("nan")
         if math.isfinite(train_loss):
             best_train_loss = min(best_train_loss, train_loss)
@@ -2670,6 +3858,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         val_loss = val_metrics["loss"]
         val_acc = val_metrics["accuracy"]
         val_ppl = val_metrics["perplexity"]
+        val_masked_fraction = val_metrics["masked_fraction"]
+        val_masked_accuracy = val_metrics["masked_token_accuracy"]
+        val_loss_masked_only = val_metrics["loss_masked_only"]
 
         curriculum_info = f" | Len: {curriculum_scheduler.current_length}" if curriculum_scheduler is not None else ""
 
@@ -2684,6 +3875,57 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             val_ppl,
             curriculum_info,
         )
+        LOGGER.info(
+            "Epoch %d: masked_fraction train=%.4f val=%.4f | masked_token_accuracy train=%.4f val=%.4f | "
+            "loss_masked_only train=%.4f val=%.4f",
+            epoch,
+            train_masked_fraction,
+            val_masked_fraction,
+            train_acc,
+            val_masked_accuracy,
+            train_loss,
+            val_loss_masked_only,
+        )
+
+        # Gap monitor: compute and log gap metrics
+        gap_loss = train_loss - val_loss_masked_only
+        gap_acc = train_acc - val_masked_accuracy
+        current_lr = optimizer.param_groups[0]["lr"]
+
+        # Compute embedding weight norm
+        embedding_weight_norm = 0.0
+        if hasattr(model, 'encoder') and hasattr(model.encoder, 'embedding'):
+            emb_weight = model.encoder.embedding.weight
+            embedding_weight_norm = torch.norm(emb_weight).item()
+        elif hasattr(model, 'embedding'):
+            emb_weight = model.embedding.weight
+            embedding_weight_norm = torch.norm(emb_weight).item()
+
+        LOGGER.info(
+            "Epoch %d GAP: loss_gap=%.4f acc_gap=%.4f | emb_norm=%.2f grad_norm=%.4f lr=%.2e",
+            epoch,
+            gap_loss,
+            gap_acc,
+            embedding_weight_norm,
+            last_grad_norm,
+            current_lr,
+        )
+
+        # Append to CSV
+        with gap_csv_path.open("a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=gap_csv_columns)
+            writer.writerow({
+                "epoch": epoch,
+                "train_loss": f"{train_loss:.6f}",
+                "val_loss": f"{val_loss_masked_only:.6f}",
+                "gap_loss": f"{gap_loss:.6f}",
+                "train_masked_acc": f"{train_acc:.6f}",
+                "val_masked_acc": f"{val_masked_accuracy:.6f}",
+                "gap_acc": f"{gap_acc:.6f}",
+                "embedding_weight_norm": f"{embedding_weight_norm:.4f}",
+                "grad_norm": f"{last_grad_norm:.6f}",
+                "lr": f"{current_lr:.8e}",
+            })
 
         if topk_debug:
             for debug_batch_data in train_loader:
@@ -2710,14 +3952,14 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 topk_stats["true_in_topk_pct"],
             )
 
-        if val_loss < best_val_loss - 0.001:
-            best_val_loss = val_loss
+        if val_loss_masked_only < best_val_loss:
+            best_val_loss = val_loss_masked_only
             best_val_acc = val_acc
             patience_counter = 0
-            torch.save(model.encoder.state_dict(), encoder_path)
+            _save_encoder_checkpoint(best_val_loss)
             LOGGER.info(
-                "★ New best! Val Loss: %.4f, PPL: %.2f, Acc: %.1f%% - Saved to %s",
-                val_loss,
+                "★ New best! Val Loss (masked-only): %.4f, PPL: %.2f, Acc: %.1f%% - Saved to %s",
+                val_loss_masked_only,
                 val_ppl,
                 val_acc * 100,
                 encoder_path,
@@ -2736,7 +3978,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             break
 
     if not encoder_path.exists():
-        torch.save(model.encoder.state_dict(), encoder_path)
+        _save_encoder_checkpoint(best_val_loss)
 
     best_ppl = math.exp(min(best_val_loss, 100)) if math.isfinite(best_val_loss) else float("nan")
     LOGGER.info("=" * 60)
@@ -2784,6 +4026,11 @@ def main() -> None:
                         help="Enable top-k sanity print for masked positions. "
                              "Prints masked position index, true token, and top-5 predictions + probabilities "
                              "for 3 sequences once per epoch. Helps verify predictions become sharper over time.")
+    parser.add_argument("--debug_batch", action="store_true",
+                        help="Print masked_fraction, loss_masked_only, masked_token_accuracy for one train "
+                             "batch and one val batch.")
+    parser.add_argument("--mlm_dry_run", action="store_true",
+                        help="Run a short streaming dry run (3 train/3 val batches) and exit.")
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -2810,6 +4057,10 @@ def main() -> None:
         overrides["golden_batch_path"] = args.golden_batch_path
     if args.topk_debug:
         overrides["topk_debug"] = True
+    if args.debug_batch:
+        overrides["debug_batch"] = True
+    if args.mlm_dry_run:
+        overrides["mlm_dry_run"] = True
 
     _ = run_mlm_pretrain(cfg, overrides=overrides)
     return
@@ -2858,7 +4109,6 @@ def main() -> None:
         "use_output_norm": bool(cfg.get("mlm_use_output_norm", True)),
         "use_layer_lr_decay": bool(cfg.get("mlm_use_layer_lr_decay", True)),
         "layer_lr_decay": float(cfg.get("mlm_layer_lr_decay", 0.9)),
-        "use_alibi": bool(cfg.get("use_alibi", True)),
         # Seed
         "seed": int(cfg.get("seed", 1337)),
         # Length curriculum
@@ -2999,7 +4249,6 @@ def main() -> None:
             num_heads=transformer_heads,
             ff_dim=transformer_ff_dim,
             dropout=transformer_dropout,
-            use_alibi=bool(cfg.get("use_alibi", True)),
             pad_token_id=vocab.pad_id,
             drop_path_rate=0.0,
         )
@@ -3118,7 +4367,6 @@ def main() -> None:
         num_heads=transformer_heads,
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
-        use_alibi=bool(cfg.get("use_alibi", True)),
         pad_token_id=vocab.pad_id,
         drop_path_rate=0.0,  # NO stochastic depth during pretraining
     )
@@ -3307,6 +4555,7 @@ def main() -> None:
 
     for epoch in range(1, epochs + 1):
         model.train()
+        LOGGER.info("Train loop: model.training=%s", model.training)
         total_loss = 0.0
         total_correct = 0
         total_masked = 0

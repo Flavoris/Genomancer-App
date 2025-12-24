@@ -14,7 +14,6 @@ import yaml
 
 VARIANTS: list[tuple[str, dict[str, Any]]] = [
     ("baseline", {}),
-    ("no_alibi", {"use_alibi": False}),
     ("no_attention_pool", {"use_attention_pool": False}),
     ("no_tcn", {"use_tcn": False}),
     ("no_postcnn_transformer", {"post_cnn_transformer_layers": 0}),
@@ -23,9 +22,7 @@ VARIANTS: list[tuple[str, dict[str, Any]]] = [
         {"stage1_use_engineered_features": False, "stage2_use_engineered_features": False},
     ),
     ("no_tnc", {"stage1_feature_enable_tnc": False}),
-    ("no_pstnp", {"stage1_feature_enable_pstnp": False}),
     ("no_pseeiip", {"stage1_feature_enable_pseeiip": False}),
-    ("no_cksnap", {"stage1_feature_enable_cksnap": False}),
 ]
 
 DEFAULT_SCORE_WEIGHTS: dict[str, float] = {

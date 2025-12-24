@@ -25,7 +25,6 @@ def test_stage1_forward_with_zero_post_cnn_transformer_layers():
         num_heads=2,
         ff_dim=64,
         dropout=0.0,
-        use_alibi=False,
         engineered_dim=0,
         use_engineered_features=False,
         use_attention_pool=False,

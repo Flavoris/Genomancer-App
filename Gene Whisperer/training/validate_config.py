@@ -41,8 +41,6 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     "transformer_heads": int,
     "transformer_ff_dim": int,
     "transformer_dropout": float,
-    "use_alibi": bool,
-    "use_positional_bias": bool,
     "use_attention_pool": bool,
     
     # K-mer tokenization
@@ -65,7 +63,7 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     
     # Engineered features
     "stage1_use_engineered_features": bool,
-    "stage1_engineered_dim": int,
+    "engineered_dim": int,
     "engineered_mlp_hidden": int,
     "engineered_mlp_output": int,
     
@@ -111,7 +109,11 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     "stage1_unfreeze_epoch": (int, type(None)),  # Can be null
     "mlm_encoder_checkpoint": str,
     "include_reverse_complements": bool,
-    "mlm_fasta_path": str,
+    "mlm_fasta_path": (str, type(None)),
+    "mlm_fasta_paths": (list, type(None)),
+    "mlm_species_weights": (dict, list, type(None)),
+    "mlm_steps_per_epoch": (int, type(None)),
+    "mlm_unknown_base_strategy": (str, list),
     "mlm_window_size": int,
     "mlm_stride": int,
     "mlm_batch_size": int,
@@ -131,6 +133,9 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     "mlm_use_layer_lr_decay": bool,
     "mlm_layer_lr_decay": float,
     "mlm_val_ratio": float,
+    "mlm_val_exclude_patterns": list,
+    "mlm_min_val_records_per_species": int,
+    "mlm_single_record_val_ratio": float,
     "mlm_grad_accum_steps": int,
     "mlm_warmup_ratio": float,
     "mlm_patience": int,

@@ -5,8 +5,7 @@ Key improvements from DNABERT, msBERT, Procables, and iPro-TCN papers:
 2. Temporal Convolutional Network (TCN) with dilated causal convolutions
 3. Multi-scale parallel CNN for capturing different motif lengths (3-15bp)
 4. Attention pooling instead of max pooling for position-aware aggregation
-5. ALiBi-style relative positional encoding for better generalization
-6. CoreML-compatible design for iPhone deployment
+5. CoreML-compatible design for iPhone deployment
 """
 from __future__ import annotations
 
@@ -20,52 +19,6 @@ import torch.nn as nn  # pyright: ignore[reportMissingImports]
 import torch.nn.functional as F  # pyright: ignore[reportMissingImports]
 
 LOGGER = logging.getLogger(__name__)
-
-
-class ALiBiPositionalBias(nn.Module):
-    """
-    ALiBi (Attention with Linear Biases) positional encoding.
-    
-    More memory-efficient than learned positional embeddings and
-    generalizes better to different sequence lengths. Works well
-    for DNA sequences where relative position matters.
-    """
-    
-    def __init__(self, num_heads: int, max_seq_len: int = 512):
-        super().__init__()
-        self.num_heads = num_heads
-        # Slopes decrease geometrically for each head
-        slopes = self._get_slopes(num_heads)
-        self.register_buffer("slopes", torch.tensor(slopes).view(num_heads, 1, 1))
-        
-        # Pre-compute relative position matrix
-        positions = torch.arange(max_seq_len)
-        rel_pos = positions.unsqueeze(0) - positions.unsqueeze(1)  # (L, L)
-        self.register_buffer("rel_pos_template", rel_pos.float())
-    
-    def _get_slopes(self, n: int) -> List[float]:
-        """Generate head-specific slopes using geometric series."""
-        def get_slopes_power_of_2(n: int) -> List[float]:
-            start = 2 ** (-(2 ** -(math.log2(n) - 3)))
-            ratio = start
-            return [start * (ratio ** i) for i in range(n)]
-        
-        if math.log2(n).is_integer():
-            return get_slopes_power_of_2(n)
-        else:
-            closest_power = 2 ** math.floor(math.log2(n))
-            return (
-                get_slopes_power_of_2(closest_power) +
-                self._get_slopes(2 * closest_power)[0::2][:n - closest_power]
-            )
-    
-    def forward(self, seq_len: int) -> torch.Tensor:
-        """
-        Returns ALiBi bias matrix of shape (num_heads, seq_len, seq_len).
-        """
-        rel_pos = self.rel_pos_template[:seq_len, :seq_len]  # (L, L)
-        alibi = self.slopes * rel_pos.unsqueeze(0)  # (H, L, L)
-        return alibi
 
 
 class AttentionPooling(nn.Module):
@@ -458,7 +411,6 @@ class DNAEncoder(nn.Module):
     Enhanced transformer encoder for DNA k-mer tokens.
     
     Key improvements over original:
-    - ALiBi positional encoding for better length generalization
     - Pre-norm architecture for training stability
     - Stochastic depth for regularization (linearly increasing drop rate)
     - Scaled embedding initialization (critical for MLM pretraining)
@@ -479,7 +431,6 @@ class DNAEncoder(nn.Module):
         num_heads: int = 8,
         ff_dim: int = 384,
         dropout: float = 0.15,
-        use_alibi: bool = True,
         pad_token_id: Optional[int] = None,
         max_seq_len: int = 256,
         drop_path_rate: float = 0.1,  # Stochastic depth rate
@@ -491,7 +442,6 @@ class DNAEncoder(nn.Module):
         self.k = kmer
         self.pad_token_id = pad_token_id
         self.num_heads = num_heads
-        self.use_alibi = use_alibi
         
         # Embedding with scaled initialization (BERT-style)
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_token_id)
@@ -504,15 +454,9 @@ class DNAEncoder(nn.Module):
         
         # Positional encoding - ALWAYS use position embeddings for input
         # This is critical for MLM: when all tokens are [MASK], the model needs
-        # positional information in the embeddings themselves, not just in attention
+        # positional information in the embeddings themselves, not just in attention.
         self.pos_embedding = nn.Embedding(max_seq_len, embedding_dim)
         nn.init.normal_(self.pos_embedding.weight, std=0.02)
-        
-        # ALiBi for additional relative position encoding in attention
-        if use_alibi:
-            self.alibi = ALiBiPositionalBias(num_heads, max_seq_len)
-        else:
-            self.alibi = None
         
         # Pre-norm transformer layers with linearly increasing stochastic depth
         # This drops more aggressively in later layers (which are more task-specific)
@@ -593,7 +537,7 @@ class DNAEncoder(nn.Module):
         
         # ALWAYS add positional embeddings to input
         # This is critical for MLM: when inputs are [MASK], positions must be encoded
-        # in the embeddings, not just in attention (ALiBi only affects attention scores)
+        # in the embeddings, not just in attention.
         positions = torch.arange(L, device=token_ids.device)
         x = x + self.pos_embedding(positions).unsqueeze(0)
         
@@ -604,18 +548,13 @@ class DNAEncoder(nn.Module):
         # Build padding mask if not provided
         if key_padding_mask is None and self.pad_token_id is not None:
             key_padding_mask = token_ids.eq(self.pad_token_id)
-        
-        # Get ALiBi bias
-        attn_bias = None
-        if self.use_alibi:
-            attn_bias = self.alibi(L)  # (H, L, L)
-        
+
         # Process through layers
         hidden_states = [] if return_all_hidden_states else None
         for layer in self.layers:
             if return_all_hidden_states:
                 hidden_states.append(x)
-            x = layer(x, key_padding_mask=key_padding_mask, attn_bias=attn_bias)
+            x = layer(x, key_padding_mask=key_padding_mask)
         
         output = self.final_norm(x)
         
@@ -655,11 +594,10 @@ class StochasticDepth(nn.Module):
 
 class PreNormTransformerLayer(nn.Module):
     """
-    Pre-norm transformer layer with optional ALiBi bias and stochastic depth.
+    Pre-norm transformer layer with stochastic depth.
     
     IMPORTANT FIX: The attention mask handling was causing interference with learning.
-    Now properly handles ALiBi bias as additive attention bias without interfering
-    with the attention computation.
+    Now properly handles padding masks without interfering with attention computation.
     """
     
     def __init__(
@@ -678,7 +616,7 @@ class PreNormTransformerLayer(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         
-        # Use custom attention for better ALiBi support
+        # Use custom attention for tighter control over masking behavior
         self.q_proj = nn.Linear(d_model, d_model)
         self.k_proj = nn.Linear(d_model, d_model)
         self.v_proj = nn.Linear(d_model, d_model)
@@ -716,7 +654,6 @@ class PreNormTransformerLayer(nn.Module):
         self,
         x: torch.Tensor,
         key_padding_mask: Optional[torch.Tensor] = None,
-        attn_bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         B, L, D = x.shape
         
@@ -730,10 +667,6 @@ class PreNormTransformerLayer(nn.Module):
         
         # Scaled dot-product attention
         attn_weights = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, L, L)
-        
-        # Add ALiBi bias (additive, not as mask)
-        if attn_bias is not None:
-            attn_weights = attn_weights + attn_bias.unsqueeze(0)  # (1, H, L, L) broadcasts
         
         # Apply padding mask
         if key_padding_mask is not None:
@@ -768,14 +701,14 @@ class EngineeredFeatureMLP(nn.Module):
     """
     Separate MLP branch for processing engineered features.
     
-    This gives engineered features (TNC, PSTNP, PseEIIP, CKSNAP) their own
+    This gives engineered features (TNC, PseEIIP) their own
     representation space before fusion with sequence features, allowing
     the model to learn better feature interactions.
     """
     
     def __init__(
         self,
-        input_dim: int = 208,
+        input_dim: int = 128,
         hidden_dim: int = 256,
         output_dim: int = 128,
         dropout: float = 0.3,
@@ -943,8 +876,6 @@ class PostCNNTransformerAdapter(nn.Module):
         num_heads: int = 8,
         ff_dim: int = 384,
         dropout: float = 0.15,
-        use_alibi: bool = True,
-        max_seq_len: int = 256,
         drop_path_rate: float = 0.1,  # Stochastic depth
     ):
         super().__init__()
@@ -956,11 +887,6 @@ class PostCNNTransformerAdapter(nn.Module):
         self.input_norm = nn.LayerNorm(transformer_dim)
         
         # Transformer layers (can be initialized from pretrained DNAEncoder)
-        self.use_alibi = use_alibi
-        if use_alibi:
-            self.alibi = ALiBiPositionalBias(num_heads, max_seq_len)
-        else:
-            self.alibi = None
         
         # Linearly increasing stochastic depth
         if num_layers < 0:
@@ -1008,10 +934,6 @@ class PostCNNTransformerAdapter(nn.Module):
                 self.layers[i].load_state_dict(encoder_layers[src_idx].state_dict())
                 loaded += 1
         
-        # Also copy ALiBi if available
-        if self.use_alibi and hasattr(encoder, 'alibi') and encoder.alibi is not None:
-            self.alibi.load_state_dict(encoder.alibi.state_dict())
-        
         return loaded
     
     def forward(
@@ -1035,14 +957,9 @@ class PostCNNTransformerAdapter(nn.Module):
         x = self.input_proj(x)
         x = self.input_norm(x)
         
-        # Get ALiBi bias
-        attn_bias = None
-        if self.use_alibi and self.alibi is not None:
-            attn_bias = self.alibi(L)
-        
         # Apply transformer layers
         for layer in self.layers:
-            x = layer(x, key_padding_mask=key_padding_mask, attn_bias=attn_bias)
+            x = layer(x, key_padding_mask=key_padding_mask)
         
         x = self.final_norm(x)
         
@@ -1080,10 +997,9 @@ class GeneWhispererStage1(nn.Module):
         num_heads: int = 8,
         ff_dim: int = 384,
         dropout: float = 0.15,
-        use_alibi: bool = True,
         pad_token_id: Optional[int] = None,
         encoder: Optional[DNAEncoder] = None,
-        engineered_dim: int = 208,
+        engineered_dim: int = 128,
         use_engineered_features: bool = True,
         use_attention_pool: bool = True,
         # TCN parameters
@@ -1120,7 +1036,6 @@ class GeneWhispererStage1(nn.Module):
             num_heads=num_heads,
             ff_dim=ff_dim,
             dropout=dropout,
-            use_alibi=use_alibi,
             pad_token_id=pad_token_id,
         )
         # Copy embedding weights from encoder
@@ -1153,7 +1068,6 @@ class GeneWhispererStage1(nn.Module):
             num_heads=num_heads,
             ff_dim=ff_dim,
             dropout=dropout,
-            use_alibi=use_alibi,
         )
         
         # Step 4: Attention pooling
@@ -1165,7 +1079,7 @@ class GeneWhispererStage1(nn.Module):
         
         # Step 5: Engineered features MLP branch
         self.use_engineered_features = use_engineered_features and engineered_dim > 0
-        self.engineered_dim = engineered_dim if self.use_engineered_features else 0
+        self.engineered_dim = engineered_dim
         
         if self.use_engineered_features:
             self.engineered_mlp = EngineeredFeatureMLP(
@@ -1300,6 +1214,11 @@ class GeneWhispererStage1(nn.Module):
         """Extract sequence and fused features."""
         seq_features = self._sequence_backbone(tokens)
         
+        if engineered_features is not None:
+            assert engineered_features.size(-1) == self.engineered_dim, (
+                f"Engineered feature dim mismatch: got {engineered_features.size(-1)}, "
+                f"expected {self.engineered_dim}"
+            )
         if self.use_engineered_features and engineered_features is not None:
             eng_features = self.engineered_mlp(engineered_features)
             fused = self.fusion(seq_features, eng_features)
@@ -1428,9 +1347,8 @@ if __name__ == "__main__":
         num_heads=int(cfg.get("transformer_heads", 8)),
         ff_dim=int(cfg.get("transformer_ff_dim", 384)),
         dropout=float(cfg.get("transformer_dropout", 0.15)),
-        use_alibi=bool(cfg.get("use_alibi", True)),
         pad_token_id=cfg.get("pad_token_id"),
-        engineered_dim=int(cfg.get("stage1_engineered_dim", 208)),
+        engineered_dim=int(cfg.get("engineered_dim", 128)),
         use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
         use_attention_pool=bool(cfg.get("use_attention_pool", True)),
         use_tcn=bool(cfg.get("use_tcn", True)),

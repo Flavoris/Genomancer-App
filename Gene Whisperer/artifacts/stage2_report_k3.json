@@ -1,44 +1,44 @@
 {
   "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config.yaml",
-  "best_epoch": 1,
+  "best_epoch": 24,
   "train_metrics": {
-    "accuracy": 0.48583984375,
-    "precision": 0.45394736842105265,
-    "recall": 0.42724458204334365,
-    "f1": 0.44019138755980863,
-    "mcc": -0.034451064325455125,
-    "roc_auc": 0.48187701986799303,
-    "specificity": 0.5384615384615384,
-    "loss": 0.09709408739581704,
-    "optimizer_steps": 16
+    "accuracy": 0.5414201183431953,
+    "precision": 0.5125984251968504,
+    "recall": 0.5117924528301887,
+    "f1": 0.5121951219512196,
+    "mcc": 0.07953695712997899,
+    "roc_auc": 0.5601118636028249,
+    "specificity": 0.5677374301675978,
+    "loss": 0.08548565976013094,
+    "optimizer_steps": 21
   },
   "val_metrics": {
-    "accuracy": 0.5117994100294986,
-    "precision": 0.4887640449438202,
-    "recall": 0.8181818181818182,
-    "f1": 0.6119577960140681,
-    "mcc": 0.07045931302576847,
-    "roc_auc": 0.5477336034439099,
-    "specificity": 0.2395543175487465,
-    "loss": 0.08843451439455195,
+    "accuracy": 0.6076696165191741,
+    "precision": 0.5674300254452926,
+    "recall": 0.6990595611285266,
+    "f1": 0.6264044943820225,
+    "mcc": 0.22804087121464278,
+    "roc_auc": 0.6527536434365749,
+    "specificity": 0.5264623955431755,
+    "loss": 0.08291744403431198,
     "optimizer_steps": 0
   },
   "class_balance": {
-    "total": 2048,
-    "positive": 969,
-    "negative": 1079,
-    "positive_ratio": 0.47314453125
+    "total": 2704,
+    "positive": 1272,
+    "negative": 1432,
+    "positive_ratio": 0.47041420118343197
   },
   "device": "mps",
   "seed": 1337,
   "model_params": {
-    "total": 9391617,
-    "trainable": 9391617,
+    "total": 11244577,
+    "trainable": 11244577,
     "embedding_dim": 256,
     "layers": 6,
     "heads": 8,
     "kmer": 3,
-    "stage2_engineered_dim": 192,
+    "engineered_dim": 128,
     "stage2_use_engineered_features": true
   },
   "training_enhancements": {
@@ -49,8 +49,8 @@
     "swa_start_epoch": 60,
     "swa_lr": 5e-05,
     "drop_path_rate": 0.1,
-    "ablation_max_steps_stage2": 300,
+    "ablation_max_steps_stage2": null,
     "ablation_disable_wandb": false,
-    "stage1_ckpt": null
+    "stage1_ckpt": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k3.pt"
   }
 }
