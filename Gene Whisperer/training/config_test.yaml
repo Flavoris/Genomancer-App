@@ -34,6 +34,10 @@ mlm_encoder_path: ../artifacts/mlm_encoder_k3.pt
 mlm_epochs: 2
 include_reverse_complements: false
 mlm_fasta_path: ../data/GCF_000005845.2_ASM584v2_genomic.fna
+mlm_fasta_paths: []
+mlm_species_weights: null
+mlm_steps_per_epoch: null
+mlm_unknown_base_strategy: ["random"]
 mlm_final_lr_ratio: 0.1
 mlm_grad_accum_steps: 4
 mlm_kmer: 3
@@ -55,6 +59,10 @@ mlm_transformer_layers: 8
 mlm_use_layer_lr_decay: true
 mlm_use_output_norm: true
 mlm_val_ratio: 0.1
+mlm_val_exclude_patterns:
+- mitochond
+mlm_min_val_records_per_species: 1
+mlm_single_record_val_ratio: 0.1
 mlm_vocab_path: ../artifacts/vocabs/mlm_k3_vocab.json
 mlm_warmup_ratio: 0.06
 mlm_weight_decay: 0.01
@@ -78,7 +86,7 @@ stage1_checkpoint_name: null
 stage1_embed_plot_epoch: null
 stage1_embed_plot_method: pca
 stage1_embed_plot_samples: 512
-stage1_engineered_dim: 208
+engineered_dim: 128
 stage1_focal_alpha: 0.5
 stage1_focal_gamma: 2.0
 stage1_freeze_layers: 0
@@ -108,11 +116,9 @@ transformer_dropout: 0.15
 transformer_ff_dim: 1024
 transformer_heads: 8
 transformer_layers: 6
-use_alibi: true
 use_attention_pool: true
 use_mixup: true
 use_multi_scale: true
-use_positional_bias: false
 use_swa: true
 use_tcn: true
 vocab_cache_dir: ../artifacts/vocabs

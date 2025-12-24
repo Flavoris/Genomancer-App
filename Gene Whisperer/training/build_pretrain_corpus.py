@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import yaml
 
 from seed_utils import set_global_seed
+from genome_io import read_fasta_records
 
 LOGGER = logging.getLogger("gene_whisperer.corpus_builder")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -95,32 +96,14 @@ def read_fasta_sequences(path: Path) -> Dict[str, str]:
     Handles multi-line sequences and multiple records.
     """
     sequences: Dict[str, str] = {}
-    current_id: Optional[str] = None
-    current_parts: List[str] = []
-    
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            
-            if line.startswith(">"):
-                # Save previous sequence if exists
-                if current_id is not None:
-                    sequences[current_id] = "".join(current_parts).upper()
-                
-                # Start new sequence
-                # Extract ID (first word after >)
-                header = line[1:].strip()
-                current_id = header.split()[0] if header else f"seq_{len(sequences)}"
-                current_parts = []
-            else:
-                current_parts.append(line.upper())
-    
-    # Save last sequence
-    if current_id is not None:
-        sequences[current_id] = "".join(current_parts).upper()
-    
+    for record_id, sequence in read_fasta_records(path):
+        unique_id = record_id
+        if unique_id in sequences:
+            suffix = 2
+            while f"{record_id}_{suffix}" in sequences:
+                suffix += 1
+            unique_id = f"{record_id}_{suffix}"
+        sequences[unique_id] = sequence
     return sequences
 
 
@@ -151,12 +134,19 @@ def sanitize_sequence(
         n_replacement: When n_handling="replace", how to replace:
             - "random": Random ACGT base
             - "A", "C", "G", "T": Specific base
+        Non-ACGT characters are treated as N before applying n_handling.
             
     Returns:
         Sanitized sequence (A/C/G/T only) or None if filtered
     """
     seq = sequence.upper().strip()
     
+    if not seq:
+        return None
+
+    # Map any non-ACGT base to N so N-handling applies consistently.
+    seq = "".join(base if base in ALLOWED_BASES else "N" for base in seq)
+
     # Handle N bases
     has_n = "N" in seq
     
@@ -181,7 +171,7 @@ def sanitize_sequence(
     
     # Keep only valid bases
     sanitized = "".join(base for base in seq if base in ALLOWED_BASES)
-    
+
     return sanitized if sanitized else None
 
 

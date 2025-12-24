@@ -48,10 +48,13 @@ class HealthMetrics:
             "step": self.step,
             "epoch": self.epoch,
             "loss": self.loss,
+            "loss_masked_only": self.loss,
             "masked_accuracy": self.masked_accuracy,
+            "masked_token_accuracy": self.masked_accuracy,
             "unk_rate": self.unk_rate,
             "pad_masked_rate": self.pad_masked_rate,
             "mask_coverage": self.mask_coverage,
+            "masked_fraction": self.mask_coverage,
             "grad_norm": self.grad_norm,
             "param_norm": self.param_norm,
             "lr": self.lr,
@@ -146,12 +149,14 @@ class MaskSanityChecker:
         total_unk = 0
         total_tokens = 0
         total_masked = 0
-        
+        batches_checked = 0
+
         print("=" * 70)
         print("MASK SANITY CHECK")
         print("=" * 70)
-        
+
         for i, batch_data in enumerate(dataloader):
+            batches_checked = i + 1
             if i >= num_batches:
                 break
             
@@ -186,7 +191,7 @@ class MaskSanityChecker:
         unk_rate = total_unk / max(1, total_masked) * 100
         mask_rate = total_masked / max(1, total_tokens) * 100
         
-        print(f"Checked {min(num_batches, i+1)} batches, {total_tokens} total tokens")
+        print(f"Checked {min(num_batches, batches_checked)} batches, {total_tokens} total tokens")
         print()
         
         # Check 1: PAD masked rate (must be 0)
@@ -560,4 +565,3 @@ def create_health_dashboard(
         log_every_n_steps=log_every_n_steps,
         target_mask_prob=target_mask_prob,
     )
-

@@ -463,7 +463,6 @@ def main() -> None:
         num_heads=transformer_heads,
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
-        use_alibi=bool(cfg.get("use_alibi", True)),
         pad_token_id=vocab.pad_id,
         drop_path_rate=0.0,
     )
@@ -513,4 +512,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

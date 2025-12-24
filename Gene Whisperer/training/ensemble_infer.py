@@ -10,7 +10,7 @@ from typing import Dict, Optional, Tuple
 import torch
 import yaml
 
-from dataset import KmerVocabulary, compute_eiip, compute_pstnp, compute_tnc, compute_pseeiip, compute_cksnap
+from dataset import KmerVocabulary, compute_tnc, compute_pseeiip
 from model import GeneWhispererStage1, MultiScaleEnsemble
 
 LOGGER = logging.getLogger("gene_whisperer.ensemble")
@@ -61,9 +61,8 @@ def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneW
         num_heads=transformer_heads,
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
-        use_alibi=bool(cfg.get("use_alibi", True)),
         pad_token_id=vocab.pad_id,
-        engineered_dim=int(cfg.get("stage1_engineered_dim", 208)),
+        engineered_dim=int(cfg.get("engineered_dim", 128)),
         use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
         use_attention_pool=bool(cfg.get("use_attention_pool", True)),
         # TCN parameters
@@ -84,21 +83,15 @@ def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneW
 
 
 def compute_engineered_features(sequence: str, cfg: Optional[Dict] = None) -> torch.Tensor:
-    """Compute engineered features: TNC(64) + PSTNP(64) + PseEIIP(64) + CKSNAP(16) = 208."""
-    tnc = compute_tnc(sequence)        # 64-dim
-    pstnp = compute_pstnp(sequence)    # 64-dim
+    """Compute engineered features: TNC(64) + PseEIIP(64) = 128."""
+    tnc = compute_tnc(sequence)          # 64-dim
     pseeiip = compute_pseeiip(sequence)  # 64-dim
-    cksnap = compute_cksnap(sequence)  # 16-dim
     if cfg is not None:
         if not bool(cfg.get("stage1_feature_enable_tnc", True)):
             tnc = torch.zeros_like(tnc)
-        if not bool(cfg.get("stage1_feature_enable_pstnp", True)):
-            pstnp = torch.zeros_like(pstnp)
         if not bool(cfg.get("stage1_feature_enable_pseeiip", True)):
             pseeiip = torch.zeros_like(pseeiip)
-        if not bool(cfg.get("stage1_feature_enable_cksnap", True)):
-            cksnap = torch.zeros_like(cksnap)
-    return torch.cat([tnc, pstnp, pseeiip, cksnap], dim=0)
+    return torch.cat([tnc, pseeiip], dim=0)
 
 
 def prepare_inputs(

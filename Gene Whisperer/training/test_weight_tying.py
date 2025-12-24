@@ -34,7 +34,6 @@ def create_test_model(
         num_heads=num_heads,
         ff_dim=ff_dim,
         dropout=0.1,
-        use_alibi=True,
         pad_token_id=vocab_size - 1,  # Assume last token is PAD
     )
     
@@ -478,4 +477,3 @@ if __name__ == "__main__":
     import sys
     success = run_all_tests()
     sys.exit(0 if success else 1)
-

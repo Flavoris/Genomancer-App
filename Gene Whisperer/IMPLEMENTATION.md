@@ -70,11 +70,10 @@ metrics_stage2: ["accuracy","mcc","roc_auc"]
   - Build 64-size 3-mer vocab (AAA...TTT) with deterministic index order.
   - `tokenize_kmers(seq, max_bp_len)`: uppercase, strip, pad/truncate bp to `max_bp_len`, create overlapping 3-mers, map to vocab indices, pad/truncate tokens to `max_tokens = max_bp_len-2`.
   - `compute_tnc(seq)`: 64-dim normalized tri-nucleotide frequency vector.
-  - `compute_pstnp(seq)`: position-specific 3-mer frequencies mean-reduced to 64 dims (e.g., one-hot 3-mer per position, average across positions).
-  - `compute_eiip(seq)`: 64-dim EIIP frequency vector using published EIIP values; unknowns -> zero.
+  - `compute_pseeiip(seq)`: 64-dim PseEIIP vector using published EIIP values; unknowns -> zero.
   - TSV/CSV loading: respect `delimiter` in config.
-  - `PromoterDatasetStage1`: yields (tokens_tensor[seq_len], label_float) for `is_promoter` 0/1.
-  - `PromoterDatasetStage2`: yields (tokens_tensor[seq_len], tnc[64], pstnp[64], eiip[64], label_float) for `strength` using `stage2_strength_positive`/`stage2_strength_negative` mapping (e.g., 1=strong, 0=weak).
+  - `PromoterDatasetStage1`: yields (tokens_tensor[seq_len], engineered[128], label_float) for `is_promoter` 0/1.
+  - `PromoterDatasetStage2`: yields (tokens_tensor[seq_len], engineered[128], label_float) for `strength` using `stage2_strength_positive`/`stage2_strength_negative` mapping (e.g., 1=strong, 0=weak).
   - `build_dataloaders(cfg)`: DataLoaders for both stages; supports random split if val missing; uses class-weighted sampling when imbalance >20%.
 
 ## 6) Model
@@ -94,7 +93,7 @@ metrics_stage2: ["accuracy","mcc","roc_auc"]
     - 1D Conv (48 -> 96, kernel_size=5, padding=2) + ReLU.
     - Uni-directional LSTM 128 units.
     - Global average pool.
-    - Concatenate with TNC, PSTNP, EIIP (all 64-dim) to form a single feature vector.
+    - Concatenate with TNC + PseEIIP (64-dim each) to form a single feature vector.
     - Dense 128 + ReLU -> Dropout 0.5 -> Dense 1 sigmoid.
   - `GeneWhispererStage1` and `GeneWhispererStage2` wrappers share the backbone; Stage 2 exposes `freeze_lower_layers()` to freeze bottom half of encoder layers before training.
 
@@ -123,7 +122,7 @@ metrics_stage2: ["accuracy","mcc","roc_auc"]
 ## 10) Export to CoreML
 - Add `Gene Whisperer/training/export_coreml.py`:
   - Loads `stage1_best.pt` and `stage2_best.pt`.
-  - Uses dummy inputs: token tensor `(1, max_tokens)` for Stage1; token tensor plus features `(1, max_tokens)` + `(1,64)` + `(1,64)` + `(1,64)` for Stage2.
+  - Uses dummy inputs: token tensor `(1, max_tokens)` plus engineered features `(1, 128)` for Stage1/Stage2.
   - Converts to two models via `coremltools.convert`:
     - `GeneWhispererPromoter.mlmodel`/`.mlpackage`
     - `GeneWhispererStrength.mlmodel`/`.mlpackage`
@@ -134,7 +133,7 @@ metrics_stage2: ["accuracy","mcc","roc_auc"]
 - Bundle both exported models into `apps/ios/Genomancer/Genomancer/Resources/GeneWhisperer/` and add to the Xcode target.
 - Add Swift glue `GeneWhispererPredictor.swift`:
   - Shared 3-mer tokenizer mirroring Python (pad/truncate to `max_bp_len`, overlapping 3-mers -> indices).
-  - Feature builders for TNC, PSTNP (mean position-averaged 3-mer distribution), EIIP to 64-dim each; ensure parity with Python.
+  - Feature builders for TNC and PseEIIP (64-dim each); ensure parity with Python.
   - `predictPromoter(sequence:String) -> (isPromoter: Bool, score: Double)`.
   - `predictStrength(sequence:String) -> (isStrong: Bool, score: Double)` that calls Stage2 model; caller should skip if Stage1 is negative.
 - Add UI `GeneWhispererView.swift`:

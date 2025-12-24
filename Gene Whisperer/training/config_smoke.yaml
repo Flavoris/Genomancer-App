@@ -37,9 +37,7 @@ transformer_heads: 8
 transformer_ff_dim: 1024  # Match mlm_transformer_ff_dim (4x embedding)
 transformer_dropout: 0.15  # Slightly higher for fine-tuning
 
-# Position encoding (ALiBi is more efficient on M4)
-use_alibi: true
-use_positional_bias: false  # Disabled when using ALiBi
+# Position encoding (learned embeddings)
 
 # Attention pooling (KEY for promoter detection)
 use_attention_pool: true
@@ -81,9 +79,9 @@ post_cnn_transformer_layers: 3  # Fewer layers since CNN/TCN already extracted f
 # =============================================================================
 # ENGINEERED FEATURES (Enhanced with separate MLP branch)
 # =============================================================================
-# TNC(64) + PSTNP(64) + PseEIIP(64) + CKSNAP(16) = 208
+# TNC(64) + PseEIIP(64) = 128
 stage1_use_engineered_features: true
-stage1_engineered_dim: 208
+engineered_dim: 128
 
 # Separate MLP branch for engineered features (increases their influence)
 engineered_mlp_hidden: 256    # Hidden dimension in engineered feature MLP
@@ -167,6 +165,10 @@ mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k3.pt
 # If true, include reverse-complement for every window (≈2x corpus)
 include_reverse_complements: true
 mlm_fasta_path: ../data/GCF_000005845.2_ASM584v2_genomic.fna
+mlm_fasta_paths: []
+mlm_species_weights: null
+mlm_steps_per_epoch: null
+mlm_unknown_base_strategy: ["random"]
 mlm_window_size: 81
 mlm_stride: 20
 mlm_batch_size: 128
@@ -193,6 +195,9 @@ mlm_layer_lr_decay: 0.9     # Each lower layer gets 0.9x LR
 
 # MLM additional settings
 mlm_val_ratio: 0.1  # 10% validation split
+mlm_val_exclude_patterns: ["mitochond"]  # Ensure val is not all matching these patterns when possible
+mlm_min_val_records_per_species: 1  # Minimum val records per species
+mlm_single_record_val_ratio: 0.1  # Default to mlm_val_ratio for single-record species
 mlm_grad_accum_steps: 4  # Effective batch = 512
 mlm_warmup_ratio: 0.06  # 6% warmup (linear warmup)
 mlm_final_lr_ratio: 0.1  # Decay to 10% of peak LR via cosine

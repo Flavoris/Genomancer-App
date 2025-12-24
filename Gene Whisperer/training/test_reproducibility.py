@@ -137,7 +137,6 @@ class TestGoldenBatch(unittest.TestCase):
             num_heads=4,
             ff_dim=embedding_dim * 2,
             dropout=0.0,  # No dropout for determinism
-            use_alibi=True,
             pad_token_id=vocab.pad_id,
             drop_path_rate=0.0,
         )

@@ -943,7 +943,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "kmer": int(cfg_run.get("kmer", 3)),
         # Engineered features
         "stage1_use_engineered_features": bool(cfg_run.get("stage1_use_engineered_features", True)),
-        "stage1_engineered_dim": int(cfg_run.get("stage1_engineered_dim", 208)),
+        "engineered_dim": int(cfg_run.get("engineered_dim", 128)),
         "engineered_mlp_hidden": int(cfg_run.get("engineered_mlp_hidden", 256)),
         "engineered_mlp_output": int(cfg_run.get("engineered_mlp_output", 128)),
         # Augmentation
@@ -976,7 +976,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "swa_start_epoch": int(cfg_run.get("swa_start_epoch", 60)),
         "swa_lr": float(cfg_run.get("swa_lr", 5e-5)),
         # Model options
-        "use_alibi": bool(cfg_run.get("use_alibi", True)),
         "use_attention_pool": bool(cfg_run.get("use_attention_pool", True)),
         "post_cnn_transformer_layers": int(cfg_run.get("post_cnn_transformer_layers", 3)),
         "fusion_hidden": int(cfg_run.get("fusion_hidden", 256)),
@@ -1028,10 +1027,9 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     pad_token_id = stage1_vocab.pad_id
     kmer = stage1_vocab.k
     
-    use_alibi = bool(cfg_run.get("use_alibi", True))
     use_attention_pool = bool(cfg_run.get("use_attention_pool", True))
     use_engineered_features = bool(cfg_run.get("stage1_use_engineered_features", True))
-    engineered_dim = int(cfg_run.get("stage1_engineered_dim", 208))
+    engineered_dim = int(cfg_run.get("engineered_dim", 128))
     
     # TCN configuration
     use_tcn = bool(cfg_run.get("use_tcn", True))
@@ -1057,7 +1055,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         num_heads=transformer_heads,
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
-        use_alibi=use_alibi,
         pad_token_id=pad_token_id,
         engineered_dim=engineered_dim,
         use_engineered_features=use_engineered_features,
@@ -1079,7 +1076,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     
     # Log architecture configuration
     LOGGER.info("=" * 60)
-    LOGGER.info("MODEL ARCHITECTURE (V3 - Improved Order + Attention Fusion)")
+    LOGGER.info("MODEL ARCHITECTURE V4")
     LOGGER.info("=" * 60)
     LOGGER.info("Architecture: Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier")
     if use_tcn:

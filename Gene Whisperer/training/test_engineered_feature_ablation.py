@@ -13,9 +13,7 @@ from dataset import (
     KmerVocabulary,
     PromoterDatasetStage1,
     build_dataloaders,
-    compute_cksnap,
     compute_pseeiip,
-    compute_pstnp,
     compute_tnc,
 )
 from ensemble_infer import compute_engineered_features
@@ -23,10 +21,8 @@ from ensemble_infer import compute_engineered_features
 
 def _manual_engineered_features(sequence: str) -> torch.Tensor:
     tnc = compute_tnc(sequence)
-    pstnp = compute_pstnp(sequence)
     pseeiip = compute_pseeiip(sequence)
-    cksnap = compute_cksnap(sequence)
-    return torch.cat([tnc, pstnp, pseeiip, cksnap], dim=0)
+    return torch.cat([tnc, pseeiip], dim=0)
 
 
 def test_stage1_feature_group_zeroing_keeps_dim_and_segments() -> None:
@@ -44,7 +40,7 @@ def test_stage1_feature_group_zeroing_keeps_dim_and_segments() -> None:
     _, base_features, _ = base_ds[0]
     manual = _manual_engineered_features(sequence)
 
-    assert base_features.shape == (208,)
+    assert base_features.shape == (128,)
     assert torch.allclose(base_features, manual)
 
     tnc_off = PromoterDatasetStage1(
@@ -56,23 +52,9 @@ def test_stage1_feature_group_zeroing_keeps_dim_and_segments() -> None:
         reverse_complement_prob=0.0,
     )
     _, tnc_off_features, _ = tnc_off[0]
-    assert tnc_off_features.shape == (208,)
+    assert tnc_off_features.shape == (128,)
     assert tnc_off_features[:64].abs().sum().item() == 0.0
     assert torch.allclose(tnc_off_features[64:], base_features[64:])
-
-    pstnp_off = PromoterDatasetStage1(
-        df,
-        max_bp_len=81,
-        vocab=vocab,
-        use_engineered_features=True,
-        feature_enable_pstnp=False,
-        reverse_complement_prob=0.0,
-    )
-    _, pstnp_off_features, _ = pstnp_off[0]
-    assert pstnp_off_features.shape == (208,)
-    assert pstnp_off_features[64:128].abs().sum().item() == 0.0
-    assert torch.allclose(pstnp_off_features[:64], base_features[:64])
-    assert torch.allclose(pstnp_off_features[128:], base_features[128:])
 
     pseeiip_off = PromoterDatasetStage1(
         df,
@@ -83,23 +65,9 @@ def test_stage1_feature_group_zeroing_keeps_dim_and_segments() -> None:
         reverse_complement_prob=0.0,
     )
     _, pseeiip_off_features, _ = pseeiip_off[0]
-    assert pseeiip_off_features.shape == (208,)
-    assert pseeiip_off_features[128:192].abs().sum().item() == 0.0
-    assert torch.allclose(pseeiip_off_features[:128], base_features[:128])
-    assert torch.allclose(pseeiip_off_features[192:], base_features[192:])
-
-    cksnap_off = PromoterDatasetStage1(
-        df,
-        max_bp_len=81,
-        vocab=vocab,
-        use_engineered_features=True,
-        feature_enable_cksnap=False,
-        reverse_complement_prob=0.0,
-    )
-    _, cksnap_off_features, _ = cksnap_off[0]
-    assert cksnap_off_features.shape == (208,)
-    assert cksnap_off_features[192:].abs().sum().item() == 0.0
-    assert torch.allclose(cksnap_off_features[:192], base_features[:192])
+    assert pseeiip_off_features.shape == (128,)
+    assert pseeiip_off_features[64:].abs().sum().item() == 0.0
+    assert torch.allclose(pseeiip_off_features[:64], base_features[:64])
 
 
 def test_stage1_use_engineered_features_false_zeros_everything() -> None:
@@ -113,36 +81,30 @@ def test_stage1_use_engineered_features_false_zeros_everything() -> None:
         vocab=vocab,
         use_engineered_features=False,
         feature_enable_tnc=True,
-        feature_enable_pstnp=False,
         feature_enable_pseeiip=True,
-        feature_enable_cksnap=False,
         reverse_complement_prob=0.0,
     )
     _, engineered, _ = ds[0]
-    assert engineered.shape == (208,)
+    assert engineered.shape == (128,)
     assert engineered.abs().sum().item() == 0.0
 
 
 def test_ensemble_infer_engineered_features_mirrors_cfg_toggles() -> None:
     sequence = "ACGT" * 30
     base = compute_engineered_features(sequence)
-    assert base.shape == (208,)
+    assert base.shape == (128,)
 
     cfg = {"stage1_feature_enable_tnc": False}
     tnc_off = compute_engineered_features(sequence, cfg)
-    assert tnc_off.shape == (208,)
+    assert tnc_off.shape == (128,)
     assert tnc_off[:64].abs().sum().item() == 0.0
     assert torch.allclose(tnc_off[64:], base[64:])
 
-    cfg_all_off = {
-        "stage1_feature_enable_tnc": False,
-        "stage1_feature_enable_pstnp": False,
-        "stage1_feature_enable_pseeiip": False,
-        "stage1_feature_enable_cksnap": False,
-    }
-    all_off = compute_engineered_features(sequence, cfg_all_off)
-    assert all_off.shape == (208,)
-    assert all_off.abs().sum().item() == 0.0
+    cfg_pseeiip_off = {"stage1_feature_enable_pseeiip": False}
+    pseeiip_off = compute_engineered_features(sequence, cfg_pseeiip_off)
+    assert pseeiip_off.shape == (128,)
+    assert pseeiip_off[64:].abs().sum().item() == 0.0
+    assert torch.allclose(pseeiip_off[:64], base[:64])
 
 
 def test_build_dataloaders_passes_feature_toggles(tmp_path: Path) -> None:
@@ -175,9 +137,7 @@ def test_build_dataloaders_passes_feature_toggles(tmp_path: Path) -> None:
         "stage2_strength_negative": 0,
         "stage1_use_engineered_features": True,
         "stage1_feature_enable_tnc": False,
-        "stage1_feature_enable_pstnp": True,
         "stage1_feature_enable_pseeiip": False,
-        "stage1_feature_enable_cksnap": True,
         "stage1_reverse_complement_prob": 0.0,
     }
 
@@ -186,11 +146,7 @@ def test_build_dataloaders_passes_feature_toggles(tmp_path: Path) -> None:
     val_ds = loaders["stage1"]["val"].dataset
 
     assert train_ds.feature_enable_tnc is False
-    assert train_ds.feature_enable_pstnp is True
     assert train_ds.feature_enable_pseeiip is False
-    assert train_ds.feature_enable_cksnap is True
 
     assert val_ds.feature_enable_tnc is False
-    assert val_ds.feature_enable_pstnp is True
     assert val_ds.feature_enable_pseeiip is False
-    assert val_ds.feature_enable_cksnap is True

@@ -38,9 +38,6 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 stage1.LOGGER = LOGGER
 
 
-STAGE2_ENGINEERED_DIM = 64 + 64 + 64  # TNC + PSTNP + EIIP
-
-
 class _Stage2LoaderAdapter:
     """Adapter that converts Stage 2 batches to the (tokens, engineered, labels) triple."""
 
@@ -56,9 +53,9 @@ class _Stage2LoaderAdapter:
             # Accept either Stage1-like (tokens, engineered, label) or Stage2-like batches.
             if isinstance(batch, (tuple, list)) and len(batch) == 3:
                 tokens, engineered, labels = batch
-            elif isinstance(batch, (tuple, list)) and len(batch) == 5:
-                tokens, tnc, pstnp, eiip, labels = batch
-                engineered = torch.cat([tnc, pstnp, eiip], dim=1)
+            elif isinstance(batch, (tuple, list)) and len(batch) == 4:
+                tokens, tnc, pseeiip, labels = batch
+                engineered = torch.cat([tnc, pseeiip], dim=1)
             else:
                 raise ValueError(f"Unexpected Stage 2 batch format: {type(batch)} len={getattr(batch, '__len__', None)}")
             yield tokens, engineered, labels
@@ -265,9 +262,8 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "max_bp_len": int(cfg_run.get("max_bp_len", 81)),
         "kmer": int(cfg_run.get("kmer", 3)),
         # Engineered features
-        "engineered_dim_stage2": STAGE2_ENGINEERED_DIM,
+        "engineered_dim": int(cfg_run.get("engineered_dim", 128)),
         # Architecture toggles
-        "use_alibi": bool(cfg_run.get("use_alibi", True)),
         "use_attention_pool": bool(cfg_run.get("use_attention_pool", True)),
         "use_tcn": bool(cfg_run.get("use_tcn", True)),
         "post_cnn_transformer_layers": int(cfg_run.get("post_cnn_transformer_layers", 3)),
@@ -316,7 +312,6 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     transformer_ff_dim = int(cfg_run.get("transformer_ff_dim", 384))
     transformer_dropout = float(cfg_run.get("transformer_dropout", 0.15))
 
-    use_alibi = bool(cfg_run.get("use_alibi", True))
     use_attention_pool = bool(cfg_run.get("use_attention_pool", True))
     use_tcn = bool(cfg_run.get("use_tcn", True))
     tcn_hidden = int(cfg_run.get("tcn_hidden", 256))
@@ -333,7 +328,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     fusion_hidden = int(cfg_run.get("fusion_hidden", 256))
 
     stage2_use_engineered = bool(cfg_run.get("stage2_use_engineered_features", True))
-    engineered_dim = STAGE2_ENGINEERED_DIM if stage2_use_engineered else 0
+    engineered_dim = int(cfg_run.get("engineered_dim", 128))
 
     model = GeneWhispererStage1(
         vocab_size=vocab_size,
@@ -343,7 +338,6 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         num_heads=transformer_heads,
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
-        use_alibi=use_alibi,
         pad_token_id=pad_token_id,
         engineered_dim=engineered_dim,
         use_engineered_features=stage2_use_engineered,
@@ -378,8 +372,8 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("Post-CNN Transformer: %d layers, %d heads", post_cnn_transformer_layers, transformer_heads)
     if stage2_use_engineered:
         LOGGER.info(
-            "Engineered Features (Stage2): %d dims (TNC+PSTNP+EIIP) via MLP %d→%d",
-            STAGE2_ENGINEERED_DIM,
+            "Engineered Features (Stage2): %d dims (TNC+PseEIIP) via MLP %d→%d",
+            engineered_dim,
             engineered_mlp_hidden,
             engineered_mlp_output,
         )
@@ -706,7 +700,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             "layers": transformer_layers,
             "heads": transformer_heads,
             "kmer": kmer,
-            "stage2_engineered_dim": STAGE2_ENGINEERED_DIM,
+            "engineered_dim": engineered_dim,
             "stage2_use_engineered_features": stage2_use_engineered,
         },
         "training_enhancements": {
