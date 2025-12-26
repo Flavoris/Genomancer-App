@@ -23,6 +23,7 @@ import math
 import os
 import random
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -35,8 +36,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import yaml
 from torch.optim.swa_utils import AveragedModel, SWALR
+from torch.profiler import profile, ProfilerActivity, schedule, tensorboard_trace_handler
 from tqdm.auto import tqdm
 
+from amp_utils import get_amp_context, log_amp_status, AMPContext
 from dataset import build_dataloaders
 from model import GeneWhispererStage1, DNAEncoder
 from numerics import cap_model_param_norm_
@@ -433,7 +436,7 @@ def run_epoch(
     grad_clip_norm: float = 1.0,
     use_mixup: bool = False,
     mixup_alpha: float = 0.2,
-    use_amp: bool = False,
+    amp_ctx: Optional[AMPContext] = None,
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
     param_norm_warn: float = 150.0,
     param_norm_cap: float = 200.0,
@@ -442,10 +445,12 @@ def run_epoch(
     is_train = optimizer is not None
     model.train(is_train)
 
-    use_cuda_amp = use_amp and device.type == "cuda"
-    if is_train and use_cuda_amp and scaler is None:
-        raise ValueError("use_amp=True on CUDA requires GradScaler (fp16 without scaling is unsafe)")
-    if is_train and use_cuda_amp:
+    # AMP setup: use autocast for forward pass, GradScaler for CUDA fp16
+    use_autocast = amp_ctx is not None and amp_ctx.enabled
+    use_cuda_scaler = scaler is not None and device.type == "cuda"
+    force_fp32_loss = amp_ctx.force_fp32_loss if amp_ctx else True
+
+    if is_train and use_cuda_scaler:
         LOGGER.info("%s: GradScaler scale = %.0f", desc, scaler.get_scale())
 
     if is_train and max_optimizer_steps is not None and max_optimizer_steps <= 0:
@@ -487,14 +492,17 @@ def run_epoch(
         
         # Forward pass
         with torch.set_grad_enabled(is_train):
-            # Automatic mixed precision: forward under autocast, loss outside autocast
-            if use_cuda_amp:
-                with torch.cuda.amp.autocast():
+            # Automatic mixed precision: forward under autocast, loss in fp32 for stability
+            if use_autocast and amp_ctx is not None:
+                with amp_ctx.autocast():
                     probs = model(tokens, engineered)
             else:
                 probs = model(tokens, engineered)
 
-            probs = probs.float().clamp(min=1e-6, max=1 - 1e-6)
+            # Ensure probs are in fp32 for loss computation if force_fp32_loss is True
+            if force_fp32_loss:
+                probs = probs.float()
+            probs = probs.clamp(min=1e-6, max=1 - 1e-6)
 
             if use_mixup and lam < 1.0:
                 loss = lam * criterion(probs, labels) + (1 - lam) * criterion(probs, labels_b)
@@ -504,18 +512,18 @@ def run_epoch(
             # Backward pass with gradient accumulation
             if is_train:
                 loss_scaled = loss / grad_accum_steps
-                
-                if use_cuda_amp:
+
+                if use_cuda_scaler:
                     scaler.scale(loss_scaled).backward()
                 else:
                     loss_scaled.backward()
-                
+
                 accumulated_loss += loss.item()
-                
+
                 # Optimizer step every grad_accum_steps
                 if (batch_idx + 1) % grad_accum_steps == 0:
                     if grad_clip_norm > 0:
-                        if use_cuda_amp:
+                        if use_cuda_scaler:
                             scaler.unscale_(optimizer)
                         # Gradient clipping - returns the total norm BEFORE clipping
                         unclipped_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
@@ -529,7 +537,7 @@ def run_epoch(
                                 optimizer_step_count, unclipped_grad_norm.item(), clipped_grad_norm
                             )
                     
-                    if use_cuda_amp:
+                    if use_cuda_scaler:
                         scaler.step(optimizer)
                         scaler.update()
                     else:
@@ -600,6 +608,132 @@ def run_epoch(
     metrics["optimizer_steps"] = int(optimizer_step_count)
     
     return metrics
+
+
+def run_profiling_epoch(
+    loader: torch.utils.data.DataLoader,
+    model: nn.Module,
+    criterion: nn.Module,
+    device: torch.device,
+    optimizer: torch.optim.Optimizer,
+    run_dir: Path,
+    num_profile_steps: int = 50,
+    grad_accum_steps: int = 1,
+    grad_clip_norm: float = 1.0,
+) -> Dict[str, float]:
+    """
+    Run profiling for a limited number of steps.
+
+    Returns timing metrics:
+    - avg_dataloader_time_ms: Average time to get a batch
+    - avg_forward_backward_time_ms: Average time for forward+backward pass
+    - avg_optimizer_step_time_ms: Average time for optimizer step
+    """
+    model.train()
+
+    timing_stats: Dict[str, List[float]] = defaultdict(list)
+
+    # Determine profiler activities based on device
+    activities = [ProfilerActivity.CPU]
+    if device.type == "cuda":
+        activities.append(ProfilerActivity.CUDA)
+
+    # Profile schedule: wait=5, warmup=5, active=20, repeat=1
+    # Total steps needed: (5+5+20) * 1 = 30 steps minimum
+    prof_schedule = schedule(
+        wait=5,
+        warmup=5,
+        active=20,
+        repeat=1,
+    )
+
+    profile_trace_path = run_dir / "profile_trace.json"
+
+    LOGGER.info("=" * 60)
+    LOGGER.info("PROFILING MODE")
+    LOGGER.info("=" * 60)
+    LOGGER.info("Running profiler for %d steps", num_profile_steps)
+    LOGGER.info("Profile trace will be saved to: %s", profile_trace_path)
+
+    step_count = 0
+    accumulated_loss = 0.0
+
+    with profile(
+        activities=activities,
+        schedule=prof_schedule,
+        on_trace_ready=lambda p: p.export_chrome_trace(str(profile_trace_path)),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=False,
+    ) as prof:
+        data_iter = iter(loader)
+
+        while step_count < num_profile_steps:
+            # Measure dataloader time
+            t_data_start = time.perf_counter()
+            try:
+                tokens, engineered, labels = next(data_iter)
+            except StopIteration:
+                data_iter = iter(loader)
+                tokens, engineered, labels = next(data_iter)
+            t_data_end = time.perf_counter()
+            timing_stats["dataloader"].append((t_data_end - t_data_start) * 1000)
+
+            tokens = tokens.to(device)
+            engineered = engineered.to(device)
+            labels = labels.to(device).unsqueeze(1)
+
+            # Measure forward + backward time
+            t_fwd_start = time.perf_counter()
+            probs = model(tokens, engineered)
+            probs = probs.float().clamp(min=1e-6, max=1 - 1e-6)
+            loss = criterion(probs, labels)
+            loss_scaled = loss / grad_accum_steps
+            loss_scaled.backward()
+            accumulated_loss += loss.item()
+            t_fwd_end = time.perf_counter()
+            timing_stats["forward_backward"].append((t_fwd_end - t_fwd_start) * 1000)
+
+            # Measure optimizer step time (every grad_accum_steps)
+            if (step_count + 1) % grad_accum_steps == 0:
+                t_opt_start = time.perf_counter()
+                if grad_clip_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+                optimizer.step()
+                optimizer.zero_grad()
+                t_opt_end = time.perf_counter()
+                timing_stats["optimizer_step"].append((t_opt_end - t_opt_start) * 1000)
+
+            prof.step()
+            step_count += 1
+
+            if step_count % 10 == 0:
+                LOGGER.info("Profiling step %d/%d", step_count, num_profile_steps)
+
+    # Compute averages
+    avg_dataloader = np.mean(timing_stats["dataloader"]) if timing_stats["dataloader"] else 0.0
+    avg_fwd_bwd = np.mean(timing_stats["forward_backward"]) if timing_stats["forward_backward"] else 0.0
+    avg_opt = np.mean(timing_stats["optimizer_step"]) if timing_stats["optimizer_step"] else 0.0
+
+    LOGGER.info("-" * 60)
+    LOGGER.info("PROFILING RESULTS")
+    LOGGER.info("-" * 60)
+    LOGGER.info("Average dataloader batch time:    %.2f ms", avg_dataloader)
+    LOGGER.info("Average forward+backward time:    %.2f ms", avg_fwd_bwd)
+    LOGGER.info("Average optimizer step time:      %.2f ms", avg_opt)
+    LOGGER.info("Total time per batch (approx):    %.2f ms", avg_dataloader + avg_fwd_bwd)
+    LOGGER.info("-" * 60)
+    LOGGER.info("Profile trace exported to: %s", profile_trace_path)
+    LOGGER.info("Open in Chrome at chrome://tracing/ to visualize")
+    LOGGER.info("=" * 60)
+
+    return {
+        "avg_dataloader_time_ms": float(avg_dataloader),
+        "avg_forward_backward_time_ms": float(avg_fwd_bwd),
+        "avg_optimizer_step_time_ms": float(avg_opt),
+        "num_profile_steps": num_profile_steps,
+        "profile_trace_path": str(profile_trace_path),
+    }
 
 
 def compute_class_balance(loader: torch.utils.data.DataLoader) -> Dict[str, float]:
@@ -820,10 +954,64 @@ def main() -> None:
         help="Train on 32 samples for 200 steps to verify model can learn",
     )
     parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Enable torch.profiler for ~50 steps and export chrome trace",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
         help="Random seed for reproducibility. Overrides config value.",
+    )
+    parser.add_argument(
+        "--kmer",
+        type=int,
+        default=None,
+        help="K-mer size (e.g. 3, 4, 6). Overrides config value.",
+    )
+    parser.add_argument(
+        "--vocab_cache_dir",
+        type=str,
+        default=None,
+        help="Path to vocab cache directory. Overrides config value.",
+    )
+    parser.add_argument(
+        "--checkpoint_name",
+        type=str,
+        default=None,
+        help="Checkpoint filename (e.g. stage1_k4.pt). Overrides stage1_checkpoint_name in config.",
+    )
+    # Architecture overrides for lightweight models
+    parser.add_argument(
+        "--embedding_dim",
+        type=int,
+        default=None,
+        help="Embedding dimension. Overrides config value.",
+    )
+    parser.add_argument(
+        "--transformer_layers",
+        type=int,
+        default=None,
+        help="Number of transformer encoder layers. Overrides config value.",
+    )
+    parser.add_argument(
+        "--post_cnn_transformer_layers",
+        type=int,
+        default=None,
+        help="Number of post-CNN transformer layers. Overrides config value.",
+    )
+    parser.add_argument(
+        "--tcn_hidden",
+        type=int,
+        default=None,
+        help="TCN hidden dimension. Overrides config value.",
+    )
+    parser.add_argument(
+        "--multiscale_channels",
+        type=int,
+        default=None,
+        help="Multiscale CNN channels. Overrides config value.",
     )
     args = parser.parse_args()
 
@@ -846,6 +1034,25 @@ def main() -> None:
         overrides["seed"] = args.seed
     if args.overfit_debug:
         overrides["overfit_debug"] = True
+    if args.profile:
+        overrides["profile"] = True
+    if args.kmer is not None:
+        overrides["kmer"] = args.kmer
+    if args.vocab_cache_dir is not None:
+        overrides["vocab_cache_dir"] = args.vocab_cache_dir
+    if args.checkpoint_name is not None:
+        overrides["stage1_checkpoint_name"] = args.checkpoint_name
+    # Architecture overrides for lightweight models
+    if args.embedding_dim is not None:
+        overrides["embedding_dim"] = args.embedding_dim
+    if args.transformer_layers is not None:
+        overrides["transformer_layers"] = args.transformer_layers
+    if args.post_cnn_transformer_layers is not None:
+        overrides["post_cnn_transformer_layers"] = args.post_cnn_transformer_layers
+    if args.tcn_hidden is not None:
+        overrides["tcn_hidden"] = args.tcn_hidden
+    if args.multiscale_channels is not None:
+        overrides["multiscale_channels"] = args.multiscale_channels
 
     _ = run_stage1_training(cfg, overrides=overrides)
     return
@@ -921,6 +1128,13 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "script": "train_stage1.py",
         "timestamp": timestamp,
         "config_path": config_id,
+        # System info for reproducibility
+        "system_info": {
+            "python_version": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
+            "torch_version": torch.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "mps_available": hasattr(torch.backends, "mps") and torch.backends.mps.is_available(),
+        },
         # Ablations / debugging
         "ablation_enabled": ablation_enabled,
         "ablation_max_steps_stage1": ablation_max_steps,
@@ -985,6 +1199,10 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "stage1_freeze_layers": int(cfg_run.get("stage1_freeze_layers", 0)),
         # Seed
         "seed": int(cfg_run.get("seed", 1337) or 1337),
+        # AMP (Mixed Precision)
+        "amp_enabled": bool(cfg_run.get("amp_enabled", True)),
+        "amp_dtype": str(cfg_run.get("amp_dtype", "bfloat16")),
+        "amp_force_fp32_loss": bool(cfg_run.get("amp_force_fp32_loss", True)),
     }
     
     resolved_config_path = run_dir / "resolved_config.json"
@@ -1005,7 +1223,17 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     else:
         device = torch.device("cpu")
     LOGGER.info("Using device: %s", device)
-    
+
+    # AMP (Mixed Precision) setup
+    amp_ctx = get_amp_context(device, cfg_run, logger=LOGGER)
+    log_amp_status(amp_ctx, logger=LOGGER)
+
+    # GradScaler for CUDA fp16 (not needed for MPS bfloat16)
+    scaler = None
+    if amp_ctx.enabled and device.type == "cuda" and amp_ctx.dtype == torch.float16:
+        scaler = torch.cuda.amp.GradScaler()
+        LOGGER.info("Using GradScaler for CUDA fp16")
+
     # Build dataloaders
     dataloaders = build_dataloaders(cfg_run)
     train_loader = dataloaders["stage1"]["train"]
@@ -1148,31 +1376,42 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    LOGGER.info("Model: %.2fM total params, %.2fM trainable", 
+    LOGGER.info("Model: %.2fM total params, %.2fM trainable",
                 total_params / 1e6, trainable_params / 1e6)
-    
+
+    # Update resolved_config with device and model info, then re-save
+    resolved_config["system_info"]["device"] = str(device)
+    resolved_config["system_info"]["stage1_total_params"] = total_params
+    resolved_config["system_info"]["stage1_trainable_params"] = trainable_params
+    with resolved_config_path.open("w", encoding="utf-8") as f:
+        json.dump(resolved_config, f, indent=2)
+
     # Optimizer with layer-wise learning rate decay
     lr = float(cfg_run.get("lr", 2e-4))
     weight_decay = float(cfg_run.get("weight_decay", 0.02))
     layer_lr_decay = float(cfg_run.get("layer_lr_decay", 0.8))
-    
+    optimizer_foreach = bool(cfg_run.get("optimizer_foreach", True))
+
+    LOGGER.info("Optimizer: AdamW foreach=%s", optimizer_foreach)
+
     # Use LLRD if we loaded pretrained weights
     if should_load_mlm and mlm_checkpoint:
         LOGGER.info("Using layer-wise LR decay (factor=%.2f) for pretrained model", layer_lr_decay)
         param_groups = get_layer_wise_lr_groups(
-            model, 
-            base_lr=lr, 
+            model,
+            base_lr=lr,
             lr_decay=layer_lr_decay,
             weight_decay=weight_decay,
         )
-        optimizer = torch.optim.AdamW(param_groups, betas=(0.9, 0.999))
+        optimizer = torch.optim.AdamW(param_groups, betas=(0.9, 0.999), foreach=optimizer_foreach)
         LOGGER.info("Created %d parameter groups with LLRD", len(param_groups))
     else:
         optimizer = torch.optim.AdamW(
-            model.parameters(), 
-            lr=lr, 
+            model.parameters(),
+            lr=lr,
             weight_decay=weight_decay,
             betas=(0.9, 0.999),
+            foreach=optimizer_foreach,
         )
     
     # Scheduler with warmup
@@ -1247,7 +1486,49 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             "best_val_mcc": float("nan"),
             "best_epoch": 0,
         }
-    
+
+    # =========================================================================
+    # PROFILING MODE: Run profiler for ~50 steps
+    # =========================================================================
+    if bool(cfg_run.get("profile", False)):
+        LOGGER.info("Running PROFILING mode")
+        grad_accum_steps_prof = int(cfg_run.get("grad_accum_steps", 4))
+        grad_clip_norm_prof = float(cfg_run.get("grad_clip_norm", 1.0))
+
+        profile_metrics = run_profiling_epoch(
+            loader=train_loader,
+            model=model,
+            criterion=criterion,
+            device=device,
+            optimizer=optimizer,
+            run_dir=run_dir,
+            num_profile_steps=50,
+            grad_accum_steps=grad_accum_steps_prof,
+            grad_clip_norm=grad_clip_norm_prof,
+        )
+
+        # Save profile metrics to run_dir
+        profile_report_path = run_dir / "profile_report.json"
+        with profile_report_path.open("w", encoding="utf-8") as f:
+            json.dump(profile_metrics, f, indent=2)
+        LOGGER.info("Saved profile report to %s", profile_report_path)
+        LOGGER.info("Profiling complete. Exiting.")
+
+        return {
+            "profile": True,
+            "profile_metrics": profile_metrics,
+            "stage1_acc": float("nan"),
+            "stage1_auc": float("nan"),
+            "stage1_mcc": float("nan"),
+            "best_ckpt_path": None,
+            "stage1_seconds": float(time.perf_counter() - start_time),
+            "params": int(total_params),
+            "best_val_acc": float("nan"),
+            "best_val_auc": float("nan"),
+            "best_val_mcc": float("nan"),
+            "best_epoch": 0,
+        }
+
     # Training settings
     grad_accum_steps = int(cfg_run.get("grad_accum_steps", 2))
     grad_clip_norm = float(cfg_run.get("grad_clip_norm", 1.0))
@@ -1311,6 +1592,8 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             param_norm_cap=param_norm_cap,
             use_mixup=use_mixup and not in_swa_phase,  # Disable mixup in SWA phase
             mixup_alpha=mixup_alpha,
+            amp_ctx=amp_ctx,
+            scaler=scaler,
         )
         global_optimizer_steps += int(train_metrics.get("optimizer_steps", 0))
         reached_max_steps = ablation_max_steps is not None and global_optimizer_steps >= ablation_max_steps
@@ -1327,6 +1610,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             device,
             optimizer=None,
             desc="Val",
+            amp_ctx=amp_ctx,
         )
         
         # Also evaluate SWA model if active (every 5 epochs to save time)
@@ -1357,6 +1641,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                     device,
                     optimizer=None,
                     desc="Val-SWA",
+                    amp_ctx=amp_ctx,
                 )
             except Exception as e:
                 LOGGER.warning("SWA evaluation failed: %s", e)

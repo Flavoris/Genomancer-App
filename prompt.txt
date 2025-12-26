@@ -1,15 +1,3 @@
-Wire config.yaml to include all 3 genomes
+Switch MLM pretraining to 6-mer (naming + config + safety guards)
 
-Goal: you can flip between single-genome and multi-genome runs safely.
-
-Update config.yaml handling:
-- Keep backward compatibility with mlm_fasta_path (single string)
-- Prefer mlm_fasta_paths (list) when present
-
-Set defaults (reasonable for MacBook):
-- mlm_steps_per_epoch: 5000
-- mlm_species_weights: [0.45, 0.35, 0.20] (E coli, B subtilis, yeast) OR dict keyed by filename
-- mlm_unknown_base_strategy: "random"
-
-Checkpoint:
-- Start pretraining and confirm it loads all three genomes and reports species sampling stats.
+Your config currently has mlm_kmer: 3 and mlm_encoder_checkpoint: mlm_encoder_k3.pt. We’ll make it k=6 and prevent silent mismatches.

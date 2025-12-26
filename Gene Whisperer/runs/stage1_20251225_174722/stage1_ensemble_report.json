@@ -1,0 +1,69 @@
+{
+  "timestamp": "20251225_174722",
+  "config_path": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config.yaml",
+  "device": "mps",
+  "validation_samples": 1354,
+  "models": {
+    "k4": {
+      "vocab_path": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/vocabs/k4_vocab.json",
+      "checkpoint_path": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k4.pt",
+      "vocab_size": 115,
+      "metrics": {
+        "accuracy": 0.8116691285081241,
+        "precision": 0.8187311178247734,
+        "recall": 0.8005908419497785,
+        "f1": 0.8095593726661687,
+        "mcc": 0.623491316027743,
+        "roc_auc": 0.8716184225741771,
+        "specificity": 0.8227474150664698,
+        "tp": 542,
+        "tn": 557,
+        "fp": 120,
+        "fn": 135
+      }
+    },
+    "k6": {
+      "vocab_path": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/vocabs/k6_vocab.json",
+      "checkpoint_path": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k6.pt",
+      "vocab_size": 355,
+      "metrics": {
+        "accuracy": 0.8190546528803545,
+        "precision": 0.8686006825938567,
+        "recall": 0.7518463810930576,
+        "f1": 0.806017418844022,
+        "mcc": 0.6439532342632411,
+        "roc_auc": 0.8840047214991851,
+        "specificity": 0.8862629246676514,
+        "tp": 509,
+        "tn": 600,
+        "fp": 77,
+        "fn": 168
+      }
+    }
+  },
+  "ensemble": {
+    "method": "average",
+    "weights": {
+      "k4": 0.5,
+      "k6": 0.5
+    },
+    "metrics": {
+      "accuracy": 0.8197932053175776,
+      "precision": 0.8486312399355878,
+      "recall": 0.7784342688330872,
+      "f1": 0.8120184899845917,
+      "mcc": 0.6417858076476758,
+      "roc_auc": 0.8818207008502625,
+      "specificity": 0.8611521418020679,
+      "tp": 527,
+      "tn": 583,
+      "fp": 94,
+      "fn": 150
+    }
+  },
+  "comparison": {
+    "best_single_mcc": 0.6439532342632411,
+    "ensemble_mcc": 0.6417858076476758,
+    "ensemble_wins": false
+  }
+}

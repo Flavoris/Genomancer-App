@@ -1,0 +1,71 @@
+{
+  "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config.yaml",
+  "best_epoch": 58,
+  "train_metrics": {
+    "accuracy": 0.6746765249537893,
+    "precision": 0.6820809248554913,
+    "recall": 0.6543438077634011,
+    "f1": 0.6679245283018868,
+    "mcc": 0.3496422673097137,
+    "roc_auc": 0.7209911815252784,
+    "specificity": 0.6950092421441775,
+    "loss": 0.06417094596322495,
+    "optimizer_steps": 42
+  },
+  "val_metrics": {
+    "accuracy": 0.8205317577548006,
+    "precision": 0.8690476190476191,
+    "recall": 0.7548005908419497,
+    "f1": 0.8079051383399208,
+    "mcc": 0.6466759081643402,
+    "roc_auc": 0.8838323562331862,
+    "specificity": 0.8862629246676514,
+    "loss": 0.05722869443191295,
+    "optimizer_steps": 0
+  },
+  "class_balance": {
+    "total": 5410,
+    "positive": 2705,
+    "negative": 2705,
+    "positive_ratio": 0.5
+  },
+  "device": "mps",
+  "seed": 1337,
+  "model_params": {
+    "total": 3559929,
+    "trainable": 3559929,
+    "embedding_dim": 192,
+    "layers": 0,
+    "heads": 8,
+    "kmer": 6
+  },
+  "architecture_v4": {
+    "order": "Embedding \u2192 CNN/TCN \u2192 Transformer \u2192 Pool \u2192 Fusion \u2192 Classifier",
+    "use_tcn": true,
+    "tcn_hidden": 192,
+    "tcn_levels": 4,
+    "multiscale_kernels": [
+      3,
+      5,
+      7,
+      9,
+      15
+    ],
+    "post_cnn_transformer_layers": 1,
+    "engineered_mlp_hidden": 256,
+    "engineered_mlp_output": 128,
+    "fusion_hidden": 256,
+    "use_attention_fusion": true
+  },
+  "training_enhancements": {
+    "layer_wise_lr_decay": 0.8,
+    "label_smoothing": 0.05,
+    "mixup_alpha": 0.2,
+    "use_swa": true,
+    "swa_start_epoch": 60,
+    "swa_lr": 5e-05,
+    "drop_path_rate": 0.1,
+    "ablation_max_steps_stage1": null,
+    "ablation_disable_wandb": false
+  }
+}

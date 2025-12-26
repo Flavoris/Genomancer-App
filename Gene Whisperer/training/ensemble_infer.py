@@ -18,9 +18,26 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
 
 def load_checkpoint(model: GeneWhispererStage1, path: Path, device: torch.device) -> None:
-    checkpoint = torch.load(path, map_location=device)
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
     state_dict = checkpoint.get("model_state", checkpoint)
-    model.load_state_dict(state_dict, strict=False)
+
+    # Use strict=True to ensure all weights load correctly
+    # Log any issues for debugging
+    try:
+        incompatible = model.load_state_dict(state_dict, strict=True)
+        if incompatible.missing_keys:
+            LOGGER.warning("Missing keys: %s", incompatible.missing_keys)
+        if incompatible.unexpected_keys:
+            LOGGER.warning("Unexpected keys: %s", incompatible.unexpected_keys)
+    except RuntimeError as e:
+        LOGGER.error("Failed to load checkpoint with strict=True: %s", e)
+        LOGGER.info("Attempting load with strict=False...")
+        incompatible = model.load_state_dict(state_dict, strict=False)
+        if incompatible.missing_keys:
+            LOGGER.warning("Missing keys (not loaded): %s", incompatible.missing_keys[:10])
+        if incompatible.unexpected_keys:
+            LOGGER.warning("Unexpected keys (ignored): %s", incompatible.unexpected_keys[:10])
+
     model.to(device)
     model.eval()
     LOGGER.info("Loaded model from %s", path)

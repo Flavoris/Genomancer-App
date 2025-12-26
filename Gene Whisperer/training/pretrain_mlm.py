@@ -58,6 +58,7 @@ from numerics import (
     cap_model_param_norm_,
     detect_nan_in_model,
 )
+from amp_utils import get_amp_context, log_amp_status
 from genome_io import read_fasta_records, sanitize_unknown_bases
 
 LOGGER = logging.getLogger("gene_whisperer.pretrain_mlm")
@@ -2599,7 +2600,7 @@ def run_overfit_debug(
     
     # Use AdamW with no weight decay for pure memorization
     # Also try higher LR for first phase, then reduce
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0, betas=(0.9, 0.999))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0, betas=(0.9, 0.999), foreach=True)
     
     # Add learning rate scheduler: warmup then constant
     def lr_schedule(step):
@@ -2934,6 +2935,10 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         "layer_lr_decay": float(cfg_run.get("mlm_layer_lr_decay", 0.9)),
         # Seed
         "seed": int(cfg_run.get("seed", 1337) or 1337),
+        # AMP (Mixed Precision)
+        "amp_enabled": bool(cfg_run.get("amp_enabled", True)),
+        "amp_dtype": str(cfg_run.get("amp_dtype", "bfloat16")),
+        "amp_force_fp32_loss": bool(cfg_run.get("amp_force_fp32_loss", True)),
         # Length curriculum
         "length_curriculum": length_curriculum_config.to_dict(),
     }
@@ -3480,9 +3485,11 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     weight_decay = float(cfg_run.get("mlm_weight_decay", 0.01))
     lr_decay = float(cfg_run.get("mlm_layer_lr_decay", 0.9))
     use_layer_lr_decay = bool(cfg_run.get("mlm_use_layer_lr_decay", True))
+    optimizer_foreach = bool(cfg_run.get("optimizer_foreach", True))
 
     LOGGER.info("=" * 60)
     LOGGER.info("OPTIMIZER CONFIGURATION")
+    LOGGER.info("Optimizer: AdamW foreach=%s", optimizer_foreach)
     if use_layer_lr_decay:
         param_groups = get_layer_wise_lr_groups(model, lr, lr_decay, weight_decay)
         LOGGER.info("Layer-wise LR decay: ENABLED (factor: %.2f)", lr_decay)
@@ -3491,6 +3498,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             param_groups,
             betas=(0.9, 0.98),
             eps=1e-6,
+            foreach=optimizer_foreach,
         )
     else:
         LOGGER.info("Layer-wise LR decay: DISABLED (all layers use same LR)")
@@ -3501,6 +3509,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             weight_decay=weight_decay,
             betas=(0.9, 0.98),
             eps=1e-6,
+            foreach=optimizer_foreach,
         )
     LOGGER.info("=" * 60)
 
@@ -3542,25 +3551,18 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("  LR log interval: every %d optimizer steps", lr_log_interval)
     LOGGER.info("=" * 60)
 
-    autocast_device: str | None = None
-    autocast_dtype: torch.dtype | None = None
+    # AMP (Mixed Precision) setup using config
+    amp_ctx = get_amp_context(device, cfg_run, logger=LOGGER)
+    log_amp_status(amp_ctx, logger=LOGGER)
+
+    autocast_device: str | None = amp_ctx.device_type if amp_ctx.enabled else None
+    autocast_dtype: torch.dtype | None = amp_ctx.dtype if amp_ctx.enabled else None
     scaler = None
 
-    if device.type == "cuda":
-        autocast_device = "cuda"
-        autocast_dtype = torch.float16
+    # GradScaler only for CUDA with float16
+    if amp_ctx.enabled and device.type == "cuda" and amp_ctx.dtype == torch.float16:
         scaler = torch.cuda.amp.GradScaler()
-    elif device.type == "mps":
-        try:
-            with torch.autocast("mps", dtype=torch.bfloat16):
-                x = torch.zeros(1, device=device, dtype=torch.float32)
-                _ = x + x
-            autocast_device = "mps"
-            autocast_dtype = torch.bfloat16
-        except Exception:
-            LOGGER.warning(
-                "MPS autocast bf16 not available; disabling autocast to avoid fp16 without GradScaler."
-            )
+        LOGGER.info("Using GradScaler for CUDA fp16")
 
     if debug_batch:
         LOGGER.info("Running DEBUG BATCH check (one train batch + one val batch)")
@@ -4111,6 +4113,10 @@ def main() -> None:
         "layer_lr_decay": float(cfg.get("mlm_layer_lr_decay", 0.9)),
         # Seed
         "seed": int(cfg.get("seed", 1337)),
+        # AMP (Mixed Precision)
+        "amp_enabled": bool(cfg.get("amp_enabled", True)),
+        "amp_dtype": str(cfg.get("amp_dtype", "bfloat16")),
+        "amp_force_fp32_loss": bool(cfg.get("amp_force_fp32_loss", True)),
         # Length curriculum
         "length_curriculum": length_curriculum_config.to_dict(),
     }
@@ -4427,28 +4433,32 @@ def main() -> None:
     weight_decay = float(cfg.get("mlm_weight_decay", 0.01))
     lr_decay = float(cfg.get("mlm_layer_lr_decay", 0.9))  # Layer-wise LR decay
     use_layer_lr_decay = bool(cfg.get("mlm_use_layer_lr_decay", True))
-    
+    optimizer_foreach = bool(cfg.get("optimizer_foreach", True))
+
     # Build optimizer with or without layer-wise LR decay
     LOGGER.info("=" * 60)
     LOGGER.info("OPTIMIZER CONFIGURATION")
+    LOGGER.info("Optimizer: AdamW foreach=%s", optimizer_foreach)
     if use_layer_lr_decay:
         param_groups = get_layer_wise_lr_groups(model, lr, lr_decay, weight_decay)
         LOGGER.info("Layer-wise LR decay: ENABLED (factor: %.2f)", lr_decay)
         LOGGER.info("  Lower layers get smaller LRs to preserve pretrained features")
         optimizer = AdamW(
-            param_groups, 
+            param_groups,
             betas=(0.9, 0.98),  # BERT-style betas
             eps=1e-6,  # Smaller eps for stability
+            foreach=optimizer_foreach,
         )
     else:
         LOGGER.info("Layer-wise LR decay: DISABLED (all layers use same LR)")
         LOGGER.info("  All parameters use base LR: %.2e", lr)
         optimizer = AdamW(
-            model.parameters(), 
-            lr=lr, 
+            model.parameters(),
+            lr=lr,
             weight_decay=weight_decay,
             betas=(0.9, 0.98),  # BERT-style betas
             eps=1e-6,
+            foreach=optimizer_foreach,
         )
     LOGGER.info("=" * 60)
     
@@ -4494,27 +4504,19 @@ def main() -> None:
     LOGGER.info("  LR log interval: every %d optimizer steps", lr_log_interval)
     LOGGER.info("=" * 60)
 
-    autocast_device: str | None = None
-    autocast_dtype: torch.dtype | None = None
+    # AMP (Mixed Precision) setup using config
+    amp_ctx = get_amp_context(device, cfg, logger=LOGGER)
+    log_amp_status(amp_ctx, logger=LOGGER)
+
+    autocast_device: str | None = amp_ctx.device_type if amp_ctx.enabled else None
+    autocast_dtype: torch.dtype | None = amp_ctx.dtype if amp_ctx.enabled else None
     scaler = None
 
-    if device.type == "cuda":
-        autocast_device = "cuda"
-        autocast_dtype = torch.float16
+    # GradScaler only for CUDA with float16
+    if amp_ctx.enabled and device.type == "cuda" and amp_ctx.dtype == torch.float16:
         scaler = torch.cuda.amp.GradScaler()
-    elif device.type == "mps":
-        # Prefer bf16 autocast on MPS (avoids fp16 without GradScaler).
-        try:
-            with torch.autocast("mps", dtype=torch.bfloat16):
-                x = torch.zeros(1, device=device, dtype=torch.float32)
-                _ = x + x
-            autocast_device = "mps"
-            autocast_dtype = torch.bfloat16
-        except Exception:
-            LOGGER.warning(
-                "MPS autocast bf16 not available; disabling autocast to avoid fp16 without GradScaler."
-            )
-    
+        LOGGER.info("Using GradScaler for CUDA fp16")
+
     # Training state
     best_val_loss = float('inf')
     best_val_acc = 0.0

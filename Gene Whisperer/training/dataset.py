@@ -379,13 +379,20 @@ def random_base_insertion(sequence: str, prob: float = 0.02) -> str:
 class PromoterDatasetStage1(Dataset):
     """
     Stage 1 dataset with enhanced augmentation for 90%+ accuracy.
-    
+
     Augmentation strategies:
     1. Reverse complement (50% prob) - DNA is double-stranded
     2. Random base substitution (5% per base) - Sequencing error simulation
     3. Random indels (2% per base) - Optional, more aggressive augmentation
-    
+
     Features: TNC(64) + PseEIIP(64) = 128
+
+    Performance options:
+    - cache_engineered_features: Precompute TNC+PseEIIP once in init
+    - cache_tokens: Pre-tokenize sequences once in init
+
+    Note: Caching is only effective when augmentation is disabled (e.g., for validation).
+    With augmentation enabled, sequences vary each epoch so caching provides limited benefit.
     """
     ENGINEERED_DIM = 64 + 64
 
@@ -401,6 +408,8 @@ class PromoterDatasetStage1(Dataset):
         reverse_complement_prob: float = 0.5,
         base_substitution_prob: float = 0.0,  # Set > 0 for training augmentation
         base_indel_prob: float = 0.0,  # Usually 0 for promoter prediction
+        cache_engineered_features: bool = False,
+        cache_tokens: bool = False,
     ):
         if "sequence" not in df or "is_promoter" not in df:
             raise ValueError("Stage 1 data requires 'sequence' and 'is_promoter' columns")
@@ -416,6 +425,53 @@ class PromoterDatasetStage1(Dataset):
         self.base_substitution_prob = max(0.0, min(0.2, base_substitution_prob))
         self.base_indel_prob = max(0.0, min(0.1, base_indel_prob))
         self._zero_engineered = torch.zeros(self.engineered_dim, dtype=torch.float32)
+
+        # Caching options for performance optimization
+        self.cache_engineered_features = cache_engineered_features
+        self.cache_tokens = cache_tokens
+        self._cached_engineered: Optional[List[torch.FloatTensor]] = None
+        self._cached_tokens: Optional[List[torch.LongTensor]] = None
+
+        # Determine if caching is effective (no augmentation)
+        has_augmentation = (
+            self.reverse_complement_prob > 0
+            or self.base_substitution_prob > 0
+            or self.base_indel_prob > 0
+        )
+
+        if cache_engineered_features:
+            if has_augmentation:
+                LOGGER.warning(
+                    "cache_engineered_features=True but augmentation is enabled; "
+                    "caching is less effective with augmentation"
+                )
+            self._precompute_engineered_features()
+
+        if cache_tokens:
+            if has_augmentation:
+                LOGGER.warning(
+                    "cache_tokens=True but augmentation is enabled; "
+                    "caching is less effective with augmentation"
+                )
+            self._precompute_tokens()
+
+    def _precompute_engineered_features(self) -> None:
+        """Precompute engineered features (TNC + PseEIIP) for all sequences."""
+        LOGGER.info("Precomputing engineered features for %d sequences...", len(self.sequences))
+        self._cached_engineered = []
+        for seq in self.sequences:
+            engineered = self._build_engineered_features(seq)
+            self._cached_engineered.append(engineered)
+        LOGGER.info("Engineered features cached.")
+
+    def _precompute_tokens(self) -> None:
+        """Pre-tokenize all sequences."""
+        LOGGER.info("Pre-tokenizing %d sequences...", len(self.sequences))
+        self._cached_tokens = []
+        for seq in self.sequences:
+            tokens = self.vocab.tokenize(seq, self.max_bp_len)
+            self._cached_tokens.append(tokens)
+        LOGGER.info("Tokens cached.")
 
     def __len__(self) -> int:
         return len(self.sequences)
@@ -462,14 +518,44 @@ class PromoterDatasetStage1(Dataset):
 
     def __getitem__(self, idx: int):
         sequence = self.sequences[idx]
-        sequence = self._augment_sequence(sequence)
-        tokens = self.vocab.tokenize(sequence, self.max_bp_len)
-        engineered = self._build_engineered_features(sequence)
+
+        # Check if we can use cached values (only if no augmentation applied)
+        has_augmentation = (
+            self.reverse_complement_prob > 0
+            or self.base_substitution_prob > 0
+            or self.base_indel_prob > 0
+        )
+
+        if has_augmentation:
+            # Apply augmentation - can't use cache
+            sequence = self._augment_sequence(sequence)
+            tokens = self.vocab.tokenize(sequence, self.max_bp_len)
+            engineered = self._build_engineered_features(sequence)
+        else:
+            # No augmentation - use cache if available
+            if self._cached_tokens is not None:
+                tokens = self._cached_tokens[idx]
+            else:
+                tokens = self.vocab.tokenize(sequence, self.max_bp_len)
+
+            if self._cached_engineered is not None:
+                engineered = self._cached_engineered[idx]
+            else:
+                engineered = self._build_engineered_features(sequence)
+
         label = torch.tensor(float(self.labels[idx]), dtype=torch.float32)
         return tokens, engineered, label
 
 
 class PromoterDatasetStage2(Dataset):
+    """
+    Stage 2 dataset for strong vs weak promoter classification.
+
+    Performance options:
+    - cache_engineered_features: Precompute TNC+PseEIIP once in init
+    - cache_tokens: Pre-tokenize sequences once in init
+    """
+
     def __init__(
         self,
         df: pd.DataFrame,
@@ -478,6 +564,8 @@ class PromoterDatasetStage2(Dataset):
         negative_strength: float,
         vocab: KmerVocabulary,
         engineered_dim: int = PromoterDatasetStage1.ENGINEERED_DIM,
+        cache_engineered_features: bool = False,
+        cache_tokens: bool = False,
     ):
         if "sequence" not in df or "strength" not in df:
             raise ValueError("Stage 2 data requires 'sequence' and 'strength' columns")
@@ -486,6 +574,37 @@ class PromoterDatasetStage2(Dataset):
         self.max_bp_len = max_bp_len
         self.vocab = vocab
         self.engineered_dim = int(engineered_dim)
+
+        # Caching options
+        self.cache_engineered_features = cache_engineered_features
+        self.cache_tokens = cache_tokens
+        self._cached_engineered: Optional[List[torch.FloatTensor]] = None
+        self._cached_tokens: Optional[List[torch.LongTensor]] = None
+
+        if cache_engineered_features:
+            self._precompute_engineered_features()
+        if cache_tokens:
+            self._precompute_tokens()
+
+    def _precompute_engineered_features(self) -> None:
+        """Precompute engineered features (TNC + PseEIIP) for all sequences."""
+        LOGGER.info("Precomputing Stage2 engineered features for %d sequences...", len(self.sequences))
+        self._cached_engineered = []
+        for seq in self.sequences:
+            tnc = compute_tnc(seq)
+            pseeiip = compute_pseeiip(seq)
+            engineered = torch.cat([tnc, pseeiip], dim=0)
+            self._cached_engineered.append(engineered)
+        LOGGER.info("Stage2 engineered features cached.")
+
+    def _precompute_tokens(self) -> None:
+        """Pre-tokenize all sequences."""
+        LOGGER.info("Pre-tokenizing Stage2 %d sequences...", len(self.sequences))
+        self._cached_tokens = []
+        for seq in self.sequences:
+            tokens = self.vocab.tokenize(seq, self.max_bp_len)
+            self._cached_tokens.append(tokens)
+        LOGGER.info("Stage2 tokens cached.")
 
     @staticmethod
     def _to_label(value, positive_strength: float, negative_strength: float) -> float:
@@ -510,15 +629,26 @@ class PromoterDatasetStage2(Dataset):
 
     def __getitem__(self, idx: int):
         sequence = self.sequences[idx]
-        tokens = self.vocab.tokenize(sequence, self.max_bp_len)
-        tnc = compute_tnc(sequence)
-        pseeiip = compute_pseeiip(sequence)
-        label = torch.tensor(float(self.labels[idx]), dtype=torch.float32)
-        engineered = torch.cat([tnc, pseeiip], dim=0)
+
+        # Use cached tokens if available
+        if self._cached_tokens is not None:
+            tokens = self._cached_tokens[idx]
+        else:
+            tokens = self.vocab.tokenize(sequence, self.max_bp_len)
+
+        # Use cached engineered features if available
+        if self._cached_engineered is not None:
+            engineered = self._cached_engineered[idx]
+        else:
+            tnc = compute_tnc(sequence)
+            pseeiip = compute_pseeiip(sequence)
+            engineered = torch.cat([tnc, pseeiip], dim=0)
+
         assert engineered.shape[-1] == self.engineered_dim, (
             f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
             f"expected {self.engineered_dim}"
         )
+        label = torch.tensor(float(self.labels[idx]), dtype=torch.float32)
         return tokens, engineered, label
 
 
@@ -527,9 +657,36 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     batch_size = int(_cfg_value(cfg, "batch_size", 64))
     delimiter = _cfg_value(cfg, "delimiter", "\t")
     train_val_split = float(_cfg_value(cfg, "train_val_split", 0.9))
+    # DataLoader performance options
+    # Note: On Mac, num_workers > 0 can cause issues; default to 0
     num_workers = int(_cfg_value(cfg, "num_workers", 0))
+    # persistent_workers keeps worker processes alive between batches (only if num_workers > 0)
+    persistent_workers = bool(_cfg_value(cfg, "persistent_workers", False)) and num_workers > 0
+    # prefetch_factor: number of batches to prefetch per worker (only if num_workers > 0)
+    prefetch_factor_raw = _cfg_value(cfg, "prefetch_factor", None)
+    prefetch_factor = int(prefetch_factor_raw) if prefetch_factor_raw is not None and num_workers > 0 else None
     # pin_memory only works on CUDA, not MPS
     pin_memory = bool(_cfg_value(cfg, "pin_memory", False)) and torch.cuda.is_available()
+
+    if num_workers > 0:
+        LOGGER.info(
+            "DataLoader config: num_workers=%d, persistent_workers=%s, prefetch_factor=%s, pin_memory=%s",
+            num_workers,
+            persistent_workers,
+            prefetch_factor,
+            pin_memory,
+        )
+
+    # Caching options for performance optimization
+    cache_engineered_features = bool(_cfg_value(cfg, "cache_engineered_features", False))
+    cache_tokens = bool(_cfg_value(cfg, "cache_tokens", False))
+    if cache_engineered_features or cache_tokens:
+        LOGGER.info(
+            "Caching config: cache_engineered_features=%s, cache_tokens=%s",
+            cache_engineered_features,
+            cache_tokens,
+        )
+
     stage1_use_engineered = bool(_cfg_value(cfg, "stage1_use_engineered_features", True))
     stage1_feature_enable_tnc = bool(_cfg_value(cfg, "stage1_feature_enable_tnc", True))
     stage1_feature_enable_pseeiip = bool(_cfg_value(cfg, "stage1_feature_enable_pseeiip", True))
@@ -584,6 +741,9 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         feature_enable_pseeiip=stage1_feature_enable_pseeiip,
         engineered_dim=engineered_dim,
         reverse_complement_prob=stage1_rc_prob,
+        # Caching is less effective for training with augmentation
+        cache_engineered_features=False,
+        cache_tokens=False,
     )
     stage1_val_ds = PromoterDatasetStage1(
         stage1_val_df,
@@ -593,23 +753,34 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         feature_enable_tnc=stage1_feature_enable_tnc,
         feature_enable_pseeiip=stage1_feature_enable_pseeiip,
         engineered_dim=engineered_dim,
-        reverse_complement_prob=0.0,
+        reverse_complement_prob=0.0,  # No augmentation for validation
+        # Caching is effective for validation (no augmentation)
+        cache_engineered_features=cache_engineered_features,
+        cache_tokens=cache_tokens,
     )
     stage1_sampler = _maybe_sampler(stage1_train_ds.labels)
+    # Build DataLoader kwargs with optional performance parameters
+    loader_kwargs: Dict[str, Any] = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if persistent_workers:
+        loader_kwargs["persistent_workers"] = True
+    if prefetch_factor is not None:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+
     stage1_train_loader = DataLoader(
         stage1_train_ds,
         batch_size=batch_size,
         shuffle=stage1_sampler is None,
         sampler=stage1_sampler,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
+        **loader_kwargs,
     )
     stage1_val_loader = DataLoader(
         stage1_val_ds,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
+        **loader_kwargs,
     )
 
     stage2_train_df = _load_dataframe(_cfg_value(cfg, "stage2_train"), delimiter)
@@ -655,6 +826,9 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         neg_strength,
         stage1_vocab,
         engineered_dim=engineered_dim,
+        # Stage 2 has no augmentation, so caching is effective for both train and val
+        cache_engineered_features=cache_engineered_features,
+        cache_tokens=cache_tokens,
     )
     stage2_val_ds = PromoterDatasetStage2(
         stage2_val_df,
@@ -663,6 +837,8 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         neg_strength,
         stage1_vocab,
         engineered_dim=engineered_dim,
+        cache_engineered_features=cache_engineered_features,
+        cache_tokens=cache_tokens,
     )
     stage2_test_ds = (
         PromoterDatasetStage2(
@@ -672,6 +848,8 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
             neg_strength,
             stage1_vocab,
             engineered_dim=engineered_dim,
+            cache_engineered_features=cache_engineered_features,
+            cache_tokens=cache_tokens,
         )
         if stage2_test_df is not None
         else None
@@ -683,23 +861,20 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         batch_size=batch_size,
         shuffle=stage2_sampler is None,
         sampler=stage2_sampler,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
+        **loader_kwargs,
     )
     stage2_val_loader = DataLoader(
         stage2_val_ds,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
+        **loader_kwargs,
     )
     stage2_test_loader = (
         DataLoader(
             stage2_test_ds,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
+            **loader_kwargs,
         )
         if stage2_test_ds is not None
         else None

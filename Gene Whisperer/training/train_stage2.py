@@ -26,8 +26,9 @@ import torch
 import torch.nn as nn
 from torch.optim.swa_utils import AveragedModel, SWALR
 
+from amp_utils import get_amp_context, log_amp_status
 from dataset import build_dataloaders
-from model import GeneWhispererStage1
+from model import GeneWhispererStage1, GeneWhispererStage2
 
 import train_stage1 as stage1
 
@@ -147,6 +148,22 @@ def main() -> None:
         default=None,
         help="Random seed for reproducibility. Overrides config value.",
     )
+    parser.add_argument(
+        "--kmer",
+        type=int,
+        default=None,
+        help="K-mer size (e.g. 3, 4, 6). Overrides stage2_kmer or kmer config value.",
+    )
+    parser.add_argument(
+        "--overfit_debug",
+        action="store_true",
+        help="Train on 32 samples for 200 steps to verify model can learn",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Enable torch.profiler for ~50 steps and export chrome trace",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -167,6 +184,12 @@ def main() -> None:
         overrides["seed"] = args.seed
     if args.stage1_ckpt:
         overrides["stage1_ckpt"] = args.stage1_ckpt
+    if args.kmer is not None:
+        overrides["stage2_kmer"] = args.kmer
+    if args.overfit_debug:
+        overrides["overfit_debug"] = True
+    if args.profile:
+        overrides["profile"] = True
 
     _ = run_stage2_training(cfg, overrides=overrides)
 
@@ -230,6 +253,16 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     stage2_max_train_samples = ablation_cfg.get("stage2_max_train_samples") if ablation_enabled else None
     stage2_max_val_samples = ablation_cfg.get("stage2_max_val_samples") if ablation_enabled else None
 
+    # Resolve kmer for Stage 2: use stage2_kmer if present, else fall back to kmer
+    stage2_kmer = cfg_run.get("stage2_kmer")
+    if stage2_kmer is not None:
+        stage2_kmer = int(stage2_kmer)
+    else:
+        stage2_kmer = int(cfg_run.get("kmer", 3))
+    # Update cfg_run so build_dataloaders uses the correct kmer for Stage 2
+    cfg_run["kmer"] = stage2_kmer
+    LOGGER.info("Stage 2 using k-mer size: %d", stage2_kmer)
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = (script_dir / "../runs" / f"stage2_{timestamp}").resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -240,6 +273,13 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "timestamp": timestamp,
         "config_path": config_id,
         "stage1_ckpt": str(stage1_ckpt_path) if stage1_ckpt_path else None,
+        # System info for reproducibility
+        "system_info": {
+            "python_version": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
+            "torch_version": torch.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "mps_available": hasattr(torch.backends, "mps") and torch.backends.mps.is_available(),
+        },
         # Ablations / debugging
         "ablation_enabled": ablation_enabled,
         "ablation_max_steps_stage2": ablation_max_steps,
@@ -260,7 +300,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         # Data
         "batch_size": int(cfg_run.get("batch_size", 32)),
         "max_bp_len": int(cfg_run.get("max_bp_len", 81)),
-        "kmer": int(cfg_run.get("kmer", 3)),
+        "kmer": stage2_kmer,  # Resolved stage2_kmer (from --kmer, stage2_kmer, or kmer fallback)
         # Engineered features
         "engineered_dim": int(cfg_run.get("engineered_dim", 128)),
         # Architecture toggles
@@ -268,8 +308,19 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "use_tcn": bool(cfg_run.get("use_tcn", True)),
         "post_cnn_transformer_layers": int(cfg_run.get("post_cnn_transformer_layers", 3)),
         "stage2_mlm_transfer_mode": str(cfg_run.get("stage2_mlm_transfer_mode", "embed_only")),
+        # Stage 2 head configuration
+        "stage2_head_type": str(cfg_run.get("stage2_head_type", "transformer")),
+        "stage2_transformer_layers": int(cfg_run.get("stage2_transformer_layers", 2)),
+        "stage2_transformer_heads": int(cfg_run.get("stage2_transformer_heads", 4)),
+        "stage2_bilstm_hidden": int(cfg_run.get("stage2_bilstm_hidden", 128)),
+        "stage2_bilstm_layers": int(cfg_run.get("stage2_bilstm_layers", 1)),
+        "stage2_combine_mode": str(cfg_run.get("stage2_combine_mode", "concat")),
         # Seed
         "seed": int(cfg_run.get("seed", 1337) or 1337),
+        # AMP (Mixed Precision)
+        "amp_enabled": bool(cfg_run.get("amp_enabled", True)),
+        "amp_dtype": str(cfg_run.get("amp_dtype", "bfloat16")),
+        "amp_force_fp32_loss": bool(cfg_run.get("amp_force_fp32_loss", True)),
     }
 
     resolved_config_path = run_dir / "resolved_config.json"
@@ -289,6 +340,16 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     else:
         device = torch.device("cpu")
     LOGGER.info("Using device: %s", device)
+
+    # AMP (Mixed Precision) setup
+    amp_ctx = get_amp_context(device, cfg_run, logger=LOGGER)
+    log_amp_status(amp_ctx, logger=LOGGER)
+
+    # GradScaler for CUDA fp16 (not needed for MPS bfloat16)
+    scaler = None
+    if amp_ctx.enabled and device.type == "cuda" and amp_ctx.dtype == torch.float16:
+        scaler = torch.cuda.amp.GradScaler()
+        LOGGER.info("Using GradScaler for CUDA fp16")
 
     dataloaders = build_dataloaders(cfg_run)
     train_loader_raw = dataloaders["stage2"]["train"]
@@ -330,7 +391,21 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     stage2_use_engineered = bool(cfg_run.get("stage2_use_engineered_features", True))
     engineered_dim = int(cfg_run.get("engineered_dim", 128))
 
-    model = GeneWhispererStage1(
+    # Stage 2 head configuration
+    stage2_head_type = str(cfg_run.get("stage2_head_type", "transformer"))
+    if stage2_head_type not in {"transformer", "bilstm", "both"}:
+        raise ValueError(f"Invalid stage2_head_type: {stage2_head_type}. Must be 'transformer', 'bilstm', or 'both'")
+    stage2_transformer_layers = int(cfg_run.get("stage2_transformer_layers", 2))
+    stage2_transformer_heads = int(cfg_run.get("stage2_transformer_heads", 4))
+    stage2_transformer_ff_dim = cfg_run.get("stage2_transformer_ff_dim")  # None uses default (2*dim)
+    if stage2_transformer_ff_dim is not None:
+        stage2_transformer_ff_dim = int(stage2_transformer_ff_dim)
+    stage2_bilstm_hidden = int(cfg_run.get("stage2_bilstm_hidden", 128))
+    stage2_bilstm_layers = int(cfg_run.get("stage2_bilstm_layers", 1))
+    stage2_combine_mode = str(cfg_run.get("stage2_combine_mode", "concat"))
+    stage2_combine_order = str(cfg_run.get("stage2_combine_order", "transformer_first"))
+
+    model = GeneWhispererStage2(
         vocab_size=vocab_size,
         kmer=kmer,
         embedding_dim=embedding_dim,
@@ -350,6 +425,16 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         multiscale_kernels=multiscale_kernels,
         lstm_hidden=lstm_hidden,
         post_cnn_transformer_layers=post_cnn_transformer_layers,
+        # Stage 2 head configuration
+        stage2_head_type=stage2_head_type,
+        stage2_transformer_layers=stage2_transformer_layers,
+        stage2_transformer_heads=stage2_transformer_heads,
+        stage2_transformer_ff_dim=stage2_transformer_ff_dim,
+        stage2_bilstm_hidden=stage2_bilstm_hidden,
+        stage2_bilstm_layers=stage2_bilstm_layers,
+        stage2_combine_mode=stage2_combine_mode,
+        stage2_combine_order=stage2_combine_order,
+        # Engineered features MLP
         engineered_mlp_hidden=engineered_mlp_hidden,
         engineered_mlp_output=engineered_mlp_output,
         fusion_hidden=fusion_hidden,
@@ -358,9 +443,9 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("=" * 60)
     LOGGER.info("MODEL ARCHITECTURE (Stage 2)")
     LOGGER.info("=" * 60)
-    LOGGER.info("Backbone: GeneWhispererStage1 (shared)")
+    LOGGER.info("Model: GeneWhispererStage2 (dedicated strength head)")
     LOGGER.info("Task: strong vs weak promoters (binary)")
-    LOGGER.info("Architecture: Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier")
+    LOGGER.info("Architecture: Embedding → CNN/TCN → Transformer → StrengthHead → Fusion → Classifier")
     if use_tcn:
         LOGGER.info(
             "CNN/TCN: Multi-scale kernels %s → TCN(%d levels, %d hidden, k=%d)",
@@ -370,9 +455,29 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             tcn_kernel,
         )
     LOGGER.info("Post-CNN Transformer: %d layers, %d heads", post_cnn_transformer_layers, transformer_heads)
+    LOGGER.info("Strength Head Type: %s", stage2_head_type)
+    if stage2_head_type in {"transformer", "both"}:
+        LOGGER.info(
+            "  Transformer Head: %d layers, %d heads, ff_dim=%s",
+            stage2_transformer_layers,
+            stage2_transformer_heads,
+            stage2_transformer_ff_dim or "auto",
+        )
+    if stage2_head_type in {"bilstm", "both"}:
+        LOGGER.info(
+            "  BiLSTM Head: hidden=%d, layers=%d",
+            stage2_bilstm_hidden,
+            stage2_bilstm_layers,
+        )
+    if stage2_head_type == "both":
+        LOGGER.info(
+            "  Combine Mode: %s (%s)",
+            stage2_combine_mode,
+            stage2_combine_order,
+        )
     if stage2_use_engineered:
         LOGGER.info(
-            "Engineered Features (Stage2): %d dims (TNC+PseEIIP) via MLP %d→%d",
+            "Engineered Features: %d dims (TNC+PseEIIP) via MLP %d→%d",
             engineered_dim,
             engineered_mlp_hidden,
             engineered_mlp_output,
@@ -385,7 +490,8 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         raise ValueError(f"Invalid stage2_mlm_transfer_mode: {transfer_mode}")
     mlm_loaded = False
     mlm_checkpoint = cfg_run.get("mlm_encoder_checkpoint") or cfg_run.get("mlm_encoder_path")
-    should_load_mlm = load_mlm_weights and transfer_mode != "none"
+    # Stage 1 checkpoint takes priority over MLM weights - skip MLM loading if stage1_ckpt is provided
+    should_load_mlm = load_mlm_weights and transfer_mode != "none" and not stage1_ckpt_path
     with torch.no_grad():
         emb_before = model.embedding.weight.detach().float().clone()
         emb_before_norm = emb_before.norm().item()
@@ -418,6 +524,8 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             LOGGER.warning("MLM checkpoint not found; training without MLM init (path=%s)", checkpoint_path)
     elif load_mlm_weights and transfer_mode == "none":
         LOGGER.info("stage2_mlm_transfer_mode=none; skipping MLM weight load")
+    elif load_mlm_weights and stage1_ckpt_path:
+        LOGGER.info("Skipping MLM weight load (stage1_ckpt takes priority)")
     with torch.no_grad():
         emb_after = model.embedding.weight.detach().float()
         emb_after_norm = emb_after.norm().item()
@@ -435,7 +543,8 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     stage1_ckpt_loaded = False
     if stage1_ckpt_path and stage1_ckpt_path.exists():
         LOGGER.info("Initializing from Stage 1 checkpoint: %s", stage1_ckpt_path)
-        loaded = _load_checkpoint_compatible(model, stage1_ckpt_path, device=device)
+        # Use GeneWhispererStage2's dedicated method for loading Stage 1 weights
+        loaded = model.load_stage1_weights(stage1_ckpt_path, device=device)
         stage1_ckpt_loaded = loaded > 0
         if not stage1_ckpt_loaded:
             suggestion = (script_dir / "../artifacts/checkpoints" / f"stage1_k{kmer}.pt").resolve()
@@ -448,9 +557,19 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     LOGGER.info("Model: %.2fM total params, %.2fM trainable", total_params / 1e6, trainable_params / 1e6)
 
+    # Update resolved_config with device and model info, then re-save
+    resolved_config["system_info"]["device"] = str(device)
+    resolved_config["system_info"]["stage2_total_params"] = total_params
+    resolved_config["system_info"]["stage2_trainable_params"] = trainable_params
+    with resolved_config_path.open("w", encoding="utf-8") as handle:
+        json.dump(resolved_config, handle, indent=2)
+
     lr = float(cfg_run.get("lr", 2e-4))
     weight_decay = float(cfg_run.get("weight_decay", 0.02))
     layer_lr_decay = float(cfg_run.get("layer_lr_decay", 0.8))
+    optimizer_foreach = bool(cfg_run.get("optimizer_foreach", True))
+
+    LOGGER.info("Optimizer: AdamW foreach=%s", optimizer_foreach)
 
     use_llrd = bool(mlm_loaded or stage1_ckpt_loaded)
     if use_llrd:
@@ -461,7 +580,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             lr_decay=layer_lr_decay,
             weight_decay=weight_decay,
         )
-        optimizer = torch.optim.AdamW(param_groups, betas=(0.9, 0.999))
+        optimizer = torch.optim.AdamW(param_groups, betas=(0.9, 0.999), foreach=optimizer_foreach)
         LOGGER.info("Created %d parameter groups with LLRD", len(param_groups))
     else:
         optimizer = torch.optim.AdamW(
@@ -469,6 +588,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             lr=lr,
             weight_decay=weight_decay,
             betas=(0.9, 0.999),
+            foreach=optimizer_foreach,
         )
 
     warmup_ratio = float(cfg_run.get("warmup_ratio", 0.15))
@@ -510,6 +630,79 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     else:
         criterion = stage1.LabelSmoothingBCE(smoothing=label_smoothing)
         LOGGER.info("Using BCE with smoothing=%.2f", label_smoothing)
+
+    # =========================================================================
+    # OVERFIT DEBUG MODE: Train on 32 samples for 200 steps
+    # =========================================================================
+    if bool(cfg_run.get("overfit_debug", False)):
+        LOGGER.info("Running OVERFIT DEBUG mode for Stage 2")
+        # Use simple BCE for overfit test (no label smoothing or focal loss)
+        simple_criterion = nn.BCELoss()
+        stage1.run_overfit_debug_stage1(
+            model=model,
+            train_loader=train_loader,
+            criterion=simple_criterion,
+            device=device,
+            num_steps=200,
+            lr=1e-3,
+        )
+        LOGGER.info("Overfit debug complete. Exiting.")
+        return {
+            "overfit_debug": True,
+            "stage2_acc": float("nan"),
+            "stage2_auc": float("nan"),
+            "stage2_mcc": float("nan"),
+            "best_ckpt_path": None,
+            "stage2_seconds": float(time.perf_counter() - start_time),
+            "params": int(total_params),
+            "best_val_acc": float("nan"),
+            "best_val_auc": float("nan"),
+            "best_val_mcc": float("nan"),
+            "best_epoch": 0,
+        }
+
+    # =========================================================================
+    # PROFILING MODE: Run profiler for ~50 steps
+    # =========================================================================
+    if bool(cfg_run.get("profile", False)):
+        LOGGER.info("Running PROFILING mode for Stage 2")
+        grad_accum_steps_prof = int(cfg_run.get("grad_accum_steps", 4))
+        grad_clip_norm_prof = float(cfg_run.get("grad_clip_norm", 1.0))
+
+        profile_metrics = stage1.run_profiling_epoch(
+            loader=train_loader,
+            model=model,
+            criterion=criterion,
+            device=device,
+            optimizer=optimizer,
+            run_dir=run_dir,
+            num_profile_steps=50,
+            grad_accum_steps=grad_accum_steps_prof,
+            grad_clip_norm=grad_clip_norm_prof,
+        )
+
+        # Save profile metrics to run_dir
+        import json as json_module
+        profile_report_path = run_dir / "profile_report.json"
+        with profile_report_path.open("w", encoding="utf-8") as f:
+            json_module.dump(profile_metrics, f, indent=2)
+        LOGGER.info("Saved profile report to %s", profile_report_path)
+        LOGGER.info("Profiling complete. Exiting.")
+
+        return {
+            "profile": True,
+            "profile_metrics": profile_metrics,
+            "stage2_acc": float("nan"),
+            "stage2_auc": float("nan"),
+            "stage2_mcc": float("nan"),
+            "best_ckpt_path": None,
+            "stage2_seconds": float(time.perf_counter() - start_time),
+            "params": int(total_params),
+            "best_val_acc": float("nan"),
+            "best_val_auc": float("nan"),
+            "best_val_mcc": float("nan"),
+            "best_epoch": 0,
+        }
 
     grad_accum_steps = int(cfg_run.get("grad_accum_steps", 2))
     grad_clip_norm = float(cfg_run.get("grad_clip_norm", 1.0))
@@ -570,6 +763,8 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             param_norm_cap=param_norm_cap,
             use_mixup=use_mixup and not in_swa_phase,
             mixup_alpha=mixup_alpha,
+            amp_ctx=amp_ctx,
+            scaler=scaler,
         )
         global_optimizer_steps += int(train_metrics.get("optimizer_steps", 0))
         reached_max_steps = ablation_max_steps is not None and global_optimizer_steps >= ablation_max_steps
@@ -585,6 +780,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             device,
             optimizer=None,
             desc="Val",
+            amp_ctx=amp_ctx,
         )
 
         swa_val_metrics = None
@@ -607,6 +803,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                     device,
                     optimizer=None,
                     desc="Val-SWA",
+                    amp_ctx=amp_ctx,
                 )
             except Exception as exc:
                 LOGGER.warning("SWA evaluation failed: %s", exc)
@@ -702,6 +899,11 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             "kmer": kmer,
             "engineered_dim": engineered_dim,
             "stage2_use_engineered_features": stage2_use_engineered,
+            "stage2_head_type": stage2_head_type,
+            "stage2_transformer_layers": stage2_transformer_layers if stage2_head_type in {"transformer", "both"} else None,
+            "stage2_transformer_heads": stage2_transformer_heads if stage2_head_type in {"transformer", "both"} else None,
+            "stage2_bilstm_hidden": stage2_bilstm_hidden if stage2_head_type in {"bilstm", "both"} else None,
+            "stage2_combine_mode": stage2_combine_mode if stage2_head_type == "both" else None,
         },
         "training_enhancements": {
             "layer_wise_lr_decay": layer_lr_decay,
