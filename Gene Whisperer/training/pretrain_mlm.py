@@ -20,6 +20,7 @@ import logging
 import math
 import os
 import random
+import shutil
 import time
 from collections import Counter
 from datetime import datetime
@@ -2904,6 +2905,24 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     run_dir = (script_dir / "../runs" / f"mlm_{timestamp}").resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    # Output directory for checkpoints and artifacts
+    output_dir_value = cfg_run.get("output_dir")
+    if output_dir_value is not None:
+        output_dir = Path(output_dir_value).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = (script_dir / output_dir).resolve()
+    else:
+        output_dir = (script_dir / "../artifacts").resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoints_dir = output_dir / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    LOGGER.info("Output directory: %s", output_dir)
+    LOGGER.info("Checkpoints directory: %s", checkpoints_dir)
+
+    # Checkpoint save frequency
+    save_every_steps = int(cfg_run.get("save_every_steps", 500))
+    resume_path_value = cfg_run.get("resume_path")
+
     length_curriculum_config = LengthCurriculumConfig.from_config(cfg_run)
     if use_streaming and length_curriculum_config.enabled:
         LOGGER.warning("Length curriculum disabled for streaming datasets")
@@ -3657,6 +3676,77 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         with encoder_metadata_path.open("w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
 
+    def _save_training_checkpoint(
+        step: int,
+        epoch: int,
+        best_val_loss: float,
+        best_val_acc: float,
+        patience_counter: int,
+    ) -> Path:
+        """Save a full training checkpoint including all state for resuming."""
+        ckpt_path = checkpoints_dir / f"checkpoint_step_{step}.pt"
+        checkpoint = {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "epoch": epoch,
+            "global_step": step,
+            "best_val_loss": best_val_loss,
+            "best_val_acc": best_val_acc,
+            "patience_counter": patience_counter,
+            "config_snapshot": resolved_config,
+            "vocab_k": vocab.k,
+            "rng_state_python": random.getstate(),
+            "rng_state_torch": torch.get_rng_state(),
+        }
+        if scaler is not None:
+            checkpoint["scaler_state_dict"] = scaler.state_dict()
+        if torch.cuda.is_available():
+            checkpoint["rng_state_cuda"] = torch.cuda.get_rng_state_all()
+        torch.save(checkpoint, ckpt_path)
+        LOGGER.info("Saved training checkpoint: %s (step %d, epoch %d)", ckpt_path, step, epoch)
+        return ckpt_path
+
+    def _load_training_checkpoint(ckpt_path: Path) -> Dict[str, Any]:
+        """Load a training checkpoint and restore all state."""
+        LOGGER.info("Loading training checkpoint from: %s", ckpt_path)
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        if scaler is not None and "scaler_state_dict" in checkpoint:
+            scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        if "rng_state_python" in checkpoint:
+            random.setstate(checkpoint["rng_state_python"])
+        if "rng_state_torch" in checkpoint:
+            torch.set_rng_state(checkpoint["rng_state_torch"])
+        if "rng_state_cuda" in checkpoint and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(checkpoint["rng_state_cuda"])
+        LOGGER.info(
+            "Restored checkpoint: epoch=%d, global_step=%d, best_val_loss=%.4f",
+            checkpoint["epoch"],
+            checkpoint["global_step"],
+            checkpoint["best_val_loss"],
+        )
+        return checkpoint
+
+    # Resume from checkpoint if specified
+    start_epoch = 1
+    if resume_path_value is not None:
+        resume_ckpt_path = Path(resume_path_value).expanduser()
+        if not resume_ckpt_path.is_absolute():
+            resume_ckpt_path = (script_dir / resume_ckpt_path).resolve()
+        if resume_ckpt_path.exists():
+            loaded_ckpt = _load_training_checkpoint(resume_ckpt_path)
+            global_step = loaded_ckpt["global_step"]
+            start_epoch = loaded_ckpt["epoch"]
+            best_val_loss = loaded_ckpt["best_val_loss"]
+            best_val_acc = loaded_ckpt.get("best_val_acc", 0.0)
+            patience_counter = loaded_ckpt.get("patience_counter", 0)
+            LOGGER.info("Resuming training from step %d, epoch %d", global_step, start_epoch)
+        else:
+            LOGGER.warning("Resume checkpoint not found: %s - starting from scratch", resume_ckpt_path)
+
     LOGGER.info("=" * 60)
     LOGGER.info("STARTING MLM PRETRAINING")
     LOGGER.info("Epochs: %d, LR: %.2e, Mask prob: %.1f%%", epochs, lr, mask_prob * 100)
@@ -3701,8 +3791,13 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     reached_max_steps = False
     # Track last gradient norm for epoch-level logging
     last_grad_norm = 0.0
+    # Tracking for step logging
+    epoch_start_time = time.perf_counter()
+    step_tokens_processed = 0
+    last_log_time = time.perf_counter()
+    last_log_step = global_step
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         LOGGER.info("Train loop: model.training=%s", model.training)
         total_loss_unscaled = 0.0
@@ -3858,6 +3953,51 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 if health_metrics:
                     health_dashboard.print_table_row(health_metrics)
 
+                # Checkpoint saving every N steps
+                if save_every_steps > 0 and global_step % save_every_steps == 0:
+                    _save_training_checkpoint(
+                        step=global_step,
+                        epoch=epoch,
+                        best_val_loss=best_val_loss,
+                        best_val_acc=best_val_acc,
+                        patience_counter=patience_counter,
+                    )
+
+                # Enhanced step logging with tokens/sec, elapsed time, ETA
+                if global_step % lr_log_interval == 0 or global_step == 1:
+                    current_time = time.perf_counter()
+                    elapsed_since_last = current_time - last_log_time
+                    steps_since_last = global_step - last_log_step
+                    tokens_this_step = total_tokens
+
+                    if elapsed_since_last > 0 and steps_since_last > 0:
+                        tokens_per_sec = tokens_this_step / elapsed_since_last
+                        steps_per_sec = steps_since_last / elapsed_since_last
+                    else:
+                        tokens_per_sec = 0.0
+                        steps_per_sec = 0.0
+
+                    total_elapsed = current_time - start_time
+                    remaining_steps = total_steps - global_step
+                    if steps_per_sec > 0:
+                        eta_seconds = remaining_steps / steps_per_sec
+                        eta_str = f"{eta_seconds/60:.1f}min" if eta_seconds < 3600 else f"{eta_seconds/3600:.1f}hr"
+                    else:
+                        eta_str = "N/A"
+
+                    avg_loss = total_loss_unscaled / max(1, samples_seen)
+                    LOGGER.info(
+                        "Step %d | loss=%.4f | tok/s=%.0f | elapsed=%.1fs | ETA=%s",
+                        global_step,
+                        avg_loss,
+                        tokens_per_sec,
+                        total_elapsed,
+                        eta_str,
+                    )
+
+                    last_log_time = current_time
+                    last_log_step = global_step
+
                 if max_steps is not None and global_step >= max_steps:
                     reached_max_steps = True
                     break
@@ -4008,6 +4148,25 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     if not encoder_path.exists():
         _save_encoder_checkpoint(best_val_loss)
 
+    # Save final checkpoint
+    final_ckpt_path = _save_training_checkpoint(
+        step=global_step,
+        epoch=epoch,
+        best_val_loss=best_val_loss,
+        best_val_acc=best_val_acc,
+        patience_counter=patience_counter,
+    )
+    # Also save as "final" checkpoint for easy identification
+    final_named_path = checkpoints_dir / "checkpoint_final.pt"
+    shutil.copy(final_ckpt_path, final_named_path)
+    LOGGER.info("Saved final checkpoint: %s", final_named_path)
+
+    # Copy encoder to output_dir as well (if output_dir is different from encoder_path's parent)
+    output_encoder_path = output_dir / f"mlm_encoder_k{vocab.k}.pt"
+    if output_encoder_path.resolve() != encoder_path.resolve():
+        shutil.copy(encoder_path, output_encoder_path)
+        LOGGER.info("Copied encoder to output_dir: %s", output_encoder_path)
+
     best_ppl = math.exp(min(best_val_loss, 100)) if math.isfinite(best_val_loss) else float("nan")
     LOGGER.info("=" * 60)
     LOGGER.info("PRETRAINING COMPLETE")
@@ -4015,6 +4174,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("Best Val Accuracy: %.1f%%", best_val_acc * 100)
     LOGGER.info("Target: Loss < 1.0 (PPL < 2.72)")
     LOGGER.info("Saved pretrained encoder to %s", encoder_path)
+    LOGGER.info("Checkpoints directory: %s", checkpoints_dir)
     LOGGER.info("=" * 60)
 
     return {
@@ -4059,6 +4219,14 @@ def main() -> None:
                              "batch and one val batch.")
     parser.add_argument("--mlm_dry_run", action="store_true",
                         help="Run a short streaming dry run (3 train/3 val batches) and exit.")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Output directory for checkpoints and artifacts. "
+                             "Defaults to value from config or 'Gene Whisperer/artifacts'.")
+    parser.add_argument("--resume_path", type=str, default=None,
+                        help="Path to a checkpoint to resume training from. "
+                             "Restores model, optimizer, scheduler, scaler, epoch, and global_step.")
+    parser.add_argument("--save_every_steps", type=int, default=500,
+                        help="Save a checkpoint every N optimizer steps (default: 500).")
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -4089,6 +4257,11 @@ def main() -> None:
         overrides["debug_batch"] = True
     if args.mlm_dry_run:
         overrides["mlm_dry_run"] = True
+    if args.output_dir is not None:
+        overrides["output_dir"] = args.output_dir
+    if args.resume_path is not None:
+        overrides["resume_path"] = args.resume_path
+    overrides["save_every_steps"] = args.save_every_steps
 
     _ = run_mlm_pretrain(cfg, overrides=overrides)
     return
