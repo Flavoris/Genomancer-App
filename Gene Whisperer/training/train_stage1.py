@@ -49,6 +49,324 @@ LOGGER = logging.getLogger("gene_whisperer.stage1")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
 
+# =============================================================================
+# KNOWLEDGE DISTILLATION UTILITIES
+# =============================================================================
+
+class DistillationLoss(nn.Module):
+    """
+    Knowledge distillation loss for binary classification.
+
+    Combines standard cross-entropy with KL divergence between teacher/student
+    logits, using temperature scaling to soften the distributions.
+
+    For binary classification with sigmoid, we convert logits to 2-class
+    distributions: [1-sigmoid(logit), sigmoid(logit)] for proper KL.
+
+    Loss = (1-alpha)*CE(student, labels) + alpha*T^2*KL(soft_student, soft_teacher)
+
+    The T^2 factor compensates for the gradient magnitude reduction from temperature.
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        temperature: float = 2.0,
+        base_criterion: Optional[nn.Module] = None,
+    ):
+        super().__init__()
+        self.alpha = alpha
+        self.temperature = temperature
+        self.base_criterion = base_criterion or nn.BCELoss()
+
+    def forward(
+        self,
+        student_probs: torch.Tensor,
+        student_logits: torch.Tensor,
+        teacher_logits: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """
+        Compute combined CE + KL distillation loss.
+
+        Args:
+            student_probs: (B, 1) student sigmoid outputs
+            student_logits: (B, 1) student pre-sigmoid logits
+            teacher_logits: (B, 1) teacher pre-sigmoid logits (detached)
+            labels: (B, 1) ground truth labels
+        Returns:
+            Combined loss and dict with loss components
+        """
+        # Standard cross-entropy loss
+        ce_loss = self.base_criterion(student_probs, labels)
+
+        # Convert binary logits to 2-class log-softmax with temperature
+        # For binary: [logit_class0, logit_class1] = [-logit, logit]
+        # This makes softmax([−l, l]) = [1−σ(l), σ(l)]
+        student_logits_2class = torch.cat([-student_logits, student_logits], dim=-1)
+        teacher_logits_2class = torch.cat([-teacher_logits, teacher_logits], dim=-1)
+
+        # Apply temperature scaling
+        student_soft = F.log_softmax(student_logits_2class / self.temperature, dim=-1)
+        teacher_soft = F.softmax(teacher_logits_2class / self.temperature, dim=-1)
+
+        # KL divergence (reduction='batchmean' is standard for KL)
+        kl_loss = F.kl_div(student_soft, teacher_soft, reduction='batchmean')
+
+        # Scale by T^2 to match gradient magnitudes (Hinton et al.)
+        kl_loss = kl_loss * (self.temperature ** 2)
+
+        # Combined loss
+        total_loss = (1 - self.alpha) * ce_loss + self.alpha * kl_loss
+
+        return total_loss, {
+            "ce_loss": ce_loss.item(),
+            "kl_loss": kl_loss.item(),
+            "total_loss": total_loss.item(),
+        }
+
+
+def load_teacher_model(
+    cfg: dict,
+    teacher_ckpt_path: Path,
+    device: torch.device,
+) -> nn.Module:
+    """
+    Load a frozen teacher model for distillation.
+
+    The teacher is loaded from a Stage 1 checkpoint and set to eval mode
+    with all gradients disabled.
+
+    Args:
+        cfg: Configuration dict (used for model architecture params)
+        teacher_ckpt_path: Path to teacher checkpoint
+        device: Device to load model to
+    Returns:
+        Frozen teacher model in eval mode
+    """
+    from dataset import KmerVocabulary
+
+    # Load checkpoint to get model configuration
+    checkpoint = torch.load(teacher_ckpt_path, map_location=device)
+
+    # Get model state
+    if isinstance(checkpoint, dict) and "model_state" in checkpoint:
+        state_dict = checkpoint["model_state"]
+    else:
+        state_dict = checkpoint
+
+    # Try to infer k-mer from checkpoint path or use config
+    teacher_kmer = int(cfg.get("distill", {}).get("teacher_kmer", 6))
+
+    # Build vocab for teacher
+    vocab_cache_dir = Path(cfg.get("vocab_cache_dir", "../artifacts/vocabs"))
+    teacher_vocab_path = vocab_cache_dir / f"k{teacher_kmer}_vocab.json"
+    teacher_vocab = KmerVocabulary.load(teacher_vocab_path)
+
+    # Create teacher model with same architecture
+    embedding_dim = int(cfg.get("embedding_dim", 256))
+    transformer_layers = int(cfg.get("transformer_layers", 6))
+    transformer_heads = int(cfg.get("transformer_heads", 8))
+    transformer_ff_dim = int(cfg.get("transformer_ff_dim", 1024))
+    transformer_dropout = float(cfg.get("transformer_dropout", 0.15))
+
+    teacher = GeneWhispererStage1(
+        vocab_size=len(teacher_vocab.itos),
+        kmer=teacher_kmer,
+        embedding_dim=embedding_dim,
+        num_layers=transformer_layers,
+        num_heads=transformer_heads,
+        ff_dim=transformer_ff_dim,
+        dropout=transformer_dropout,
+        pad_token_id=teacher_vocab.pad_id,
+        engineered_dim=int(cfg.get("engineered_dim", 128)),
+        use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
+        use_attention_pool=bool(cfg.get("use_attention_pool", True)),
+        use_tcn=bool(cfg.get("use_tcn", True)),
+        tcn_hidden=int(cfg.get("tcn_hidden", 256)),
+        tcn_levels=int(cfg.get("tcn_levels", 4)),
+        tcn_kernel=int(cfg.get("tcn_kernel", 3)),
+        multiscale_channels=int(cfg.get("multiscale_channels", 64)),
+        multiscale_kernels=tuple(cfg.get("multiscale_kernels", [3, 5, 7, 9, 15])),
+        lstm_hidden=int(cfg.get("lstm_hidden", 192)),
+        post_cnn_transformer_layers=int(cfg.get("post_cnn_transformer_layers", 3)),
+        engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 256)),
+        engineered_mlp_output=int(cfg.get("engineered_mlp_output", 128)),
+        fusion_hidden=int(cfg.get("fusion_hidden", 256)),
+    ).to(device)
+
+    # Load state dict
+    # Handle potential key mismatches
+    model_dict = teacher.state_dict()
+    pretrained_dict = {}
+
+    for k, v in state_dict.items():
+        # Remove "module." prefix if present (from DataParallel)
+        key = k.replace("module.", "") if k.startswith("module.") else k
+        if key in model_dict and model_dict[key].shape == v.shape:
+            pretrained_dict[key] = v
+
+    model_dict.update(pretrained_dict)
+    teacher.load_state_dict(model_dict)
+
+    LOGGER.info(
+        "Loaded teacher model from %s (%d/%d weights)",
+        teacher_ckpt_path,
+        len(pretrained_dict),
+        len(state_dict),
+    )
+
+    # Freeze teacher and set to eval
+    teacher.eval()
+    for param in teacher.parameters():
+        param.requires_grad = False
+
+    return teacher
+
+
+def verify_distillation_dry_run(
+    student: nn.Module,
+    teacher: nn.Module,
+    train_loader: torch.utils.data.DataLoader,
+    device: torch.device,
+    teacher_vocab: Any,
+    student_vocab: Any,
+) -> bool:
+    """
+    Verify that distillation setup is correct with a dry run.
+
+    Checks:
+    1. Teacher forward pass works
+    2. Logit shapes match between teacher and student
+    3. Both produce valid outputs
+
+    Args:
+        student: Student model
+        teacher: Frozen teacher model
+        train_loader: Training dataloader (for student k-mer)
+        device: Device
+        teacher_vocab: Teacher's vocabulary
+        student_vocab: Student's vocabulary
+    Returns:
+        True if verification passed
+    """
+    from dataset import KmerVocabulary, PromoterDataset
+
+    LOGGER.info("=" * 60)
+    LOGGER.info("DISTILLATION DRY-RUN VERIFICATION")
+    LOGGER.info("=" * 60)
+
+    student.eval()
+    teacher.eval()
+
+    # Get a batch from train loader
+    batch_iter = iter(train_loader)
+    tokens_student, engineered, labels = next(batch_iter)
+    tokens_student = tokens_student.to(device)
+    engineered = engineered.to(device)
+    labels = labels.to(device)
+
+    batch_size = tokens_student.size(0)
+
+    # Get raw sequences from the dataset for re-tokenization
+    # We need to tokenize the same sequences with teacher's k-mer
+    dataset = train_loader.dataset
+
+    # Get sequences for re-tokenization
+    # The dataset should have the raw sequences accessible
+    sequences = []
+    for i in range(min(batch_size, len(dataset))):
+        if hasattr(dataset, 'sequences'):
+            sequences.append(dataset.sequences[i])
+        elif hasattr(dataset, 'data') and hasattr(dataset.data[i], '__getitem__'):
+            sequences.append(dataset.data[i][0])  # Assume (seq, label) format
+        else:
+            # Fallback: decode from tokens
+            seq = student_vocab.decode(tokens_student[i].cpu().tolist())
+            sequences.append(seq)
+
+    # Tokenize sequences for teacher
+    tokens_teacher = []
+    for seq in sequences:
+        tok = teacher_vocab.tokenize(seq)
+        tokens_teacher.append(torch.tensor(tok, dtype=torch.long))
+
+    # Pad to same length
+    max_len = max(t.size(0) for t in tokens_teacher)
+    tokens_teacher_padded = torch.zeros(len(tokens_teacher), max_len, dtype=torch.long)
+    for i, t in enumerate(tokens_teacher):
+        tokens_teacher_padded[i, :t.size(0)] = t
+
+    tokens_teacher = tokens_teacher_padded.to(device)
+
+    LOGGER.info("Student tokens shape: %s", tokens_student.shape)
+    LOGGER.info("Teacher tokens shape: %s", tokens_teacher.shape)
+
+    try:
+        with torch.no_grad():
+            # Student forward with logits
+            student_out = student(tokens_student, engineered, return_logits=True)
+            if isinstance(student_out, tuple):
+                student_probs, student_logits = student_out
+            else:
+                LOGGER.error("Student model did not return logits!")
+                return False
+
+            # Teacher forward with logits
+            teacher_out = teacher(tokens_teacher, engineered, return_logits=True)
+            if isinstance(teacher_out, tuple):
+                teacher_probs, teacher_logits = teacher_out
+            else:
+                LOGGER.error("Teacher model did not return logits!")
+                return False
+
+        LOGGER.info("Student logits shape: %s", student_logits.shape)
+        LOGGER.info("Teacher logits shape: %s", teacher_logits.shape)
+        LOGGER.info("Student probs range: [%.4f, %.4f]", student_probs.min().item(), student_probs.max().item())
+        LOGGER.info("Teacher probs range: [%.4f, %.4f]", teacher_probs.min().item(), teacher_probs.max().item())
+        LOGGER.info("Student logits range: [%.4f, %.4f]", student_logits.min().item(), student_logits.max().item())
+        LOGGER.info("Teacher logits range: [%.4f, %.4f]", teacher_logits.min().item(), teacher_logits.max().item())
+
+        # Check shapes match
+        if student_logits.shape != teacher_logits.shape:
+            LOGGER.error(
+                "Logit shape mismatch: student=%s, teacher=%s",
+                student_logits.shape,
+                teacher_logits.shape,
+            )
+            return False
+
+        # Quick distillation loss test
+        distill_loss = DistillationLoss(alpha=0.5, temperature=2.0)
+        loss, loss_dict = distill_loss(
+            student_probs,
+            student_logits,
+            teacher_logits,
+            labels.unsqueeze(1),
+        )
+
+        LOGGER.info("Test distillation loss: %.4f (CE=%.4f, KL=%.4f)",
+                    loss_dict["total_loss"], loss_dict["ce_loss"], loss_dict["kl_loss"])
+
+        if not torch.isfinite(loss):
+            LOGGER.error("Distillation loss is not finite: %s", loss.item())
+            return False
+
+        LOGGER.info("=" * 60)
+        LOGGER.info("✓ DISTILLATION DRY-RUN PASSED")
+        LOGGER.info("=" * 60)
+        return True
+
+    except Exception as e:
+        LOGGER.error("Distillation dry-run failed with error: %s", e)
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        student.train()
+        # Teacher stays in eval mode
+
+
 # Note: set_seed is now a wrapper for set_global_seed from seed_utils
 def set_seed(seed: int) -> None:
     """Set all random seeds for reproducibility (wrapper for set_global_seed)."""
@@ -610,6 +928,237 @@ def run_epoch(
     return metrics
 
 
+def run_distillation_epoch(
+    student_loader: torch.utils.data.DataLoader,
+    student_model: nn.Module,
+    teacher_model: nn.Module,
+    distill_criterion: DistillationLoss,
+    device: torch.device,
+    student_vocab: Any,
+    teacher_vocab: Any,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+    desc: str = "Train-Distill",
+    grad_accum_steps: int = 1,
+    max_optimizer_steps: Optional[int] = None,
+    grad_clip_norm: float = 1.0,
+    amp_ctx: Optional[AMPContext] = None,
+    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    param_norm_warn: float = 150.0,
+    param_norm_cap: float = 200.0,
+) -> Dict[str, float]:
+    """
+    Run one epoch of distillation training.
+
+    The key difference from run_epoch is that we:
+    1. Get student tokens from the dataloader
+    2. Re-tokenize the same sequences for the teacher (different k-mer)
+    3. Run both models and compute distillation loss
+
+    Args:
+        student_loader: Dataloader yielding (tokens, engineered, labels) for student
+        student_model: Student model being trained
+        teacher_model: Frozen teacher model (in eval mode)
+        distill_criterion: DistillationLoss instance
+        device: Device to train on
+        student_vocab: Student's KmerVocabulary for decoding
+        teacher_vocab: Teacher's KmerVocabulary for re-tokenizing
+        optimizer: Optimizer (None for validation)
+        scheduler: LR scheduler
+        desc: Description for progress bar
+        grad_accum_steps: Gradient accumulation steps
+        max_optimizer_steps: Max optimizer steps before stopping
+        grad_clip_norm: Gradient clipping norm
+        amp_ctx: AMP context for mixed precision
+        scaler: CUDA GradScaler
+        param_norm_warn: Warning threshold for parameter norm
+        param_norm_cap: Cap for parameter norm
+    Returns:
+        Metrics dict with loss components
+    """
+    is_train = optimizer is not None
+    student_model.train(is_train)
+    teacher_model.eval()  # Teacher always in eval mode
+
+    # AMP setup
+    use_autocast = amp_ctx is not None and amp_ctx.enabled
+    use_cuda_scaler = scaler is not None and device.type == "cuda"
+    force_fp32_loss = amp_ctx.force_fp32_loss if amp_ctx else True
+
+    if is_train and max_optimizer_steps is not None and max_optimizer_steps <= 0:
+        return {
+            "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0,
+            "mcc": 0.0, "roc_auc": 0.5, "specificity": 0.0,
+            "loss": 0.0, "ce_loss": 0.0, "kl_loss": 0.0, "optimizer_steps": 0,
+        }
+
+    total_loss = 0.0
+    total_ce_loss = 0.0
+    total_kl_loss = 0.0
+    total_samples = 0
+    all_probs = []
+    all_labels = []
+
+    optimizer_step_count = 0
+    prev_param_norm: Optional[float] = None
+    hit_max_steps = False
+
+    # Get the dataset for sequence access
+    dataset = student_loader.dataset
+
+    iterable = tqdm(student_loader, desc=desc, leave=False)
+    for batch_idx, (tokens_student, engineered, labels) in enumerate(iterable):
+        batch_size = tokens_student.size(0)
+        tokens_student = tokens_student.to(device)
+        engineered = engineered.to(device)
+        labels = labels.to(device).unsqueeze(1)
+
+        # Re-tokenize sequences for teacher
+        # Get raw sequences by decoding student tokens
+        sequences = []
+        for i in range(batch_size):
+            # Decode student tokens back to sequence
+            seq = student_vocab.decode(tokens_student[i].cpu().tolist())
+            sequences.append(seq)
+
+        # Tokenize for teacher
+        tokens_teacher_list = []
+        for seq in sequences:
+            tok = teacher_vocab.tokenize(seq)
+            tokens_teacher_list.append(torch.tensor(tok, dtype=torch.long))
+
+        # Pad teacher tokens to same length
+        max_len = max(t.size(0) for t in tokens_teacher_list)
+        tokens_teacher = torch.full(
+            (batch_size, max_len),
+            teacher_vocab.pad_id,
+            dtype=torch.long,
+            device=device,
+        )
+        for i, t in enumerate(tokens_teacher_list):
+            tokens_teacher[i, :t.size(0)] = t.to(device)
+
+        # Forward pass
+        with torch.set_grad_enabled(is_train):
+            # Student forward with logits
+            if use_autocast and amp_ctx is not None:
+                with amp_ctx.autocast():
+                    student_out = student_model(tokens_student, engineered, return_logits=True)
+            else:
+                student_out = student_model(tokens_student, engineered, return_logits=True)
+
+            student_probs, student_logits = student_out
+
+            # Teacher forward with logits (no grad needed)
+            with torch.no_grad():
+                if use_autocast and amp_ctx is not None:
+                    with amp_ctx.autocast():
+                        teacher_out = teacher_model(tokens_teacher, engineered, return_logits=True)
+                else:
+                    teacher_out = teacher_model(tokens_teacher, engineered, return_logits=True)
+
+                _, teacher_logits = teacher_out
+
+            # Ensure fp32 for loss computation
+            if force_fp32_loss:
+                student_probs = student_probs.float()
+                student_logits = student_logits.float()
+                teacher_logits = teacher_logits.float()
+
+            student_probs = student_probs.clamp(min=1e-6, max=1 - 1e-6)
+
+            # Compute distillation loss
+            loss, loss_dict = distill_criterion(
+                student_probs, student_logits, teacher_logits, labels
+            )
+
+            # Backward pass with gradient accumulation
+            if is_train:
+                loss_scaled = loss / grad_accum_steps
+
+                if use_cuda_scaler:
+                    scaler.scale(loss_scaled).backward()
+                else:
+                    loss_scaled.backward()
+
+                # Optimizer step every grad_accum_steps
+                if (batch_idx + 1) % grad_accum_steps == 0:
+                    if grad_clip_norm > 0:
+                        if use_cuda_scaler:
+                            scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(student_model.parameters(), grad_clip_norm)
+
+                    if use_cuda_scaler:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+
+                    total_norm, scale = cap_model_param_norm_(student_model, max_norm=param_norm_cap)
+                    if scale < 1.0:
+                        LOGGER.warning(
+                            "Step %d: param_norm=%.2f exceeded cap; scaled by %.6f",
+                            optimizer_step_count, total_norm, scale,
+                        )
+                    elif param_norm_warn > 0 and total_norm > param_norm_warn:
+                        if prev_param_norm is None or prev_param_norm <= param_norm_warn:
+                            LOGGER.warning(
+                                "Step %d: param_norm=%.2f exceeded warn=%.2f",
+                                optimizer_step_count, total_norm, param_norm_warn,
+                            )
+                    prev_param_norm = total_norm
+
+                    optimizer.zero_grad()
+
+                    if scheduler is not None:
+                        scheduler.step()
+
+                    optimizer_step_count += 1
+                    if max_optimizer_steps is not None and optimizer_step_count >= max_optimizer_steps:
+                        hit_max_steps = True
+
+        # Accumulate metrics
+        total_loss += loss_dict["total_loss"] * batch_size
+        total_ce_loss += loss_dict["ce_loss"] * batch_size
+        total_kl_loss += loss_dict["kl_loss"] * batch_size
+        total_samples += batch_size
+        all_probs.append(student_probs.detach().cpu())
+        all_labels.append(labels.detach().cpu())
+
+        iterable.set_postfix(
+            loss=loss_dict["total_loss"],
+            ce=loss_dict["ce_loss"],
+            kl=loss_dict["kl_loss"],
+        )
+
+        if hit_max_steps:
+            LOGGER.info("%s: reached max optimizer steps (%d)", desc, max_optimizer_steps)
+            break
+
+    # Compute final metrics
+    avg_loss = total_loss / total_samples if total_samples else 0.0
+    avg_ce_loss = total_ce_loss / total_samples if total_samples else 0.0
+    avg_kl_loss = total_kl_loss / total_samples if total_samples else 0.0
+
+    if total_samples == 0 or not all_probs:
+        return {
+            "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0,
+            "mcc": 0.0, "roc_auc": 0.5, "specificity": 0.0,
+            "loss": float(avg_loss), "ce_loss": float(avg_ce_loss),
+            "kl_loss": float(avg_kl_loss), "optimizer_steps": int(optimizer_step_count),
+        }
+
+    probs_tensor = torch.cat(all_probs, dim=0)
+    labels_tensor = torch.cat(all_labels, dim=0)
+    metrics = calculate_metrics(probs_tensor, labels_tensor)
+    metrics["loss"] = float(avg_loss)
+    metrics["ce_loss"] = float(avg_ce_loss)
+    metrics["kl_loss"] = float(avg_kl_loss)
+    metrics["optimizer_steps"] = int(optimizer_step_count)
+
+    return metrics
+
+
 def run_profiling_epoch(
     loader: torch.utils.data.DataLoader,
     model: nn.Module,
@@ -1116,7 +1665,15 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     stage1_max_train_samples = ablation_cfg.get("stage1_max_train_samples") if ablation_enabled else None
     stage1_max_val_samples = ablation_cfg.get("stage1_max_val_samples") if ablation_enabled else None
-    
+
+    # Helper to get stage1-specific config with fallback to global value when null
+    def get_with_fallback(stage_key: str, global_key: str, default: Any) -> Any:
+        """Get stage1-specific value, falling back to global if null/missing."""
+        val = cfg_run.get(stage_key)
+        if val is not None:
+            return val
+        return cfg_run.get(global_key, default)
+
     # =========================================================================
     # Log resolved hyperparameters to runs/<timestamp>/resolved_config.json
     # =========================================================================
@@ -1160,10 +1717,10 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "engineered_dim": int(cfg_run.get("engineered_dim", 128)),
         "engineered_mlp_hidden": int(cfg_run.get("engineered_mlp_hidden", 256)),
         "engineered_mlp_output": int(cfg_run.get("engineered_mlp_output", 128)),
-        # Augmentation
+        # Augmentation (effective Stage 1 values with fallbacks)
         "reverse_complement_prob": float(cfg_run.get("stage1_reverse_complement_prob", 0.5)),
-        "use_mixup": bool(cfg_run.get("use_mixup", True)),
-        "mixup_alpha": float(cfg_run.get("mixup_alpha", 0.2)),
+        "stage1_use_mixup": bool(get_with_fallback("stage1_use_mixup", "use_mixup", True)),
+        "stage1_mixup_alpha": float(get_with_fallback("stage1_mixup_alpha", "mixup_alpha", 0.2)),
         # TCN
         "use_tcn": bool(cfg_run.get("use_tcn", True)),
         "tcn_hidden": int(cfg_run.get("tcn_hidden", 256)),
@@ -1179,16 +1736,16 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "warmup_ratio": float(cfg_run.get("warmup_ratio", 0.15)),
         "early_stopping_patience": int(cfg_run.get("early_stopping_patience", 25)),
         "layer_lr_decay": float(cfg_run.get("layer_lr_decay", 0.8)),
-        "drop_path_rate": float(cfg_run.get("drop_path_rate", 0.1)),
-        # Loss
+        "stage1_drop_path_rate": float(get_with_fallback("stage1_drop_path_rate", "drop_path_rate", 0.1)),
+        # Loss (effective Stage 1 values with fallbacks)
         "stage1_use_focal_loss": bool(cfg_run.get("stage1_use_focal_loss", True)),
         "stage1_focal_alpha": float(cfg_run.get("stage1_focal_alpha", 0.5)),
         "stage1_focal_gamma": float(cfg_run.get("stage1_focal_gamma", 2.0)),
-        "label_smoothing": float(cfg_run.get("label_smoothing", 0.05)),
-        # SWA
-        "use_swa": bool(cfg_run.get("use_swa", True)),
-        "swa_start_epoch": int(cfg_run.get("swa_start_epoch", 60)),
-        "swa_lr": float(cfg_run.get("swa_lr", 5e-5)),
+        "stage1_label_smoothing": float(get_with_fallback("stage1_label_smoothing", "label_smoothing", 0.05)),
+        # SWA (effective Stage 1 values with fallbacks)
+        "stage1_use_swa": bool(get_with_fallback("stage1_use_swa", "use_swa", True)),
+        "stage1_swa_start_epoch": int(get_with_fallback("stage1_swa_start_epoch", "swa_start_epoch", 60)),
+        "stage1_swa_lr": float(get_with_fallback("stage1_swa_lr", "swa_lr", 5e-5)),
         # Model options
         "use_attention_pool": bool(cfg_run.get("use_attention_pool", True)),
         "post_cnn_transformer_layers": int(cfg_run.get("post_cnn_transformer_layers", 3)),
@@ -1274,7 +1831,10 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     engineered_mlp_hidden = int(cfg_run.get("engineered_mlp_hidden", 256))
     engineered_mlp_output = int(cfg_run.get("engineered_mlp_output", 128))
     fusion_hidden = int(cfg_run.get("fusion_hidden", 256))
-    
+
+    # Compute stage1_drop_path_rate with fallback (needed before model creation)
+    stage1_drop_path_rate = get_with_fallback("stage1_drop_path_rate", "drop_path_rate", 0.1)
+
     model = GeneWhispererStage1(
         vocab_size=vocab_size,
         kmer=kmer,
@@ -1300,6 +1860,8 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         engineered_mlp_hidden=engineered_mlp_hidden,
         engineered_mlp_output=engineered_mlp_output,
         fusion_hidden=fusion_hidden,
+        # Stochastic depth rate (effective Stage 1 value)
+        drop_path_rate=stage1_drop_path_rate,
     ).to(device)
     
     # Log architecture configuration
@@ -1321,6 +1883,17 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     transfer_mode = str(cfg_run.get("stage1_mlm_transfer_mode", "embed_only"))
     if transfer_mode not in {"none", "embed_only", "embed_plus_adapter"}:
         raise ValueError(f"Invalid stage1_mlm_transfer_mode: {transfer_mode}")
+
+    # Safety guard: ensure Stage 1 kmer matches mlm_kmer when loading MLM weights
+    if load_mlm_weights and transfer_mode != "none":
+        mlm_kmer = int(cfg_run.get("mlm_kmer", 3))
+        if kmer != mlm_kmer:
+            raise ValueError(
+                f"K-mer mismatch: Stage 1 kmer={kmer} but mlm_kmer={mlm_kmer}. "
+                f"When stage1_load_mlm_weights=true, these must match to ensure "
+                f"proper weight transfer. Either set kmer={mlm_kmer} or disable "
+                f"stage1_load_mlm_weights."
+            )
     mlm_encoder_path = cfg_run.get("mlm_encoder_path")
     mlm_encoder_checkpoint = cfg_run.get("mlm_encoder_checkpoint")
     mlm_checkpoint = mlm_encoder_path or mlm_encoder_checkpoint
@@ -1427,35 +2000,56 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         min_lr_ratio=0.02,  # Decay to lower minimum
     )
     LOGGER.info("Using cosine schedule with %d warmup steps", warmup_steps)
-    
-    # SWA setup for breaking plateaus
-    use_swa = bool(cfg_run.get("use_swa", True))
-    swa_start_epoch = int(cfg_run.get("swa_start_epoch", 60))
-    swa_lr = float(cfg_run.get("swa_lr", 5e-5))
+
+    # =========================================================================
+    # Stage 1 effective hyperparameters (with stage1_ overrides and fallbacks)
+    # =========================================================================
+    stage1_label_smoothing = get_with_fallback("stage1_label_smoothing", "label_smoothing", 0.05)
+    stage1_use_mixup = get_with_fallback("stage1_use_mixup", "use_mixup", True)
+    stage1_mixup_alpha = get_with_fallback("stage1_mixup_alpha", "mixup_alpha", 0.2)
+    stage1_use_swa = get_with_fallback("stage1_use_swa", "use_swa", True)
+    stage1_swa_start_epoch = get_with_fallback("stage1_swa_start_epoch", "swa_start_epoch", 60)
+    stage1_swa_lr = get_with_fallback("stage1_swa_lr", "swa_lr", 5e-5)
+    stage1_drop_path_rate = get_with_fallback("stage1_drop_path_rate", "drop_path_rate", 0.1)
+    stage1_use_focal_loss = bool(cfg_run.get("stage1_use_focal_loss", True))
+
+    # Log effective Stage 1 hyperparameters
+    LOGGER.info("=" * 60)
+    LOGGER.info("EFFECTIVE STAGE 1 HYPERPARAMETERS")
+    LOGGER.info("=" * 60)
+    LOGGER.info("  stage1_label_smoothing: %.3f", stage1_label_smoothing)
+    LOGGER.info("  stage1_use_mixup: %s", stage1_use_mixup)
+    LOGGER.info("  stage1_mixup_alpha: %.3f", stage1_mixup_alpha)
+    LOGGER.info("  stage1_use_swa: %s", stage1_use_swa)
+    LOGGER.info("  stage1_swa_start_epoch: %d", stage1_swa_start_epoch)
+    LOGGER.info("  stage1_swa_lr: %.2e", stage1_swa_lr)
+    LOGGER.info("  stage1_drop_path_rate: %.3f", stage1_drop_path_rate)
+    LOGGER.info("  stage1_use_focal_loss: %s", stage1_use_focal_loss)
+    LOGGER.info("=" * 60)
+
+    # SWA setup for breaking plateaus (using effective Stage 1 values)
     swa_model = None
     swa_scheduler = None
-    
-    if use_swa:
+
+    if stage1_use_swa:
         swa_model = AveragedModel(model)
-        swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=10)
-        LOGGER.info("SWA enabled: starts at epoch %d with LR %.2e", swa_start_epoch, swa_lr)
-    
-    # Loss function with label smoothing
-    label_smoothing = float(cfg_run.get("label_smoothing", 0.05))
-    use_focal_loss = bool(cfg_run.get("stage1_use_focal_loss", True))
+        swa_scheduler = SWALR(optimizer, swa_lr=stage1_swa_lr, anneal_epochs=10)
+        LOGGER.info("SWA enabled: starts at epoch %d with LR %.2e", stage1_swa_start_epoch, stage1_swa_lr)
+
+    # Loss function with label smoothing (using effective Stage 1 values)
     focal_alpha = float(cfg_run.get("stage1_focal_alpha", 0.5))
     focal_gamma = float(cfg_run.get("stage1_focal_gamma", 2.0))
-    
-    if use_focal_loss:
+
+    if stage1_use_focal_loss:
         criterion = FocalLossWithSmoothing(
-            alpha=focal_alpha, 
+            alpha=focal_alpha,
             gamma=focal_gamma,
-            smoothing=label_smoothing,
+            smoothing=stage1_label_smoothing,
         )
-        LOGGER.info("Using focal loss with smoothing=%.2f", label_smoothing)
+        LOGGER.info("Using focal loss with smoothing=%.2f", stage1_label_smoothing)
     else:
-        criterion = LabelSmoothingBCE(smoothing=label_smoothing)
-        LOGGER.info("Using BCE with smoothing=%.2f", label_smoothing)
+        criterion = LabelSmoothingBCE(smoothing=stage1_label_smoothing)
+        LOGGER.info("Using BCE with smoothing=%.2f", stage1_label_smoothing)
     
     # =========================================================================
     # OVERFIT DEBUG MODE: Train on 32 samples for 200 steps
@@ -1529,17 +2123,91 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             "best_epoch": 0,
         }
 
+    # =========================================================================
+    # KNOWLEDGE DISTILLATION SETUP
+    # =========================================================================
+    from dataset import KmerVocabulary
+
+    distill_cfg = cfg_run.get("distill", {})
+    distill_enabled = bool(distill_cfg.get("enabled", False))
+    teacher_model = None
+    teacher_vocab = None
+    distill_criterion = None
+
+    if distill_enabled:
+        distill_alpha = float(distill_cfg.get("alpha", 0.5))
+        distill_temperature = float(distill_cfg.get("temperature", 2.0))
+        teacher_ckpt = distill_cfg.get("teacher_ckpt", "../artifacts/checkpoints/stage1_k6.pt")
+        teacher_kmer = int(distill_cfg.get("teacher_kmer", 6))
+
+        # Resolve teacher checkpoint path
+        teacher_ckpt_path = Path(teacher_ckpt)
+        if not teacher_ckpt_path.is_absolute():
+            teacher_ckpt_path = (script_dir / teacher_ckpt_path).resolve()
+
+        if not teacher_ckpt_path.exists():
+            LOGGER.error("Teacher checkpoint not found: %s", teacher_ckpt_path)
+            LOGGER.error("Distillation requires a trained teacher model. Disabling distillation.")
+            distill_enabled = False
+        else:
+            LOGGER.info("=" * 60)
+            LOGGER.info("KNOWLEDGE DISTILLATION ENABLED")
+            LOGGER.info("=" * 60)
+            LOGGER.info("Teacher checkpoint: %s", teacher_ckpt_path)
+            LOGGER.info("Teacher k-mer: %d, Student k-mer: %d", teacher_kmer, kmer)
+            LOGGER.info("Alpha: %.2f, Temperature: %.2f", distill_alpha, distill_temperature)
+            LOGGER.info("=" * 60)
+
+            # Update distill config with teacher_kmer for load_teacher_model
+            distill_cfg["teacher_kmer"] = teacher_kmer
+            cfg_run["distill"] = distill_cfg
+
+            # Load teacher model
+            teacher_model = load_teacher_model(cfg_run, teacher_ckpt_path, device)
+
+            # Get teacher vocab
+            vocab_cache_dir = Path(cfg_run.get("vocab_cache_dir", "../artifacts/vocabs"))
+            if not vocab_cache_dir.is_absolute():
+                vocab_cache_dir = (script_dir / vocab_cache_dir).resolve()
+            teacher_vocab_path = vocab_cache_dir / f"k{teacher_kmer}_vocab.json"
+            teacher_vocab = KmerVocabulary.load(teacher_vocab_path)
+
+            # Create distillation criterion with base criterion (focal loss or BCE)
+            distill_criterion = DistillationLoss(
+                alpha=distill_alpha,
+                temperature=distill_temperature,
+                base_criterion=criterion,  # Use the same loss function for CE part
+            )
+
+            # Dry run verification
+            dry_run_ok = verify_distillation_dry_run(
+                student=model,
+                teacher=teacher_model,
+                train_loader=train_loader,
+                device=device,
+                teacher_vocab=teacher_vocab,
+                student_vocab=stage1_vocab,
+            )
+
+            if not dry_run_ok:
+                LOGGER.error("Distillation dry-run failed! Falling back to regular training.")
+                distill_enabled = False
+                teacher_model = None
+                teacher_vocab = None
+                distill_criterion = None
+            else:
+                LOGGER.info("Distillation setup complete. Training will use CE + KL loss.")
+
     # Training settings
     grad_accum_steps = int(cfg_run.get("grad_accum_steps", 2))
     grad_clip_norm = float(cfg_run.get("grad_clip_norm", 1.0))
     param_norm_warn = float(cfg_run.get("param_norm_warn", 150.0))
     param_norm_cap = float(cfg_run.get("param_norm_cap", 200.0))
-    use_mixup = bool(cfg_run.get("use_mixup", True))
-    mixup_alpha = float(cfg_run.get("mixup_alpha", 0.2))
+    # Note: stage1_use_mixup and stage1_mixup_alpha are computed earlier with fallbacks
     patience = int(cfg_run.get("early_stopping_patience", 15))
 
     global_optimizer_steps = 0
-    
+
     class_balance = compute_class_balance(train_loader)
     LOGGER.info(
         "Class balance: %.2f%% positive (%d/%d)",
@@ -1564,8 +2232,8 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     swa_started = False
     
     for epoch in range(1, epochs + 1):
-        # Check if we should start SWA
-        in_swa_phase = use_swa and epoch >= swa_start_epoch
+        # Check if we should start SWA (using effective Stage 1 values)
+        in_swa_phase = stage1_use_swa and epoch >= stage1_swa_start_epoch
         if in_swa_phase and not swa_started:
             LOGGER.info("=" * 40)
             LOGGER.info("Starting SWA phase at epoch %d", epoch)
@@ -1577,24 +2245,47 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         LOGGER.info("Epoch %d/%d %s (LR: %.2e)", epoch, epochs, phase_str, current_lr)
         
         remaining_steps = None if ablation_max_steps is None else max(ablation_max_steps - global_optimizer_steps, 0)
-        train_metrics = run_epoch(
-            train_loader,
-            model,
-            criterion,
-            device,
-            optimizer=optimizer,
-            scheduler=None if in_swa_phase else scheduler,  # Use SWA scheduler in SWA phase
-            desc="Train",
-            grad_accum_steps=grad_accum_steps,
-            max_optimizer_steps=remaining_steps,
-            grad_clip_norm=grad_clip_norm,
-            param_norm_warn=param_norm_warn,
-            param_norm_cap=param_norm_cap,
-            use_mixup=use_mixup and not in_swa_phase,  # Disable mixup in SWA phase
-            mixup_alpha=mixup_alpha,
-            amp_ctx=amp_ctx,
-            scaler=scaler,
-        )
+
+        # Use distillation training if enabled
+        if distill_enabled and teacher_model is not None:
+            train_metrics = run_distillation_epoch(
+                student_loader=train_loader,
+                student_model=model,
+                teacher_model=teacher_model,
+                distill_criterion=distill_criterion,
+                device=device,
+                student_vocab=stage1_vocab,
+                teacher_vocab=teacher_vocab,
+                optimizer=optimizer,
+                scheduler=None if in_swa_phase else scheduler,
+                desc="Train-Distill",
+                grad_accum_steps=grad_accum_steps,
+                max_optimizer_steps=remaining_steps,
+                grad_clip_norm=grad_clip_norm,
+                amp_ctx=amp_ctx,
+                scaler=scaler,
+                param_norm_warn=param_norm_warn,
+                param_norm_cap=param_norm_cap,
+            )
+        else:
+            train_metrics = run_epoch(
+                train_loader,
+                model,
+                criterion,
+                device,
+                optimizer=optimizer,
+                scheduler=None if in_swa_phase else scheduler,  # Use SWA scheduler in SWA phase
+                desc="Train",
+                grad_accum_steps=grad_accum_steps,
+                max_optimizer_steps=remaining_steps,
+                grad_clip_norm=grad_clip_norm,
+                param_norm_warn=param_norm_warn,
+                param_norm_cap=param_norm_cap,
+                use_mixup=stage1_use_mixup and not in_swa_phase,  # Disable mixup in SWA phase
+                mixup_alpha=stage1_mixup_alpha,
+                amp_ctx=amp_ctx,
+                scaler=scaler,
+            )
         global_optimizer_steps += int(train_metrics.get("optimizer_steps", 0))
         reached_max_steps = ablation_max_steps is not None and global_optimizer_steps >= ablation_max_steps
         
@@ -1647,15 +2338,27 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 LOGGER.warning("SWA evaluation failed: %s", e)
                 swa_val_metrics = None
         
-        LOGGER.info(
-            "Train - Loss: %.4f | Acc: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f | MCC: %.4f",
-            train_metrics["loss"],
-            train_metrics["accuracy"],
-            train_metrics["precision"],
-            train_metrics["recall"],
-            train_metrics["f1"],
-            train_metrics["mcc"],
-        )
+        # Log training metrics
+        if distill_enabled and "ce_loss" in train_metrics:
+            LOGGER.info(
+                "Train - Loss: %.4f (CE: %.4f, KL: %.4f) | Acc: %.4f | F1: %.4f | MCC: %.4f",
+                train_metrics["loss"],
+                train_metrics.get("ce_loss", 0.0),
+                train_metrics.get("kl_loss", 0.0),
+                train_metrics["accuracy"],
+                train_metrics["f1"],
+                train_metrics["mcc"],
+            )
+        else:
+            LOGGER.info(
+                "Train - Loss: %.4f | Acc: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f | MCC: %.4f",
+                train_metrics["loss"],
+                train_metrics["accuracy"],
+                train_metrics["precision"],
+                train_metrics["recall"],
+                train_metrics["f1"],
+                train_metrics["mcc"],
+            )
         LOGGER.info(
             "Val   - Loss: %.4f | Acc: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f | MCC: %.4f",
             val_metrics["loss"],
@@ -1754,28 +2457,28 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         },
         "training_enhancements": {
             "layer_wise_lr_decay": layer_lr_decay,
-            "label_smoothing": label_smoothing,
-            "mixup_alpha": mixup_alpha,
-            "use_swa": use_swa,
-            "swa_start_epoch": swa_start_epoch if use_swa else None,
-            "swa_lr": swa_lr if use_swa else None,
-            "drop_path_rate": float(cfg_run.get("drop_path_rate", 0.1)),
+            "stage1_label_smoothing": stage1_label_smoothing,
+            "stage1_mixup_alpha": stage1_mixup_alpha,
+            "stage1_use_swa": stage1_use_swa,
+            "stage1_swa_start_epoch": stage1_swa_start_epoch if stage1_use_swa else None,
+            "stage1_swa_lr": stage1_swa_lr if stage1_use_swa else None,
+            "stage1_drop_path_rate": stage1_drop_path_rate,
             "ablation_max_steps_stage1": ablation_max_steps,
             "ablation_disable_wandb": bool(cfg_run.get("ablation_disable_wandb", False)),
         },
     }
-    
+
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
     LOGGER.info("Saved training report to %s", report_path)
-    
+
     LOGGER.info("=" * 60)
     LOGGER.info("TRAINING COMPLETE")
-    LOGGER.info("Best Epoch: %d%s", best_epoch, " (SWA)" if swa_started and best_epoch >= swa_start_epoch else "")
+    LOGGER.info("Best Epoch: %d%s", best_epoch, " (SWA)" if swa_started and best_epoch >= stage1_swa_start_epoch else "")
     LOGGER.info("Best Val Accuracy: %.4f (%.2f%%)", best_val_acc, best_val_acc * 100)
     LOGGER.info("Best Val MCC: %.4f", best_val_mcc)
-    if use_swa:
+    if stage1_use_swa:
         LOGGER.info("SWA was %s", "active" if swa_started else "not triggered (training ended early)")
     LOGGER.info("=" * 60)
 

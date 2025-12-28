@@ -1017,6 +1017,8 @@ class GeneWhispererStage1(nn.Module):
         engineered_mlp_hidden: int = 256,
         engineered_mlp_output: int = 128,
         fusion_hidden: int = 256,
+        # Stochastic depth (drop path) rate for encoder
+        drop_path_rate: float = 0.1,
     ):
         super().__init__()
         
@@ -1037,10 +1039,11 @@ class GeneWhispererStage1(nn.Module):
             ff_dim=ff_dim,
             dropout=dropout,
             pad_token_id=pad_token_id,
+            drop_path_rate=drop_path_rate,
         )
         # Copy embedding weights from encoder
         self.embedding.weight = self._full_encoder.embedding.weight
-        
+
         # Step 2: CNN/TCN for local pattern extraction (FIRST)
         if use_tcn:
             self.feature_extractor = MultiScaleTCN(
@@ -1230,17 +1233,31 @@ class GeneWhispererStage1(nn.Module):
         self,
         tokens: torch.Tensor,
         engineered_features: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Forward pass with new architecture order.
-        
+
         Args:
             tokens: (B, L) k-mer token indices
             engineered_features: Optional (B, engineered_dim) hand-crafted features
+            return_logits: If True, also return pre-sigmoid logits for distillation
         Returns:
-            (B, 1) promoter probability
+            (B, 1) promoter probability, or tuple of (probs, logits) if return_logits=True
         """
         _, fused = self.extract_features(tokens, engineered_features)
+
+        if return_logits:
+            # Run classifier up to (but not including) sigmoid
+            # classifier is: Linear -> LayerNorm -> GELU -> Dropout -> Linear -> LayerNorm -> GELU -> Dropout -> Linear -> Sigmoid
+            # We need output of the last Linear (index -2, before Sigmoid at index -1)
+            x = fused
+            for layer in list(self.classifier)[:-1]:  # All except final Sigmoid
+                x = layer(x)
+            logits = x
+            probs = torch.sigmoid(logits)
+            return probs, logits
+
         return self.classifier(fused)
 
 
@@ -1490,6 +1507,8 @@ class GeneWhispererStage2(nn.Module):
         engineered_mlp_hidden: int = 256,
         engineered_mlp_output: int = 128,
         fusion_hidden: int = 256,
+        # Stochastic depth (drop path) rate for encoder
+        drop_path_rate: float = 0.1,
     ):
         super().__init__()
 
@@ -1511,6 +1530,7 @@ class GeneWhispererStage2(nn.Module):
             ff_dim=ff_dim,
             dropout=dropout,
             pad_token_id=pad_token_id,
+            drop_path_rate=drop_path_rate,
         )
         # Copy embedding weights from encoder
         self.embedding.weight = self._full_encoder.embedding.weight

@@ -263,16 +263,60 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     cfg_run["kmer"] = stage2_kmer
     LOGGER.info("Stage 2 using k-mer size: %d", stage2_kmer)
 
+    # Helper to get stage2-specific config with fallback to global value when null
+    def get_with_fallback(stage_key: str, global_key: str, default: Any) -> Any:
+        """Get stage2-specific value, falling back to global if null/missing."""
+        val = cfg_run.get(stage_key)
+        if val is not None:
+            return val
+        return cfg_run.get(global_key, default)
+
+    # =========================================================================
+    # Compute "effective" Stage 2 hyperparameters with fallback to global values
+    # =========================================================================
+    stage2_label_smoothing = float(get_with_fallback("stage2_label_smoothing", "label_smoothing", 0.05))
+    stage2_use_mixup = bool(get_with_fallback("stage2_use_mixup", "use_mixup", True))
+    stage2_mixup_alpha = float(get_with_fallback("stage2_mixup_alpha", "mixup_alpha", 0.2))
+    stage2_use_swa = bool(get_with_fallback("stage2_use_swa", "use_swa", True))
+    stage2_swa_start_epoch = int(get_with_fallback("stage2_swa_start_epoch", "swa_start_epoch", 60))
+    stage2_swa_lr = float(get_with_fallback("stage2_swa_lr", "swa_lr", 5e-5))
+    stage2_drop_path_rate = float(get_with_fallback("stage2_drop_path_rate", "drop_path_rate", 0.1))
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = (script_dir / "../runs" / f"stage2_{timestamp}").resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    # Resolve Stage 1 checkpoint path with auto-selection by k-mer
+    # Priority: 1) --stage1_ckpt CLI arg  2) stage1_ckpt_by_k[stage2_kmer]  3) None (fall back to MLM weights)
     stage1_ckpt_path = _resolve_optional_path(cfg_run.get("stage1_ckpt"), base_dir=script_dir)
+    stage1_ckpt_auto_selected = False
+    if stage1_ckpt_path is None:
+        # Auto-select from stage1_ckpt_by_k mapping
+        stage1_ckpt_by_k = cfg_run.get("stage1_ckpt_by_k")
+        if isinstance(stage1_ckpt_by_k, dict):
+            # Keys may be int or str depending on YAML parsing
+            ckpt_for_k = stage1_ckpt_by_k.get(stage2_kmer) or stage1_ckpt_by_k.get(str(stage2_kmer))
+            if ckpt_for_k:
+                stage1_ckpt_path = _resolve_optional_path(ckpt_for_k, base_dir=script_dir)
+                if stage1_ckpt_path and stage1_ckpt_path.exists():
+                    stage1_ckpt_auto_selected = True
+                    LOGGER.info("Auto-selected Stage 1 checkpoint for k=%d: %s", stage2_kmer, stage1_ckpt_path)
+                elif stage1_ckpt_path:
+                    LOGGER.warning(
+                        "stage1_ckpt_by_k[%d] points to non-existent file: %s; will fall back to MLM weights",
+                        stage2_kmer,
+                        stage1_ckpt_path,
+                    )
+                    stage1_ckpt_path = None
+        else:
+            LOGGER.debug("No stage1_ckpt_by_k mapping configured; will use MLM weights if available")
+
     resolved_config: Dict[str, Any] = {
         "script": "train_stage2.py",
         "timestamp": timestamp,
         "config_path": config_id,
         "stage1_ckpt": str(stage1_ckpt_path) if stage1_ckpt_path else None,
+        "stage1_ckpt_auto_selected": stage1_ckpt_auto_selected,
         # System info for reproducibility
         "system_info": {
             "python_version": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
@@ -438,6 +482,8 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         engineered_mlp_hidden=engineered_mlp_hidden,
         engineered_mlp_output=engineered_mlp_output,
         fusion_hidden=fusion_hidden,
+        # Stochastic depth (drop path)
+        drop_path_rate=stage2_drop_path_rate,
     ).to(device)
 
     LOGGER.info("=" * 60)
@@ -482,6 +528,30 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             engineered_mlp_hidden,
             engineered_mlp_output,
         )
+    LOGGER.info("=" * 60)
+
+    # Log effective Stage 2 hyperparameters
+    use_focal_loss_preview = bool(cfg_run.get("stage2_use_focal_loss", cfg_run.get("stage1_use_focal_loss", True)))
+    LOGGER.info("=" * 60)
+    LOGGER.info("EFFECTIVE STAGE 2 HYPERPARAMETERS")
+    LOGGER.info("=" * 60)
+    LOGGER.info(
+        "  label_smoothing=%.3f | use_mixup=%s (alpha=%.2f)",
+        stage2_label_smoothing,
+        stage2_use_mixup,
+        stage2_mixup_alpha,
+    )
+    LOGGER.info(
+        "  use_swa=%s (start_epoch=%d, lr=%.2e)",
+        stage2_use_swa,
+        stage2_swa_start_epoch,
+        stage2_swa_lr,
+    )
+    LOGGER.info(
+        "  drop_path_rate=%.3f | focal_loss=%s",
+        stage2_drop_path_rate,
+        use_focal_loss_preview,
+    )
     LOGGER.info("=" * 60)
 
     load_mlm_weights = bool(cfg_run.get("stage2_load_mlm_weights", False))
@@ -604,18 +674,16 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     )
     LOGGER.info("Using cosine schedule with %d warmup steps", warmup_steps)
 
-    use_swa = bool(cfg_run.get("use_swa", True))
-    swa_start_epoch = int(cfg_run.get("swa_start_epoch", 60))
-    swa_lr = float(cfg_run.get("swa_lr", 5e-5))
+    # Use effective Stage 2 SWA parameters (computed earlier with fallbacks)
     swa_model = None
     swa_scheduler = None
 
-    if use_swa:
+    if stage2_use_swa:
         swa_model = AveragedModel(model)
-        swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=10)
-        LOGGER.info("SWA enabled: starts at epoch %d with LR %.2e", swa_start_epoch, swa_lr)
+        swa_scheduler = SWALR(optimizer, swa_lr=stage2_swa_lr, anneal_epochs=10)
+        LOGGER.info("SWA enabled: starts at epoch %d with LR %.2e", stage2_swa_start_epoch, stage2_swa_lr)
 
-    label_smoothing = float(cfg_run.get("label_smoothing", 0.05))
+    # Use effective Stage 2 label smoothing (computed earlier with fallbacks)
     use_focal_loss = bool(cfg_run.get("stage2_use_focal_loss", cfg_run.get("stage1_use_focal_loss", True)))
     focal_alpha = float(cfg_run.get("stage2_focal_alpha", cfg_run.get("stage1_focal_alpha", 0.5)))
     focal_gamma = float(cfg_run.get("stage2_focal_gamma", cfg_run.get("stage1_focal_gamma", 2.0)))
@@ -624,12 +692,12 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         criterion = stage1.FocalLossWithSmoothing(
             alpha=focal_alpha,
             gamma=focal_gamma,
-            smoothing=label_smoothing,
+            smoothing=stage2_label_smoothing,
         )
-        LOGGER.info("Using focal loss with smoothing=%.2f", label_smoothing)
+        LOGGER.info("Using focal loss with smoothing=%.2f", stage2_label_smoothing)
     else:
-        criterion = stage1.LabelSmoothingBCE(smoothing=label_smoothing)
-        LOGGER.info("Using BCE with smoothing=%.2f", label_smoothing)
+        criterion = stage1.LabelSmoothingBCE(smoothing=stage2_label_smoothing)
+        LOGGER.info("Using BCE with smoothing=%.2f", stage2_label_smoothing)
 
     # =========================================================================
     # OVERFIT DEBUG MODE: Train on 32 samples for 200 steps
@@ -708,8 +776,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     grad_clip_norm = float(cfg_run.get("grad_clip_norm", 1.0))
     param_norm_warn = float(cfg_run.get("param_norm_warn", 150.0))
     param_norm_cap = float(cfg_run.get("param_norm_cap", 200.0))
-    use_mixup = bool(cfg_run.get("use_mixup", True))
-    mixup_alpha = float(cfg_run.get("mixup_alpha", 0.2))
+    # Use effective Stage 2 mixup parameters (computed earlier with fallbacks)
     patience = int(cfg_run.get("early_stopping_patience", 15))
 
     global_optimizer_steps = 0
@@ -736,7 +803,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     swa_started = False
 
     for epoch in range(1, epochs + 1):
-        in_swa_phase = use_swa and epoch >= swa_start_epoch
+        in_swa_phase = stage2_use_swa and epoch >= stage2_swa_start_epoch
         if in_swa_phase and not swa_started:
             LOGGER.info("=" * 40)
             LOGGER.info("Starting SWA phase at epoch %d", epoch)
@@ -761,8 +828,8 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             grad_clip_norm=grad_clip_norm,
             param_norm_warn=param_norm_warn,
             param_norm_cap=param_norm_cap,
-            use_mixup=use_mixup and not in_swa_phase,
-            mixup_alpha=mixup_alpha,
+            use_mixup=stage2_use_mixup and not in_swa_phase,
+            mixup_alpha=stage2_mixup_alpha,
             amp_ctx=amp_ctx,
             scaler=scaler,
         )
@@ -907,12 +974,13 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         },
         "training_enhancements": {
             "layer_wise_lr_decay": layer_lr_decay,
-            "label_smoothing": label_smoothing,
-            "mixup_alpha": mixup_alpha,
-            "use_swa": use_swa,
-            "swa_start_epoch": swa_start_epoch if use_swa else None,
-            "swa_lr": swa_lr if use_swa else None,
-            "drop_path_rate": float(cfg_run.get("drop_path_rate", 0.1)),
+            "label_smoothing": stage2_label_smoothing,
+            "mixup_alpha": stage2_mixup_alpha,
+            "use_mixup": stage2_use_mixup,
+            "use_swa": stage2_use_swa,
+            "swa_start_epoch": stage2_swa_start_epoch if stage2_use_swa else None,
+            "swa_lr": stage2_swa_lr if stage2_use_swa else None,
+            "drop_path_rate": stage2_drop_path_rate,
             "ablation_max_steps_stage2": ablation_max_steps,
             "ablation_disable_wandb": bool(cfg_run.get("ablation_disable_wandb", False)),
             "stage1_ckpt": str(stage1_ckpt_path) if stage1_ckpt_path else None,

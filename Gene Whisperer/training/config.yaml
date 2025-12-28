@@ -10,7 +10,7 @@ seed: 1337
 # =============================================================================
 # DATA SETTINGS
 # =============================================================================
-max_bp_len: 81
+max_bp_len: 234
 batch_size: 32  # Smaller batch for M4 memory, compensated by grad_accum
 delimiter: "\t"
 train_val_split: 0.9
@@ -52,7 +52,7 @@ stage2_strength_negative: 0
 # Transformer settings
 # NOTE: These should match MLM pretraining dimensions for proper weight transfer
 embedding_dim: 256       # Match mlm_embedding_dim for weight transfer
-transformer_layers: 6    # Reduced from 8 to prevent overfitting with TCN
+transformer_layers: 8    # Was 6,Reduced from 8 to prevent overfitting with TCN/testing 8
 transformer_heads: 8
 transformer_ff_dim: 1024  # Match mlm_transformer_ff_dim (4x embedding)
 transformer_dropout: 0.15  # Slightly higher for fine-tuning
@@ -63,10 +63,10 @@ transformer_dropout: 0.15  # Slightly higher for fine-tuning
 use_attention_pool: true
 
 # K-mer tokenization
-kmer: 3                     # Default k-mer for Stage 1
+kmer: 6                     # Default k-mer for Stage 1 (must match mlm_kmer when stage1_load_mlm_weights=true)
 stage2_kmer: 6              # K-mer for Stage 2 (recommended: 6 for better promoter strength prediction)
-vocab_size: 67  # 64 + 3 special tokens
-pad_token_id: 66
+vocab_size: 4099  # 4096 + 3 special tokens (4^6 for 6-mers)
+pad_token_id: 4098
 vocab_cache_dir: ../artifacts/vocabs
 
 # =============================================================================
@@ -138,6 +138,11 @@ early_stopping_patience: 25  # More patience for better convergence
 grad_accum_steps: 4  # Effective batch = 32 * 4 = 128
 grad_clip_norm: 1.0
 
+# Parameter norm monitoring (adjusted for 8-layer model with ~14M params)
+# After MLM weight loading, param norm is ~200, so thresholds need headroom
+param_norm_warn: 250   # Warning threshold (was 150, too low for 8-layer model)
+param_norm_cap: 300    # Hard cap - params scaled down if exceeded (was 200)
+
 # Layer-wise learning rate decay (lower LR for earlier layers)
 # This helps preserve pretrained features while fine-tuning upper layers
 layer_lr_decay: 0.8  # Each layer gets 0.8x the LR of the layer above
@@ -149,7 +154,7 @@ drop_path_rate: 0.1
 # LOSS FUNCTION
 # =============================================================================
 # Focal loss with REDUCED label smoothing (was too aggressive)
-stage1_use_focal_loss: true
+stage1_use_focal_loss: false
 stage1_focal_alpha: 0.5
 stage1_focal_gamma: 2.0
 label_smoothing: 0.05  # Reduced from 0.1 - less smoothing for higher accuracy
@@ -169,6 +174,30 @@ swa_lr: 0.00005  # Low constant LR for SWA phase
 swa_anneal_epochs: 10  # Anneal to SWA LR over 10 epochs
 
 # =============================================================================
+# STAGE-SPECIFIC OVERRIDES
+# =============================================================================
+# Optional per-stage overrides. If not set, falls back to global value.
+# These allow fine-grained control of training hyperparameters per stage.
+
+# Stage 1 overrides (Step 4: disable focal loss and label smoothing)
+stage1_label_smoothing: 0.0
+stage1_use_mixup: null        # null = use global use_mixup
+stage1_mixup_alpha: null      # null = use global mixup_alpha
+stage1_use_swa: null          # null = use global use_swa
+stage1_swa_start_epoch: null  # null = use global swa_start_epoch
+stage1_swa_lr: null           # null = use global swa_lr
+stage1_drop_path_rate: null   # null = use global drop_path_rate
+
+# Stage 2 overrides (Step 3: disable regularization for cleaner signal)
+stage2_label_smoothing: 0.0
+stage2_use_mixup: false
+stage2_mixup_alpha: 0.0
+stage2_use_swa: false
+stage2_swa_start_epoch: null  # null = use global swa_start_epoch
+stage2_swa_lr: null           # null = use global swa_lr
+stage2_drop_path_rate: 0.0
+
+# =============================================================================
 # MLM PRETRAINING (Enhanced V4 - targeting loss < 1.0)
 # =============================================================================
 # Based on DNABERT, msBERT, and iPro-TCN papers
@@ -180,11 +209,12 @@ swa_anneal_epochs: 10  # Anneal to SWA LR over 10 epochs
 
 stage1_load_mlm_weights: true
 stage2_load_mlm_weights: false
-stage1_mlm_transfer_mode: embed_only
-stage2_mlm_transfer_mode: embed_only
+stage1_mlm_transfer_mode: embed_plus_adapter
+stage2_mlm_transfer_mode: embed_plus_adapter
 stage1_freeze_layers: 0  # Don't freeze - let all layers adapt
 stage1_unfreeze_epoch: null
-mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k3.pt
+# mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k3.pt  # k=3 reference (legacy)
+mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k6.pt
 
 # MLM training settings (for pretraining script)
 # If true, include reverse-complement for every window (≈2x corpus)
@@ -197,15 +227,15 @@ mlm_fasta_paths:  # Multi-genome training (E. coli, B. subtilis, S. cerevisiae)
 mlm_species_weights: [0.45, 0.35, 0.20]  # Sampling weights: E. coli, B. subtilis, yeast
 mlm_steps_per_epoch: 5000  # Batches per epoch for streaming (reasonable for MacBook)
 mlm_unknown_base_strategy: "random"  # Replace unknown bases (N, etc.) with random A/C/G/T
-mlm_window_size: 81
+mlm_window_size: 234
 mlm_stride: 20
 mlm_batch_size: 128
 mlm_epochs: 200  # More epochs for better convergence
 mlm_lr: 0.0002  # Lower LR for stability (was 1e-3, now 2e-4)
 mlm_weight_decay: 0.01
-mlm_kmer: 3
-mlm_vocab_path: ../artifacts/vocabs/mlm_k3_vocab.json
-mlm_encoder_path: ../artifacts/mlm_encoder_k3.pt
+mlm_kmer: 6
+mlm_vocab_path: ../artifacts/vocabs/mlm_k6_vocab.json
+mlm_encoder_path: ../artifacts/mlm_encoder_k6.pt
 
 # MLM architecture settings (ENHANCED for lower loss)
 # Larger model learns better representations during pretraining
@@ -248,6 +278,13 @@ mlm_length_curriculum_end_pct: 0.3       # % of steps to reach full length (30%)
 # CHECKPOINTS
 # =============================================================================
 stage1_checkpoint_name: null  # Auto-generated: stage1_v2_k{kmer}.pt
+
+# Stage 1 checkpoint mapping by k-mer size (for Stage 2 auto-selection)
+# Stage 2 will auto-select the matching Stage 1 checkpoint based on its k-mer
+# Override with --stage1_ckpt CLI arg if needed
+stage1_ckpt_by_k:
+  4: ../artifacts/checkpoints/stage1_k4.pt
+  6: ../artifacts/checkpoints/stage1_k6.pt
 
 # =============================================================================
 # VISUALIZATION (Optional)
@@ -333,3 +370,19 @@ ablation:
   distill_base_variant: baseline  # reference variant for score/cost deltas
   negligible_score_drop: 0.01   # within 1% of base composite score = "safe to remove"
   min_cost_improvement: 0.03    # requires >=3% cost improvement to recommend removal
+
+# =============================================================================
+# KNOWLEDGE DISTILLATION (6-mer teacher → 4-mer student)
+# =============================================================================
+# Enables training a smaller k-mer model (student) using soft targets from
+# a larger k-mer model (teacher). This allows transferring knowledge from
+# a well-trained 6-mer model to a 4-mer model without token alignment.
+#
+# Loss: L = CE(student, labels) + alpha * KL(softmax(student/T), softmax(teacher/T))
+# Where T is temperature (higher = softer targets) and alpha balances losses.
+distill:
+  enabled: true
+  alpha: 0.5              # Weight for KL loss (0 = CE only, 1 = KL only)
+  temperature: 2.0        # Temperature for softening logits (higher = softer)
+  teacher_ckpt: ../artifacts/checkpoints/stage1_k6.pt  # Path to trained teacher checkpoint
+  teacher_kmer: 6         # K-mer size used by the teacher model

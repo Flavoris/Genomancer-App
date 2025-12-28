@@ -1,11 +1,11 @@
 Gene Whisperer Baseline Run
 ============================
-Timestamp: 2025-12-26 08:53:01
+Timestamp: 2025-12-27 19:02:10
 Config:    /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/config.yaml
 
 Reports:
--rw-r--r--@ 1 flavorisbelue  staff  1793 Dec 26 08:53 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage1_report_k3.json
--rw-r--r--@ 1 flavorisbelue  staff  1790 Dec 26 08:53 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage1_report_k4.json
--rw-r--r--@ 1 flavorisbelue  staff  1792 Dec 26 08:53 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage1_report_k6.json
--rw-r--r--@ 1 flavorisbelue  staff  1640 Dec 26 08:53 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage2_report_k3.json
--rw-r--r--@ 1 flavorisbelue  staff  1645 Dec 26 08:53 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage2_report_k6.json
+-rw-r--r--@ 1 flavorisbelue  staff  1793 Dec 27 19:02 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage1_report_k3.json
+-rw-r--r--@ 1 flavorisbelue  staff  1790 Dec 27 19:02 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage1_report_k4.json
+-rw-r--r--@ 1 flavorisbelue  staff  1793 Dec 27 19:02 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage1_report_k6.json
+-rw-r--r--@ 1 flavorisbelue  staff  1640 Dec 27 19:02 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage2_report_k3.json
+-rw-r--r--@ 1 flavorisbelue  staff  1715 Dec 27 19:02 /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/training/../runs/baseline/stage2_report_k6.json

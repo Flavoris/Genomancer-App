@@ -2171,6 +2171,14 @@ def _load_or_build_vocab_for_streaming(
 
 
 def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
+    """Run a short streaming dry run to verify MLM configuration.
+
+    Prints:
+    - kmer value
+    - vocab size
+    - sample tokenization length for a short sequence
+    - target checkpoint path
+    """
     script_dir = Path(__file__).resolve().parent
     fasta_paths = _resolve_mlm_fasta_paths(cfg, base_dir=script_dir)
     val_ratio = float(cfg.get("mlm_val_ratio", 0.1))
@@ -2206,6 +2214,24 @@ def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
         unknown_base_strategy=unknown_base_strategy,
         species_weights=species_weights,
     )
+
+    # === MLM DRY RUN SUMMARY ===
+    print("=" * 60)
+    print("MLM DRY RUN CONFIGURATION")
+    print("=" * 60)
+    print(f"kmer:       {kmer}")
+    print(f"vocab_size: {len(vocab.itos)}")
+
+    # Sample tokenization for a short sequence
+    sample_seq = "ATGCATGCATGCATGCATGC"  # 20bp sample
+    sample_tokens = vocab.tokenize(sample_seq, max_bp_len=len(sample_seq))
+    print(f"sample_seq: '{sample_seq}' ({len(sample_seq)} bp)")
+    print(f"sample_tokenization_length: {len(sample_tokens)} tokens")
+
+    # Target checkpoint path
+    encoder_path = cfg.get("mlm_encoder_path", f"../artifacts/mlm_encoder_k{kmer}.pt")
+    print(f"target_checkpoint: {encoder_path}")
+    print("=" * 60)
 
     batch_size = int(cfg.get("mlm_batch_size", 128))
     mask_prob = float(cfg.get("mlm_mask_prob", 0.15))

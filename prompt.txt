@@ -1,3 +1,23 @@
-Switch MLM pretraining to 6-mer (naming + config + safety guards)
+Quick sanity tests (overfit checks)
 
-Your config currently has mlm_kmer: 3 and mlm_encoder_checkpoint: mlm_encoder_k3.pt. We’ll make it k=6 and prevent silent mismatches.
+Run minimal sanity checks to verify the changes work and the overrides are actually applied.
+
+Commands (run from repo root; adjust if your scripts expect cd training):
+
+python -m py_compile training/model.py training/train_stage1.py training/train_stage2.py
+
+Stage 1 overfit debug (should rapidly drive loss down and accuracy up):
+
+cd training && python train_stage1.py --config ../config.yaml --kmer 6 --overfit_debug
+
+Stage 2 overfit debug:
+
+cd training && python train_stage2.py --config ../config.yaml --kmer 6 --overfit_debug
+
+In the logs, confirm:
+
+Stage 1 shows focal loss disabled and smoothing = 0.0
+
+Stage 2 shows mixup disabled, smoothing = 0.0, SWA disabled, drop_path = 0.0
+
+Report the key log lines and whether both runs complete.
