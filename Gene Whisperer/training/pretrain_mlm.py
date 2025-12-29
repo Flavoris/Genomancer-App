@@ -2323,8 +2323,9 @@ def run_validation(
                 else:
                     inputs, labels = batch_data
 
-                inputs = inputs.to(device)
-                labels = labels.to(device)
+                non_blocking = (device.type == "cuda")
+                inputs = inputs.to(device, non_blocking=non_blocking)
+                labels = labels.to(device, non_blocking=non_blocking)
 
                 if autocast_device and autocast_dtype is not None:
                     with torch.autocast(autocast_device, dtype=autocast_dtype):
@@ -2459,11 +2460,12 @@ def print_topk_predictions_debug(
     """
     model.eval()
     device = next(model.parameters()).device
-    
+
     # Move to device and get predictions
-    inputs = inputs.to(device)
-    labels = labels.to(device)
-    
+    non_blocking = (device.type == "cuda")
+    inputs = inputs.to(device, non_blocking=non_blocking)
+    labels = labels.to(device, non_blocking=non_blocking)
+
     with torch.no_grad():
         logits, _ = model(inputs, labels)
         probs = F.softmax(logits, dim=-1)
@@ -3228,7 +3230,16 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             len(val_dataset),
         )
 
-    num_workers = int(cfg_run.get("num_workers", 0))
+    # Detect Colab environment and set appropriate num_workers default
+    is_colab = os.path.exists("/content") or "COLAB_GPU" in os.environ or "COLAB_RELEASE_TAG" in os.environ
+    if "num_workers" in cfg_run:
+        # User explicitly set num_workers - respect their choice
+        num_workers = int(cfg_run.get("num_workers", 0))
+    else:
+        # Default: 2 workers on Colab (helps with k-mer tokenization bottleneck), 0 otherwise
+        num_workers = 2 if is_colab else 0
+        if is_colab:
+            LOGGER.info("Colab detected: defaulting to num_workers=%d for better data loading", num_workers)
     steps_per_epoch_approx = steps_per_epoch if use_streaming else len(train_dataset) // batch_size
     total_steps_for_curriculum = epochs * steps_per_epoch_approx // grad_accum_steps
     if max_steps is not None:
@@ -3262,24 +3273,29 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     deterministic_kwargs = get_deterministic_dataloader_kwargs(seed, num_workers=num_workers)
 
+    pin_memory = torch.cuda.is_available()
     if use_streaming:
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=collate_mlm_streaming,
-            num_workers=num_workers,
-            pin_memory=True,
-            drop_last=True,
+        # Build streaming DataLoader kwargs, adding worker optimizations when applicable
+        streaming_loader_kwargs = {
+            "batch_size": batch_size,
+            "shuffle": False,
+            "collate_fn": collate_mlm_streaming,
+            "num_workers": num_workers,
+            "pin_memory": pin_memory,
+            "drop_last": True,
             **deterministic_kwargs,
-        )
+        }
+        if num_workers > 0:
+            streaming_loader_kwargs["persistent_workers"] = True
+            streaming_loader_kwargs["prefetch_factor"] = 2
+        train_loader = DataLoader(train_dataset, **streaming_loader_kwargs)
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
             collate_fn=collate_mlm_streaming,
             num_workers=0,
-            pin_memory=True,
+            pin_memory=pin_memory,
         )
     else:
         train_loader = DataLoader(
@@ -3288,7 +3304,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             shuffle=True,
             collate_fn=collator,
             num_workers=num_workers,
-            pin_memory=True,
+            pin_memory=pin_memory,
             drop_last=True,
             **deterministic_kwargs,
         )
@@ -3300,7 +3316,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             shuffle=False,
             collate_fn=val_collator,
             num_workers=0,
-            pin_memory=True,
+            pin_memory=pin_memory,
         )
 
     if label_debug:
@@ -3441,6 +3457,13 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     device = select_device()
     LOGGER.info("Using device: %s", device)
 
+    # Log CUDA device details if available
+    if device.type == "cuda":
+        LOGGER.info("CUDA device name: %s", torch.cuda.get_device_name(0))
+        total_mem = torch.cuda.get_device_properties(0).total_memory
+        LOGGER.info("CUDA total memory: %.2f GB", total_mem / (1024**3))
+        LOGGER.info("CUDA is_available: %s", torch.cuda.is_available())
+
     embedding_dim = int(cfg_run.get("mlm_embedding_dim", cfg_run.get("embedding_dim", 256)))
     transformer_layers = int(cfg_run.get("mlm_transformer_layers", cfg_run.get("transformer_layers", 8)))
     transformer_heads = int(cfg_run.get("mlm_transformer_heads", cfg_run.get("transformer_heads", 8)))
@@ -3486,6 +3509,13 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         tie_weights=tie_weights,
         use_output_norm=use_output_norm,
     ).to(device)
+
+    # Log model device placement
+    model_device = next(model.parameters()).device
+    LOGGER.info("Model parameters device: %s", model_device)
+    if device.type == "cuda":
+        LOGGER.info("CUDA memory allocated: %.2f MB", torch.cuda.memory_allocated() / (1024**2))
+        LOGGER.info("CUDA memory reserved: %.2f MB", torch.cuda.memory_reserved() / (1024**2))
 
     total_params = sum(p.numel() for p in model.parameters())
     unique_params = sum(p.numel() for p in set(model.parameters()))
@@ -3621,8 +3651,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 else:
                     inputs, labels = batch_data
 
-                inputs = inputs.to(device)
-                labels = labels.to(device)
+                non_blocking = (device.type == "cuda")
+                inputs = inputs.to(device, non_blocking=non_blocking)
+                labels = labels.to(device, non_blocking=non_blocking)
 
                 with torch.no_grad():
                     if autocast_device and autocast_dtype is not None:
@@ -3796,6 +3827,12 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     step_tokens_processed = 0
     last_log_time = time.perf_counter()
     last_log_step = global_step
+    # GPU telemetry tracking (accumulated over telemetry interval)
+    telemetry_interval = 50  # log every N optimizer steps
+    telemetry_data_time = 0.0
+    telemetry_compute_time = 0.0
+    telemetry_step_count = 0
+    data_load_start = time.perf_counter()
 
     for epoch in range(start_epoch, epochs + 1):
         model.train()
@@ -3822,6 +3859,10 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             )
 
         for batch_idx, batch_data in enumerate(train_loader, start=1):
+            # Measure data loading time
+            data_load_end = time.perf_counter()
+            telemetry_data_time += data_load_end - data_load_start
+
             if max_steps is not None and global_step >= max_steps:
                 reached_max_steps = True
                 break
@@ -3832,8 +3873,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 inputs, labels = batch_data
                 span_lengths = None
 
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+            non_blocking = (device.type == "cuda")
+            inputs = inputs.to(device, non_blocking=non_blocking)
+            labels = labels.to(device, non_blocking=non_blocking)
             samples_seen += int(inputs.size(0))
             total_tokens += labels.numel()
 
@@ -3845,6 +3887,11 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 batch_idx=batch_idx,
                 model=model,
             )
+
+            # Start compute timing
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            compute_start = time.perf_counter()
 
             if autocast_device and autocast_dtype is not None:
                 with torch.autocast(autocast_device, dtype=autocast_dtype):
@@ -3869,6 +3916,12 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 numerics_checker.check_backward(model, check_grads=False)
             else:
                 numerics_checker.check_backward(model)
+
+            # End compute timing
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            compute_end = time.perf_counter()
+            telemetry_compute_time += compute_end - compute_start
 
             total_loss_unscaled += loss_unscaled.item() * inputs.size(0)
 
@@ -3911,6 +3964,29 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
+                telemetry_step_count += 1
+
+                # GPU telemetry every N optimizer steps
+                if global_step % telemetry_interval == 0 and telemetry_step_count > 0:
+                    avg_data_ms = (telemetry_data_time / telemetry_step_count) * 1000
+                    avg_compute_ms = (telemetry_compute_time / telemetry_step_count) * 1000
+                    total_step_ms = avg_data_ms + avg_compute_ms
+                    data_pct = (avg_data_ms / total_step_ms * 100) if total_step_ms > 0 else 0
+                    compute_pct = (avg_compute_ms / total_step_ms * 100) if total_step_ms > 0 else 0
+                    telemetry_msg = (
+                        f"[Telemetry] Step {global_step}: "
+                        f"step={total_step_ms:.1f}ms (data={avg_data_ms:.1f}ms [{data_pct:.0f}%], "
+                        f"compute={avg_compute_ms:.1f}ms [{compute_pct:.0f}%])"
+                    )
+                    if device.type == "cuda":
+                        mem_alloc = torch.cuda.memory_allocated() / (1024 ** 2)
+                        mem_max = torch.cuda.max_memory_allocated() / (1024 ** 2)
+                        telemetry_msg += f" | GPU mem: {mem_alloc:.0f}MB alloc, {mem_max:.0f}MB peak"
+                    LOGGER.info(telemetry_msg)
+                    # Reset telemetry accumulators
+                    telemetry_data_time = 0.0
+                    telemetry_compute_time = 0.0
+                    telemetry_step_count = 0
 
                 if global_step % lr_log_interval == 0:
                     current_lr = optimizer.param_groups[0]["lr"]
@@ -4014,6 +4090,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                     batch_acc * 100,
                     current_lr,
                 )
+
+            # Reset data loading timer for next batch
+            data_load_start = time.perf_counter()
 
         train_loss = total_loss_unscaled / max(1, samples_seen)
         train_acc = total_correct / max(1, total_masked)
@@ -4385,18 +4464,19 @@ def main() -> None:
         collator = MLMCollator(vocab, mask_prob=0.15, debug=args.label_debug, track_spans=True)
     
     deterministic_kwargs = get_deterministic_dataloader_kwargs(seed, num_workers=num_workers)
-    
+
+    pin_memory = torch.cuda.is_available()
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collator,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
         drop_last=True,
         **deterministic_kwargs,
     )
-    
+
     # Validation always uses full length (no curriculum)
     val_collator = MLMCollator(vocab, mask_prob=0.15)
     val_loader = DataLoader(
@@ -4405,7 +4485,7 @@ def main() -> None:
         shuffle=False,
         collate_fn=val_collator,
         num_workers=0,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
     
     # =========================================================================
@@ -4781,10 +4861,11 @@ def main() -> None:
             else:
                 inputs, labels = batch_data
                 span_lengths = None
-            
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            
+
+            non_blocking = (device.type == "cuda")
+            inputs = inputs.to(device, non_blocking=non_blocking)
+            labels = labels.to(device, non_blocking=non_blocking)
+
             # Update numerics checker context for error reporting
             current_lr = optimizer.param_groups[0]['lr']
             numerics_checker.set_context(

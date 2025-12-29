@@ -1,17 +1,12 @@
-Make stage training frictionless too
+Add a “GPU-util sanity line” every N steps
 
-Add colab_run_stage1.sh and colab_run_stage2.sh
+Add lightweight periodic telemetry every 50 optimizer steps:
 
-Create two scripts:
+step time
 
-Gene Whisperer/scripts/colab_run_stage1.sh
+data loading time vs compute time (use time.perf_counter() around fetch and forward/backward)
 
-Gene Whisperer/scripts/colab_run_stage2.sh
+if CUDA: print torch.cuda.max_memory_allocated() and current allocated
 
-Requirements: identical structure to colab_run_mlm.sh (drive_dir/run_name/logging/sync), but call training/train_stage1.py and training/train_stage2.py respectively.
-
-Each must accept --stage1_ckpt / --stage2_ckpt optional args and pass through.
-
-Each must save stage*_report*.json outputs into the Drive run folder.
-
-Output full script contents.
+Keep it minimal and not spammy.
+Show the diff.
