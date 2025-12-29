@@ -1,12 +1,30 @@
-Add a “GPU-util sanity line” every N steps
+Vectorize special-token label exclusion + random-token replacement
 
-Add lightweight periodic telemetry every 50 optimizer steps:
+Kill the Python list-comprehension + random.choice loop.
 
-step time
+Optimize the post-span part of mask_tokens_span() in pretrain_mlm.py:
 
-data loading time vs compute time (use time.perf_counter() around fetch and forward/backward)
+A) Replace the per-special-token loop:
+Current:
+special_token_ids = {mask_id, unk_id, pad_id}
+for special_id in special_token_ids:
+labels[inputs == special_id] = -100
 
-if CUDA: print torch.cuda.max_memory_allocated() and current allocated
+Replace with a single vectorized mask:
+special_mask = (inputs == mask_id) | (inputs == unk_id) | (inputs == pad_id)
+labels[special_mask] = -100
 
-Keep it minimal and not spammy.
-Show the diff.
+B) Replace Python-loop random token replacement:
+Current:
+random_ids = torch.tensor([random.choice(vocab._base_token_ids) for _ in range(num_rand)], ...)
+
+Replace with torch sampling:
+base_ids = torch.as_tensor(vocab._base_token_ids, device=device, dtype=inputs.dtype)
+rand_idx = torch.randint(0, base_ids.numel(), (num_rand,), device=device)
+random_ids = base_ids[rand_idx]
+
+Checkpoint:
+
+Re-run benchmark script (81 and 234).
+
+Append results to docs/perf_masking.md as "After Prompt 3".

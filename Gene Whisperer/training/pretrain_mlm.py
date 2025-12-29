@@ -438,22 +438,28 @@ def mask_tokens_span(
     else:
         pad_mask = torch.zeros_like(inputs, dtype=torch.bool, device=device)
     
+    # Constant: how many random starts to try per span length before falling back
+    TRIES_PER_LEN = 16
+
     for b in range(batch_size):
+        # Precompute row views for this sequence
+        masked_row = masked[b]
+        non_pad_row = ~pad_mask[b]
+
         # Count non-PAD tokens in this sequence
-        non_pad_count = (~pad_mask[b]).sum().item()
-        
+        non_pad_count = non_pad_row.sum().item()
+
         # Handle all-PAD sequences
         if non_pad_count == 0:
             continue
-        
+
         # Target number of tokens to mask (from non-PAD tokens)
         num_to_mask = max(1, int(mask_prob * non_pad_count))
         covered = 0
         attempts = 0
-        # With non-overlapping spans and a hard cap on contiguous masked runs,
-        # placement can be more constrained. Allow more retries before giving up.
-        max_attempts = num_to_mask * 50  # Safety limit
-        
+        # With rejection sampling we can afford more attempts since each is O(1)
+        max_attempts = num_to_mask * 100  # Safety limit
+
         while covered < num_to_mask and attempts < max_attempts:
             # Sample span length based on distribution
             if span_distribution == "geometric":
@@ -470,58 +476,58 @@ def mask_tokens_span(
             remaining = num_to_mask - covered
             span_len = max(1, min(span_len, remaining))
 
-            # Find a start position that:
-            # - stays within non-PAD region
-            # - does not overlap an existing masked span
-            # - does not touch an existing masked span (prevents contiguous runs > max_span_len)
-            chosen_start: int | None = None
-            chosen_len: int | None = None
-
+            # Fast rejection sampling: try random starts instead of scanning all positions
             # If we can't place the sampled length, try shorter lengths down to 1.
+            placed = False
             for try_len in range(span_len, 0, -1):
-                valid_starts: List[int] = []
                 max_start = seq_len - try_len
                 if max_start < 0:
                     continue
-                for start in range(0, max_start + 1):
+
+                # Try up to TRIES_PER_LEN random starts for this length
+                for _ in range(TRIES_PER_LEN):
+                    start = random.randint(0, max_start)
                     end = start + try_len
 
-                    # Require all tokens in the span to be non-PAD (no partial spans)
-                    if not (~pad_mask[b, start:end]).all().item():
+                    # Reject if any PAD in span
+                    if not non_pad_row[start:end].all():
                         continue
 
-                    # No overlap with existing masked tokens
-                    if masked[b, start:end].any().item():
+                    # Reject if overlap with existing masked tokens
+                    if masked_row[start:end].any():
                         continue
 
-                    # No touching existing masked tokens (keeps contiguous masked runs bounded)
-                    if start > 0 and masked[b, start - 1].item():
+                    # Reject if touching existing masked tokens
+                    if start > 0 and masked_row[start - 1]:
                         continue
-                    if end < seq_len and masked[b, end].item():
+                    if end < seq_len and masked_row[end]:
                         continue
 
-                    valid_starts.append(start)
-
-                if valid_starts:
-                    chosen_start = random.choice(valid_starts)
-                    chosen_len = try_len
+                    # Accept: mark as masked
+                    masked_row[start:end] = True
+                    covered += try_len
+                    placed = True
                     break
-            
-            if chosen_start is None or chosen_len is None:
-                attempts += 1
-                break  # No more valid placements possible under constraints
 
-            start = chosen_start
-            end = start + chosen_len
+                if placed:
+                    break
 
-            masked[b, start:end] = True
-            covered += chosen_len
-            
             attempts += 1
-            
-            # Break if we've covered enough
-            if covered >= num_to_mask:
-                break
+            # Continue trying even if this attempt failed (don't break early)
+
+        # Fallback fill: if still short, randomly select remaining non-masked non-pad positions
+        if covered < num_to_mask:
+            # Find all positions that are non-pad and not yet masked
+            available = non_pad_row & ~masked_row
+            available_indices = torch.where(available)[0]
+
+            if len(available_indices) > 0:
+                shortfall = num_to_mask - covered
+                # Randomly select up to shortfall positions
+                num_to_fill = min(shortfall, len(available_indices))
+                perm = torch.randperm(len(available_indices), device=inputs.device)[:num_to_fill]
+                fill_indices = available_indices[perm]
+                masked_row[fill_indices] = True
 
     # Ensure PAD tokens are NEVER masked (redundant safety check)
     masked[pad_mask] = False
@@ -534,10 +540,9 @@ def mask_tokens_span(
     # we should NOT train the model to predict it. This prevents the model
     # from learning to predict [MASK], [UNK], or [PAD] tokens.
     if exclude_special_from_labels:
-        special_token_ids = {vocab.mask_id, vocab.unk_id, vocab.pad_id}
-        for special_id in special_token_ids:
-            special_mask = (inputs == special_id)
-            labels[special_mask] = -100
+        # Vectorized: single mask for all special tokens (faster than loop)
+        special_mask = (inputs == vocab.mask_id) | (inputs == vocab.unk_id) | (inputs == vocab.pad_id)
+        labels[special_mask] = -100
 
     # Apply 80/10/10 BERT masking strategy within masked spans
     # 80% -> [MASK] token
@@ -555,12 +560,11 @@ def mask_tokens_span(
         flat = random_token_indices.view(-1)
         num_rand = flat.sum().item()
         # Use vocab's base token IDs (excludes special tokens)
+        # Vectorized: torch sampling instead of Python loop
         if hasattr(vocab, '_base_token_ids') and vocab._base_token_ids:
-            random_ids = torch.tensor(
-                [random.choice(vocab._base_token_ids) for _ in range(num_rand)],
-                device=device,
-                dtype=inputs.dtype,
-            )
+            base_ids = torch.as_tensor(vocab._base_token_ids, device=device, dtype=inputs.dtype)
+            rand_idx = torch.randint(0, base_ids.numel(), (num_rand,), device=device)
+            random_ids = base_ids[rand_idx]
         else:
             random_ids = torch.randint(
                 low=0,
