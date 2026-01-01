@@ -1,30 +1,23 @@
-Vectorize special-token label exclusion + random-token replacement
+Force every eval script to print “what am I evaluating?”
 
-Kill the Python list-comprehension + random.choice loop.
+add these prints at startup in:
 
-Optimize the post-span part of mask_tokens_span() in pretrain_mlm.py:
+scripts/reality_check_best_threshold.py
 
-A) Replace the per-special-token loop:
-Current:
-special_token_ids = {mask_id, unk_id, pad_id}
-for special_id in special_token_ids:
-labels[inputs == special_id] = -100
+scripts/calibrate_stage1_temperature.py
 
-Replace with a single vectorized mask:
-special_mask = (inputs == mask_id) | (inputs == unk_id) | (inputs == pad_id)
-labels[special_mask] = -100
+any validation block in train_stage1.py
 
-B) Replace Python-loop random token replacement:
-Current:
-random_ids = torch.tensor([random.choice(vocab._base_token_ids) for _ in range(num_rand)], ...)
+Print:
 
-Replace with torch sampling:
-base_ids = torch.as_tensor(vocab._base_token_ids, device=device, dtype=inputs.dtype)
-rand_idx = torch.randint(0, base_ids.numel(), (num_rand,), device=device)
-random_ids = base_ids[rand_idx]
+checkpoint path actually loaded
 
-Checkpoint:
+number of val samples
 
-Re-run benchmark script (81 and 234).
+label balance (% positives)
 
-Append results to docs/perf_masking.md as "After Prompt 3".
+prob min/mean/max
+
+logit min/mean/max (if available)
+
+If two runs disagree, those 5 lines will immediately explain why.

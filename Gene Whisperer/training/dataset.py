@@ -150,6 +150,40 @@ class KmerVocabulary:
             return 0
         return random.choice(self._base_token_ids)
 
+    def decode(self, token_ids: List[int]) -> str:
+        """Decode token IDs back to a DNA sequence.
+
+        For k-mer tokenization, consecutive k-mers overlap by k-1 bases.
+        Reconstruction: first k-mer provides k bases, each subsequent k-mer adds 1 base.
+        """
+        if not token_ids:
+            return ""
+
+        # Filter out padding tokens
+        filtered_ids = [tid for tid in token_ids if tid != self.pad_id]
+        if not filtered_ids:
+            return ""
+
+        # Get first k-mer
+        first_kmer = self.itos[filtered_ids[0]] if filtered_ids[0] < len(self.itos) else "N" * self.k
+        if first_kmer in (self.unk_token, self.mask_token, self.pad_token):
+            first_kmer = "N" * self.k
+
+        result = list(first_kmer)
+
+        # Each subsequent k-mer adds one base (the last character)
+        for tid in filtered_ids[1:]:
+            if tid < len(self.itos):
+                kmer = self.itos[tid]
+                if kmer in (self.unk_token, self.mask_token, self.pad_token):
+                    result.append("N")
+                else:
+                    result.append(kmer[-1])  # Add last base of k-mer
+            else:
+                result.append("N")
+
+        return "".join(result)
+
 
 def _get_or_create_vocab(sequences: Sequence[str], k: int, vocab_dir: Path) -> KmerVocabulary:
     vocab_dir.mkdir(parents=True, exist_ok=True)
@@ -730,7 +764,32 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         ablation_seed,
         "stage1 val",
     )
-    stage1_vocab = _get_or_create_vocab(stage1_train_df["sequence"].astype(str).tolist(), kmer, vocab_cache_dir)
+    use_mlm_vocab = bool(_cfg_value(cfg, "stage1_load_mlm_weights", False))
+    mlm_vocab_path = _cfg_value(cfg, "mlm_vocab_path", None)
+
+    if use_mlm_vocab and mlm_vocab_path:
+        vocab_path = Path(mlm_vocab_path)
+        if not vocab_path.exists():
+            raise FileNotFoundError(f"mlm_vocab_path not found: {mlm_vocab_path}")
+        stage1_vocab = KmerVocabulary.load(vocab_path)
+        if stage1_vocab.k != kmer:
+            raise ValueError(
+                f"MLM vocab k={stage1_vocab.k} does not match config kmer={kmer}. "
+                f"Set kmer to {stage1_vocab.k} or regenerate MLM vocab."
+            )
+        LOGGER.info("Loaded MLM vocab from %s (k=%d, vocab_size=%d)", mlm_vocab_path, stage1_vocab.k, len(stage1_vocab.itos))
+        # Optional: also write a conventional cache name so other code paths can find it
+        try:
+            cache_path = vocab_cache_dir / f"k{kmer}_vocab.json"
+            stage1_vocab.save(cache_path)
+        except Exception:
+            pass
+    else:
+        stage1_vocab = _get_or_create_vocab(
+            stage1_train_df["sequence"].astype(str).tolist(),
+            kmer,
+            vocab_cache_dir
+        )
 
     stage1_train_ds = PromoterDatasetStage1(
         stage1_train_df,

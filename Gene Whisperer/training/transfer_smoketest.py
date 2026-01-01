@@ -99,7 +99,7 @@ def _apply_stage_ablation(cfg: dict, *, stage: str, steps: int) -> None:
 
 
 def _load_checkpoint_state(path: Path) -> Dict[str, Any]:
-    state = torch.load(path, map_location="cpu")
+    state = torch.load(path, map_location="cpu", weights_only=False)
     if isinstance(state, dict) and "model_state" in state:
         return state["model_state"]
     if isinstance(state, dict):

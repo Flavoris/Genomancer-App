@@ -116,7 +116,7 @@ engineered_mlp_output: 128    # Output dimension before fusion
 fusion_hidden: 256            # Hidden dimension in fusion module
 
 # Reverse complement augmentation
-stage1_reverse_complement_prob: 0.5
+stage1_reverse_complement_prob: 0.0 # Was 0.5
 
 # =============================================================================
 # TRAINING SETTINGS (Optimized for 90%+ accuracy)
@@ -126,13 +126,13 @@ optimizer: "adamw"
 optimizer_foreach: true  # Use foreach implementation for ~20-30% faster optimizer steps
 
 # Learning rate and schedule
-lr: 0.0002  # Slightly lower for stability (was 3e-4)
+lr: 0.0001  # Slightly lower for stability (was 2e-4)
 weight_decay: 0.02  # Slightly stronger regularization
-warmup_ratio: 0.15  # 15% warmup for better stability (was 10%)
+warmup_ratio: 0.05  # 15% warmup for better stability (was 10%)
 
 # Training duration
 epochs: 120  # More epochs with better early stopping
-early_stopping_patience: 25  # More patience for better convergence
+early_stopping_patience: 35  # More patience for better convergence
 
 # Gradient settings
 grad_accum_steps: 4  # Effective batch = 32 * 4 = 128
@@ -381,7 +381,7 @@ ablation:
 # Loss: L = CE(student, labels) + alpha * KL(softmax(student/T), softmax(teacher/T))
 # Where T is temperature (higher = softer targets) and alpha balances losses.
 distill:
-  enabled: true
+  enabled: false
   alpha: 0.5              # Weight for KL loss (0 = CE only, 1 = KL only)
   temperature: 2.0        # Temperature for softening logits (higher = softer)
   teacher_ckpt: ../artifacts/checkpoints/stage1_k6.pt  # Path to trained teacher checkpoint

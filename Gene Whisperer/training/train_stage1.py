@@ -147,7 +147,7 @@ def load_teacher_model(
     from dataset import KmerVocabulary
 
     # Load checkpoint to get model configuration
-    checkpoint = torch.load(teacher_ckpt_path, map_location=device)
+    checkpoint = torch.load(teacher_ckpt_path, map_location=device, weights_only=False)
 
     # Get model state
     if isinstance(checkpoint, dict) and "model_state" in checkpoint:
@@ -160,8 +160,13 @@ def load_teacher_model(
 
     # Build vocab for teacher
     vocab_cache_dir = Path(cfg.get("vocab_cache_dir", "../artifacts/vocabs"))
-    teacher_vocab_path = vocab_cache_dir / f"k{teacher_kmer}_vocab.json"
-    teacher_vocab = KmerVocabulary.load(teacher_vocab_path)
+    mlm_vocab_path = cfg.get("mlm_vocab_path")
+    mlm_kmer = int(cfg.get("mlm_kmer", teacher_kmer))
+    if mlm_vocab_path and Path(mlm_vocab_path).exists() and mlm_kmer == teacher_kmer:
+        teacher_vocab = KmerVocabulary.load(Path(mlm_vocab_path))
+    else:
+        teacher_vocab_path = vocab_cache_dir / f"k{teacher_kmer}_vocab.json"
+        teacher_vocab = KmerVocabulary.load(teacher_vocab_path)
 
     # Create teacher model with same architecture
     embedding_dim = int(cfg.get("embedding_dim", 256))
@@ -193,6 +198,7 @@ def load_teacher_model(
         engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 256)),
         engineered_mlp_output=int(cfg.get("engineered_mlp_output", 128)),
         fusion_hidden=int(cfg.get("fusion_hidden", 256)),
+        max_seq_len=int(cfg.get("max_bp_len", 81)) - teacher_kmer + 1,
     ).to(device)
 
     # Load state dict
@@ -250,7 +256,7 @@ def verify_distillation_dry_run(
     Returns:
         True if verification passed
     """
-    from dataset import KmerVocabulary, PromoterDataset
+    from dataset import KmerVocabulary, PromoterDatasetStage1
 
     LOGGER.info("=" * 60)
     LOGGER.info("DISTILLATION DRY-RUN VERIFICATION")
@@ -288,7 +294,7 @@ def verify_distillation_dry_run(
     # Tokenize sequences for teacher
     tokens_teacher = []
     for seq in sequences:
-        tok = teacher_vocab.tokenize(seq)
+        tok = teacher_vocab.tokenize(seq, max_bp_len=len(seq))
         tokens_teacher.append(torch.tensor(tok, dtype=torch.long))
 
     # Pad to same length
@@ -365,6 +371,49 @@ def verify_distillation_dry_run(
     finally:
         student.train()
         # Teacher stays in eval mode
+
+
+def apply_distill_guardrails(
+    *,
+    distill_enabled: bool,
+    teacher_kmer: int,
+    student_kmer: int,
+    teacher_ckpt_path: Path,
+    student_ckpt_path: Path,
+) -> tuple[bool, str]:
+    """
+    Check distillation safety guardrails.
+
+    Prevents distillation in unsafe scenarios:
+    1. If distillation is already disabled
+    2. If teacher and student have the same k-mer (no knowledge transfer benefit)
+    3. If teacher and student checkpoint paths resolve to the same file
+
+    Args:
+        distill_enabled: Whether distillation was requested
+        teacher_kmer: Teacher model's k-mer size
+        student_kmer: Student model's k-mer size
+        teacher_ckpt_path: Path to teacher checkpoint
+        student_ckpt_path: Path to student checkpoint (output)
+
+    Returns:
+        Tuple of (enabled, reason):
+        - (False, reason) if distillation should be disabled
+        - (True, "") if distillation can proceed
+    """
+    if not distill_enabled:
+        return (False, "distillation not enabled")
+
+    if teacher_kmer == student_kmer:
+        return (False, f"teacher k-mer ({teacher_kmer}) equals student k-mer ({student_kmer})")
+
+    if teacher_ckpt_path.resolve() == student_ckpt_path.resolve():
+        return (
+            False,
+            f"teacher checkpoint resolves to same path as student output: {teacher_ckpt_path.resolve()}",
+        )
+
+    return (True, "")
 
 
 # Note: set_seed is now a wrapper for set_global_seed from seed_utils
@@ -645,6 +694,78 @@ def get_cosine_with_hard_restarts_schedule(
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
+# =============================================================================
+# EMBEDDING-SPACE MIXUP UTILITIES
+# =============================================================================
+
+# Flag to track if we've logged embedding mixup message this session
+_embedding_mixup_logged = False
+
+
+def unwrap_model(m: nn.Module) -> nn.Module:
+    """Unwrap a model from DataParallel/DistributedDataParallel wrapper."""
+    return m.module if hasattr(m, "module") else m
+
+
+def mixup_batch_embeddings(
+    model: nn.Module,
+    tokens: torch.Tensor,
+    engineered: torch.Tensor,
+    labels: torch.Tensor,
+    alpha: float,
+):
+    """
+    Proper embedding-space mixup for GeneWhispererStage1.
+
+    Returns:
+      mixed_embeds: (B, L, D)
+      mixed_engineered: (B, engineered_dim)
+      y_a: (B, 1)
+      y_b: (B, 1)
+      lam: float
+      padding_mask: Optional[(B, L)] True=pad
+    """
+    core = unwrap_model(model)
+
+    # Default: no mixup
+    if alpha is None or alpha <= 0 or tokens.size(0) < 2:
+        with torch.no_grad():
+            emb = core.embedding(tokens)
+        pad_id = getattr(core, "pad_token_id", None)
+        padding_mask = tokens.eq(pad_id) if pad_id is not None else None
+        return emb, engineered, labels, labels, 1.0, padding_mask
+
+    lam = float(np.random.beta(alpha, alpha))
+    B = tokens.size(0)
+    index = torch.randperm(B, device=tokens.device)
+
+    # Embeddings (keep grad so embedding learns under mixup)
+    emb_a = core.embedding(tokens)              # (B, L, D)
+    emb_b = core.embedding(tokens[index])       # (B, L, D)
+    mixed_embeds = lam * emb_a + (1.0 - lam) * emb_b
+
+    # Engineered features
+    if engineered is not None:
+        engineered_b = engineered[index]
+        mixed_engineered = lam * engineered + (1.0 - lam) * engineered_b
+    else:
+        mixed_engineered = None
+
+    y_a = labels
+    y_b = labels[index]
+
+    # Padding mask (conservative OR)
+    pad_id = getattr(core, "pad_token_id", None)
+    if pad_id is not None:
+        mask_a = tokens.eq(pad_id)
+        mask_b = tokens[index].eq(pad_id)
+        padding_mask = mask_a | mask_b
+    else:
+        padding_mask = None
+
+    return mixed_embeds, mixed_engineered, y_a, y_b, lam, padding_mask
+
+
 def mixup_data(
     tokens: torch.Tensor,
     engineered: torch.Tensor,
@@ -652,21 +773,29 @@ def mixup_data(
     alpha: float = 0.2,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
     """
-    Apply mixup augmentation.
-    
-    Mixup creates convex combinations of training examples,
-    which acts as a strong regularizer and improves generalization.
+    DEPRECATED: Use mixup_batch_embeddings() instead.
+
+    This function only mixed engineered features, not the token embeddings.
+    It has been superseded by mixup_batch_embeddings() which properly mixes
+    in embedding space.
     """
+    import warnings
+    warnings.warn(
+        "mixup_data() is deprecated and does not properly mix sequences. "
+        "Use mixup_batch_embeddings() for embedding-space mixup instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if alpha <= 0:
         return tokens, engineered, labels, labels, 1.0
-    
+
     lam = np.random.beta(alpha, alpha)
     batch_size = tokens.size(0)
     index = torch.randperm(batch_size, device=tokens.device)
-    
+
     # Mix tokens (using embedding weights mixing would be better, but this works)
     mixed_engineered = lam * engineered + (1 - lam) * engineered[index]
-    
+
     # Return both targets for loss computation
     return tokens, mixed_engineered, labels, labels[index], lam
 
@@ -702,42 +831,108 @@ def _binary_roc_auc(probabilities: np.ndarray, targets: np.ndarray) -> float:
     return float(auc)
 
 
-def calculate_metrics(probabilities: torch.Tensor, labels: torch.Tensor) -> Dict[str, float]:
-    """Calculate classification metrics."""
-    probs = probabilities.detach().cpu().reshape(-1)
-    targets = labels.detach().cpu().reshape(-1)
-    preds = (probs >= 0.5).float()
-    
+def _compute_metrics_at_threshold(
+    probs: torch.Tensor, targets: torch.Tensor, threshold: float
+) -> Dict[str, float]:
+    """Compute classification metrics at a specific threshold."""
+    preds = (probs >= threshold).float()
+
     correct = (preds == targets).sum().item()
     total = float(len(targets))
     accuracy = correct / total if total else 0.0
-    
+
     tp = ((preds == 1) & (targets == 1)).sum().item()
     tn = ((preds == 0) & (targets == 0)).sum().item()
     fp = ((preds == 1) & (targets == 0)).sum().item()
     fn = ((preds == 0) & (targets == 1)).sum().item()
-    
+
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
-    
+
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
-    
+
     denom = float((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
     mcc = ((tp * tn) - (fp * fn)) / float(np.sqrt(denom)) if denom > 0 else 0.0
-    
-    # Specificity (true negative rate)
+
     specificity = tn / (tn + fp) if (tn + fp) else 0.0
 
-    roc_auc = _binary_roc_auc(probs.numpy(), targets.numpy())
-    
     return {
         "accuracy": float(accuracy),
         "precision": float(precision),
         "recall": float(recall),
         "f1": float(f1),
         "mcc": float(mcc),
-        "roc_auc": float(roc_auc),
         "specificity": float(specificity),
+    }
+
+
+def compute_best_threshold(
+    probs: torch.Tensor, labels: torch.Tensor, metric: str = "accuracy", num_thresholds: int = 99
+) -> Tuple[float, float]:
+    """
+    Find the optimal decision threshold by sweeping thresholds.
+
+    Args:
+        probs: Predicted probabilities (1D tensor)
+        labels: Ground truth labels 0/1 (1D tensor)
+        metric: Metric to optimize ("accuracy" or "mcc")
+        num_thresholds: Number of thresholds to try (default 99)
+
+    Returns:
+        (best_threshold, best_metric_value)
+    """
+    probs = probs.detach().cpu().reshape(-1)
+    labels = labels.detach().cpu().reshape(-1)
+
+    thresholds = np.linspace(0.01, 0.99, num_thresholds)
+    best_thr = 0.5
+    best_value = -float("inf")
+
+    for thr in thresholds:
+        metrics = _compute_metrics_at_threshold(probs, labels, thr)
+        value = metrics[metric]
+        if value > best_value:
+            best_value = value
+            best_thr = thr
+
+    return float(best_thr), float(best_value)
+
+
+def calculate_metrics(probabilities: torch.Tensor, labels: torch.Tensor) -> Dict[str, float]:
+    """
+    Calculate classification metrics at both fixed (0.5) and best thresholds.
+
+    Returns metrics dict with:
+    - Standard metrics at threshold=0.5 (accuracy, precision, recall, f1, mcc, etc.)
+    - Best threshold metrics: acc_best, mcc_best, best_threshold
+    """
+    probs = probabilities.detach().cpu().reshape(-1)
+    targets = labels.detach().cpu().reshape(-1)
+
+    # Metrics at fixed threshold 0.5
+    metrics_05 = _compute_metrics_at_threshold(probs, targets, 0.5)
+
+    # Find best threshold and compute metrics there
+    best_thr, _ = compute_best_threshold(probs, targets, metric="accuracy")
+    metrics_best = _compute_metrics_at_threshold(probs, targets, best_thr)
+
+    # ROC AUC (threshold-independent)
+    roc_auc = _binary_roc_auc(probs.numpy(), targets.numpy())
+
+    return {
+        # Metrics at 0.5 threshold (for backward compatibility, these are the "primary" keys)
+        "accuracy": metrics_05["accuracy"],
+        "precision": metrics_05["precision"],
+        "recall": metrics_05["recall"],
+        "f1": metrics_05["f1"],
+        "mcc": metrics_05["mcc"],
+        "specificity": metrics_05["specificity"],
+        "roc_auc": float(roc_auc),
+        # Best threshold metrics (for honest evaluation)
+        "acc_best": metrics_best["accuracy"],
+        "mcc_best": metrics_best["mcc"],
+        "f1_best": metrics_best["f1"],
+        "best_threshold": best_thr,
     }
 
 
@@ -800,22 +995,34 @@ def run_epoch(
         engineered = engineered.to(device)
         labels = labels.to(device).unsqueeze(1)
         
-        # Mixup augmentation (training only)
+        # Embedding-space mixup augmentation (training only)
         lam = 1.0
         labels_b = labels
+        mixed_emb = None
+        mix_padding_mask = None
         if is_train and use_mixup:
-            tokens, engineered, labels, labels_b, lam = mixup_data(
-                tokens, engineered, labels, alpha=mixup_alpha
+            mixed_emb, engineered, labels, labels_b, lam, mix_padding_mask = mixup_batch_embeddings(
+                model, tokens, engineered, labels, alpha=mixup_alpha
             )
-        
+
         # Forward pass
         with torch.set_grad_enabled(is_train):
             # Automatic mixed precision: forward under autocast, loss in fp32 for stability
             if use_autocast and amp_ctx is not None:
                 with amp_ctx.autocast():
-                    probs = model(tokens, engineered)
+                    if is_train and use_mixup and lam < 1.0:
+                        # Use embedding route for mixup
+                        core = unwrap_model(model)
+                        probs = core.forward_from_embeds(mixed_emb, mix_padding_mask, engineered)
+                    else:
+                        probs = model(tokens, engineered)
             else:
-                probs = model(tokens, engineered)
+                if is_train and use_mixup and lam < 1.0:
+                    # Use embedding route for mixup
+                    core = unwrap_model(model)
+                    probs = core.forward_from_embeds(mixed_emb, mix_padding_mask, engineered)
+                else:
+                    probs = model(tokens, engineered)
 
             # Ensure probs are in fp32 for loss computation if force_fp32_loss is True
             if force_fp32_loss:
@@ -1024,7 +1231,7 @@ def run_distillation_epoch(
         # Tokenize for teacher
         tokens_teacher_list = []
         for seq in sequences:
-            tok = teacher_vocab.tokenize(seq)
+            tok = teacher_vocab.tokenize(seq, max_bp_len=len(seq))
             tokens_teacher_list.append(torch.tensor(tok, dtype=torch.long))
 
         # Pad teacher tokens to same length
@@ -1306,8 +1513,8 @@ def compute_class_balance(loader: torch.utils.data.DataLoader) -> Dict[str, floa
 
 
 def save_checkpoint(
-    path: Path, 
-    model: nn.Module, 
+    path: Path,
+    model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
     epoch: int,
@@ -1315,17 +1522,24 @@ def save_checkpoint(
 ) -> None:
     """Save training checkpoint."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state": model.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-            "scheduler_state": scheduler.state_dict() if scheduler else None,
-            "metrics": metrics,
-        },
-        path,
-    )
+
+    # Extract best threshold info from metrics for deployment
+    best_threshold = float(metrics.get("best_threshold", 0.5))
+    val_acc_best_threshold = float(metrics.get("acc_best", metrics.get("accuracy", 0.0)))
+
+    checkpoint = {
+        "epoch": epoch,
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict() if scheduler else None,
+        "metrics": metrics,
+        # Top-level keys for deployment-safe inference
+        "best_threshold": best_threshold,
+        "val_acc_best_threshold": val_acc_best_threshold,
+    }
+    torch.save(checkpoint, path)
     LOGGER.info("Saved checkpoint to %s", path)
+    LOGGER.info("  best_threshold=%.4f, val_acc_best_threshold=%.4f", best_threshold, val_acc_best_threshold)
 
 
 def check_gradients_and_frozen(model: nn.Module) -> Dict[str, Any]:
@@ -1734,7 +1948,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "grad_accum_steps": int(cfg_run.get("grad_accum_steps", 4)),
         "grad_clip_norm": float(cfg_run.get("grad_clip_norm", 1.0)),
         "warmup_ratio": float(cfg_run.get("warmup_ratio", 0.15)),
-        "early_stopping_patience": int(cfg_run.get("early_stopping_patience", 25)),
+        "early_stopping_patience": int(cfg_run.get("early_stopping_patience", 35)),
         "layer_lr_decay": float(cfg_run.get("layer_lr_decay", 0.8)),
         "stage1_drop_path_rate": float(get_with_fallback("stage1_drop_path_rate", "drop_path_rate", 0.1)),
         # Loss (effective Stage 1 values with fallbacks)
@@ -1862,6 +2076,8 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         fusion_hidden=fusion_hidden,
         # Stochastic depth rate (effective Stage 1 value)
         drop_path_rate=stage1_drop_path_rate,
+        # Positional embedding max length
+        max_seq_len=int(cfg_run.get("max_bp_len", 81)) - kmer + 1,
     ).to(device)
     
     # Log architecture configuration
@@ -2145,7 +2361,26 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         if not teacher_ckpt_path.is_absolute():
             teacher_ckpt_path = (script_dir / teacher_ckpt_path).resolve()
 
-        if not teacher_ckpt_path.exists():
+        # Compute student checkpoint path for guardrail check
+        artifacts_root = (script_dir / "../artifacts").resolve()
+        checkpoint_name = cfg_run.get("stage1_checkpoint_name") or f"stage1_k{kmer}.pt"
+        student_ckpt_path = artifacts_root / "checkpoints" / checkpoint_name
+
+        # Apply distillation safety guardrails
+        guardrail_ok, guardrail_reason = apply_distill_guardrails(
+            distill_enabled=distill_enabled,
+            teacher_kmer=teacher_kmer,
+            student_kmer=kmer,
+            teacher_ckpt_path=teacher_ckpt_path,
+            student_ckpt_path=student_ckpt_path,
+        )
+        if not guardrail_ok:
+            LOGGER.warning("Distillation guardrail triggered: %s", guardrail_reason)
+            distill_enabled = False
+
+        if not distill_enabled:
+            pass  # Skip distillation setup, teacher_model/teacher_vocab/distill_criterion stay None
+        elif not teacher_ckpt_path.exists():
             LOGGER.error("Teacher checkpoint not found: %s", teacher_ckpt_path)
             LOGGER.error("Distillation requires a trained teacher model. Disabling distillation.")
             distill_enabled = False
@@ -2360,51 +2595,59 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 train_metrics["mcc"],
             )
         LOGGER.info(
-            "Val   - Loss: %.4f | Acc: %.4f | Prec: %.4f | Rec: %.4f | F1: %.4f | MCC: %.4f",
+            "Val   - Loss: %.4f | Acc@0.5: %.4f | Acc@best: %.4f (thr=%.2f) | MCC@best: %.4f",
             val_metrics["loss"],
             val_metrics["accuracy"],
-            val_metrics["precision"],
-            val_metrics["recall"],
-            val_metrics["f1"],
-            val_metrics["mcc"],
+            val_metrics.get("acc_best", val_metrics["accuracy"]),
+            val_metrics.get("best_threshold", 0.5),
+            val_metrics.get("mcc_best", val_metrics["mcc"]),
         )
         
         if swa_val_metrics:
             LOGGER.info(
-                "SWA   - Loss: %.4f | Acc: %.4f | F1: %.4f | MCC: %.4f",
+                "SWA   - Loss: %.4f | Acc@0.5: %.4f | Acc@best: %.4f (thr=%.2f) | MCC@best: %.4f",
                 swa_val_metrics["loss"],
                 swa_val_metrics["accuracy"],
-                swa_val_metrics["f1"],
-                swa_val_metrics["mcc"],
+                swa_val_metrics.get("acc_best", swa_val_metrics["accuracy"]),
+                swa_val_metrics.get("best_threshold", 0.5),
+                swa_val_metrics.get("mcc_best", swa_val_metrics["mcc"]),
             )
         
-        # Use SWA metrics if better during SWA phase
+        # Use SWA metrics if better during SWA phase (compare using best-threshold MCC)
         eval_metrics = val_metrics
-        if swa_val_metrics and swa_val_metrics["mcc"] > val_metrics["mcc"]:
+        swa_mcc_best = swa_val_metrics.get("mcc_best", swa_val_metrics["mcc"]) if swa_val_metrics else -1
+        val_mcc_best = val_metrics.get("mcc_best", val_metrics["mcc"])
+        if swa_val_metrics and swa_mcc_best > val_mcc_best:
             eval_metrics = swa_val_metrics
             LOGGER.info("(Using SWA metrics for checkpointing)")
-        
-        # Check for improvement (use MCC as primary, accuracy as tiebreaker)
+
+        # Check for improvement using best-threshold metrics (MCC@best primary, Acc@best tiebreaker)
+        eval_mcc_best = eval_metrics.get("mcc_best", eval_metrics["mcc"])
+        eval_acc_best = eval_metrics.get("acc_best", eval_metrics["accuracy"])
         improved = False
-        if eval_metrics["mcc"] > best_val_mcc + 1e-4:
+        if eval_mcc_best > best_val_mcc + 1e-4:
             improved = True
-        elif abs(eval_metrics["mcc"] - best_val_mcc) < 1e-4 and eval_metrics["accuracy"] > best_val_acc:
+        elif abs(eval_mcc_best - best_val_mcc) < 1e-4 and eval_acc_best > best_val_acc:
             improved = True
-        
+
         if improved:
             patience_counter = 0
-            best_val_mcc = eval_metrics["mcc"]
-            best_val_acc = eval_metrics["accuracy"]
+            best_val_mcc = eval_mcc_best
+            best_val_acc = eval_acc_best
             best_epoch = epoch
             best_train_metrics = train_metrics
             best_val_metrics = eval_metrics
-            
+
             # Save either SWA model or regular model
-            if swa_val_metrics and swa_val_metrics["mcc"] > val_metrics["mcc"]:
+            if swa_val_metrics and swa_mcc_best > val_mcc_best:
                 save_checkpoint(checkpoint_path, swa_model.module, optimizer, scheduler, epoch, eval_metrics)
             else:
                 save_checkpoint(checkpoint_path, model, optimizer, scheduler, epoch, val_metrics)
-            LOGGER.info("★ New best! MCC: %.4f, Acc: %.4f (%.2f%%)", best_val_mcc, best_val_acc, best_val_acc * 100)
+            LOGGER.info(
+                "★ New best! MCC@best: %.4f, Acc@best: %.4f (%.2f%%), thr=%.2f",
+                best_val_mcc, best_val_acc, best_val_acc * 100,
+                eval_metrics.get("best_threshold", 0.5),
+            )
         else:
             patience_counter += 1
             # In SWA phase, be more patient as averaging takes time
@@ -2476,8 +2719,11 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("=" * 60)
     LOGGER.info("TRAINING COMPLETE")
     LOGGER.info("Best Epoch: %d%s", best_epoch, " (SWA)" if swa_started and best_epoch >= stage1_swa_start_epoch else "")
-    LOGGER.info("Best Val Accuracy: %.4f (%.2f%%)", best_val_acc, best_val_acc * 100)
-    LOGGER.info("Best Val MCC: %.4f", best_val_mcc)
+    LOGGER.info("Best Val Acc@best: %.4f (%.2f%%)", best_val_acc, best_val_acc * 100)
+    LOGGER.info("Best Val MCC@best: %.4f", best_val_mcc)
+    if best_val_metrics:
+        LOGGER.info("Best threshold: %.2f", best_val_metrics.get("best_threshold", 0.5))
+        LOGGER.info("Acc@0.5: %.4f (%.2f%%)", best_val_metrics.get("accuracy", 0), best_val_metrics.get("accuracy", 0) * 100)
     if stage1_use_swa:
         LOGGER.info("SWA was %s", "active" if swa_started else "not triggered (training ended early)")
     LOGGER.info("=" * 60)

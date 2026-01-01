@@ -488,7 +488,7 @@ class DNAEncoder(nn.Module):
     def load_mlm_weights(self, checkpoint: Union[str, Path, dict], strict: bool = False) -> None:
         """Load pretrained MLM encoder weights with flexible matching."""
         if isinstance(checkpoint, (str, Path)):
-            state_dict = torch.load(checkpoint, map_location="cpu")
+            state_dict = torch.load(checkpoint, map_location="cpu", weights_only=False)
         else:
             state_dict = checkpoint
         
@@ -1019,11 +1019,15 @@ class GeneWhispererStage1(nn.Module):
         fusion_hidden: int = 256,
         # Stochastic depth (drop path) rate for encoder
         drop_path_rate: float = 0.1,
+        # Maximum sequence length for positional embeddings
+        max_seq_len: int = 256,
     ):
         super().__init__()
-        
+
         self.use_tcn = use_tcn
         self.pad_token_id = pad_token_id
+        self.max_seq_len = int(max_seq_len)
+        self.pos_embedding = nn.Embedding(self.max_seq_len, embedding_dim)
         
         # Step 1: Embedding layer (from DNAEncoder, but we only use embedding)
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_token_id)
@@ -1167,47 +1171,74 @@ class GeneWhispererStage1(nn.Module):
         if self.pad_token_id is not None:
             return tokens.eq(self.pad_token_id)
         return None
-    
-    def _sequence_backbone(
+
+    def _sequence_backbone_from_embeds(
         self,
-        tokens: torch.Tensor,
+        embeds: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Process sequence through embedding → CNN/TCN → Transformer → Pool.
-        
+        Process pre-computed embeddings through CNN/TCN → Transformer → Pool.
+
+        This method enables embedding-space mixup and distillation by allowing
+        forward passes that start from embeddings rather than token indices.
+
         Args:
-            tokens: (B, L) token indices
+            embeds: (B, L, embedding_dim) pre-computed embeddings
+            padding_mask: Optional (B, L) padding mask (True = pad)
         Returns:
             (B, D) pooled sequence features
         """
-        # Step 1: Embedding
-        x = self.embedding(tokens)  # (B, L, embedding_dim)
+        # Add positional embeddings
+        B, L, D = embeds.shape
+        if L > self.pos_embedding.num_embeddings:
+            raise ValueError(
+                f"Sequence token length {L} exceeds max_seq_len={self.pos_embedding.num_embeddings}. "
+                f"Increase max_bp_len or pass a larger max_seq_len."
+            )
+        pos_ids = torch.arange(L, device=embeds.device).unsqueeze(0).expand(B, L)
+        x = embeds + self.pos_embedding(pos_ids)
         x = self.embed_dropout(x)
-        
-        # Step 2: CNN/TCN (transpose for conv: B, L, D -> B, D, L)
+
+        # CNN/TCN (transpose for conv: B, L, D -> B, D, L)
         x = x.transpose(1, 2)
-        
+
         if self.use_tcn:
             x = self.feature_extractor(x)  # (B, tcn_hidden, L)
         else:
             x = self.conv(x)
             x = self.conv_bn(x)
             x = self.conv_act(x)
-        
+
         # Transpose back: (B, D, L) -> (B, L, D)
         x = x.transpose(1, 2)
-        
-        # Step 3: Post-CNN Transformer for global context
-        padding_mask = self._get_padding_mask(tokens)
+
+        # Post-CNN Transformer for global context
         x = self.post_cnn_transformer(x, key_padding_mask=padding_mask)
-        
-        # Step 4: Pooling
+
+        # Pooling
         if self.use_attention_pool:
             pooled = self.pool(x, padding_mask)
         else:
             pooled = torch.max(x, dim=1).values
-        
+
         return pooled
+
+    def _sequence_backbone(
+        self,
+        tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Process sequence through embedding → CNN/TCN → Transformer → Pool.
+
+        Args:
+            tokens: (B, L) token indices
+        Returns:
+            (B, D) pooled sequence features
+        """
+        embeds = self.embedding(tokens)
+        padding_mask = self._get_padding_mask(tokens)
+        return self._sequence_backbone_from_embeds(embeds, padding_mask)
     
     def extract_features(
         self,
@@ -1228,7 +1259,40 @@ class GeneWhispererStage1(nn.Module):
             return seq_features, fused
         
         return seq_features, seq_features
-    
+
+    def extract_features_from_embeds(
+        self,
+        embeds: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+        engineered_features: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Extract sequence and fused features from pre-computed embeddings.
+
+        This method enables embedding-space mixup and distillation by allowing
+        feature extraction that starts from embeddings rather than token indices.
+
+        Args:
+            embeds: (B, L, embedding_dim) pre-computed embeddings
+            padding_mask: Optional (B, L) padding mask (True = pad)
+            engineered_features: Optional (B, engineered_dim) hand-crafted features
+        Returns:
+            Tuple of (seq_features, fused_features) both (B, D)
+        """
+        seq_features = self._sequence_backbone_from_embeds(embeds, padding_mask)
+
+        if engineered_features is not None:
+            assert engineered_features.size(-1) == self.engineered_dim, (
+                f"Engineered feature dim mismatch: got {engineered_features.size(-1)}, "
+                f"expected {self.engineered_dim}"
+            )
+        if self.use_engineered_features and engineered_features is not None:
+            eng_features = self.engineered_mlp(engineered_features)
+            fused = self.fusion(seq_features, eng_features)
+            return seq_features, fused
+
+        return seq_features, seq_features
+
     def forward(
         self,
         tokens: torch.Tensor,
@@ -1251,6 +1315,41 @@ class GeneWhispererStage1(nn.Module):
             # Run classifier up to (but not including) sigmoid
             # classifier is: Linear -> LayerNorm -> GELU -> Dropout -> Linear -> LayerNorm -> GELU -> Dropout -> Linear -> Sigmoid
             # We need output of the last Linear (index -2, before Sigmoid at index -1)
+            x = fused
+            for layer in list(self.classifier)[:-1]:  # All except final Sigmoid
+                x = layer(x)
+            logits = x
+            probs = torch.sigmoid(logits)
+            return probs, logits
+
+        return self.classifier(fused)
+
+    def forward_from_embeds(
+        self,
+        embeds: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+        engineered_features: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Forward pass from pre-computed embeddings (parity path for mixup/distillation).
+
+        This method enables embedding-space mixup and distillation by allowing
+        forward passes that start from embeddings rather than token indices.
+        Behavior is identical to forward() except it takes embeddings directly.
+
+        Args:
+            embeds: (B, L, embedding_dim) pre-computed embeddings
+            padding_mask: Optional (B, L) padding mask (True = pad)
+            engineered_features: Optional (B, engineered_dim) hand-crafted features
+            return_logits: If True, also return pre-sigmoid logits for distillation
+        Returns:
+            (B, 1) promoter probability, or tuple of (probs, logits) if return_logits=True
+        """
+        _, fused = self.extract_features_from_embeds(embeds, padding_mask, engineered_features)
+
+        if return_logits:
+            # Run classifier up to (but not including) sigmoid
             x = fused
             for layer in list(self.classifier)[:-1]:  # All except final Sigmoid
                 x = layer(x)
@@ -1691,7 +1790,7 @@ class GeneWhispererStage2(nn.Module):
         if device is None:
             device = next(self.parameters()).device
 
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
         # Handle different checkpoint formats
         if isinstance(checkpoint, dict) and "model_state" in checkpoint:

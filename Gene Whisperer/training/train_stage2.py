@@ -90,7 +90,7 @@ def _normalize_state_dict(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_checkpoint_compatible(model: nn.Module, checkpoint_path: Path, *, device: torch.device) -> int:
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if isinstance(checkpoint, dict) and "model_state" in checkpoint:
         state = checkpoint["model_state"]
     elif isinstance(checkpoint, dict):
