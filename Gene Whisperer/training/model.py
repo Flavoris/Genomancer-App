@@ -435,6 +435,11 @@ class DNAEncoder(nn.Module):
         max_seq_len: int = 256,
         drop_path_rate: float = 0.1,  # Stochastic depth rate
         layer_scale_init: float = 1.0,  # Layer scale initialization
+        use_relative_position_bias: bool = False,
+        relative_position_num_buckets: int = 32,
+        relative_position_max_distance: int = 128,
+        use_glu_ffn: bool = False,  # Use GLU-style FFN
+        glu_activation: str = "gelu",  # Activation for GLU: "gelu" or "silu"
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
@@ -442,22 +447,34 @@ class DNAEncoder(nn.Module):
         self.k = kmer
         self.pad_token_id = pad_token_id
         self.num_heads = num_heads
-        
+        self.use_relative_position_bias = use_relative_position_bias
+
         # Embedding with scaled initialization (BERT-style)
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_token_id)
         self._init_embedding()
-        
+
         self.embed_dropout = nn.Dropout(dropout)
-        
+
         # Embedding layer norm for stability (like BERT)
         self.embed_norm = nn.LayerNorm(embedding_dim)
-        
+
         # Positional encoding - ALWAYS use position embeddings for input
         # This is critical for MLM: when all tokens are [MASK], the model needs
         # positional information in the embeddings themselves, not just in attention.
         self.pos_embedding = nn.Embedding(max_seq_len, embedding_dim)
         nn.init.normal_(self.pos_embedding.weight, std=0.02)
-        
+
+        # Relative position bias (T5/ALiBi style) - shared across all layers
+        if use_relative_position_bias:
+            self.relative_position_bias = RelativePositionBias(
+                num_heads=num_heads,
+                max_distance=relative_position_max_distance,
+                num_buckets=relative_position_num_buckets,
+                bidirectional=True,
+            )
+        else:
+            self.relative_position_bias = None
+
         # Pre-norm transformer layers with linearly increasing stochastic depth
         # This drops more aggressively in later layers (which are more task-specific)
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, num_layers)]
@@ -468,10 +485,12 @@ class DNAEncoder(nn.Module):
                 dim_feedforward=ff_dim,
                 dropout=dropout,
                 drop_path=dpr[i],
+                use_glu_ffn=use_glu_ffn,
+                glu_activation=glu_activation,
             )
             for i in range(num_layers)
         ])
-        
+
         self.final_norm = nn.LayerNorm(embedding_dim)
     
     def _init_embedding(self):
@@ -549,12 +568,17 @@ class DNAEncoder(nn.Module):
         if key_padding_mask is None and self.pad_token_id is not None:
             key_padding_mask = token_ids.eq(self.pad_token_id)
 
+        # Compute relative position bias once (shared across all layers)
+        position_bias = None
+        if self.relative_position_bias is not None:
+            position_bias = self.relative_position_bias(L, token_ids.device)
+
         # Process through layers
         hidden_states = [] if return_all_hidden_states else None
         for layer in self.layers:
             if return_all_hidden_states:
                 hidden_states.append(x)
-            x = layer(x, key_padding_mask=key_padding_mask)
+            x = layer(x, key_padding_mask=key_padding_mask, position_bias=position_bias)
         
         output = self.final_norm(x)
         
@@ -568,38 +592,212 @@ class DNAEncoder(nn.Module):
 class StochasticDepth(nn.Module):
     """
     Stochastic Depth (Layer Drop) for regularization.
-    
+
     Randomly drops entire layers during training, which:
     1. Acts as strong regularization
     2. Reduces effective network depth, speeding up training
     3. Creates an implicit ensemble of different depth networks
     """
-    
+
     def __init__(self, drop_prob: float = 0.0):
         super().__init__()
         self.drop_prob = drop_prob
-    
+
     def forward(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
         if not self.training or self.drop_prob == 0.0:
             return x + residual
-        
+
         # During training, randomly skip this layer
         keep_prob = 1.0 - self.drop_prob
         if torch.rand(1).item() < self.drop_prob:
             return x  # Skip the residual (drop this layer)
-        
+
         # Scale residual to compensate for dropped layers
         return x + residual / keep_prob
+
+
+class GLUFFN(nn.Module):
+    """
+    Gated Linear Unit Feed-Forward Network.
+
+    Uses gating mechanism: output = Linear(GELU(gate) * up)
+    where gate and up are separate linear projections.
+
+    This is used in modern transformers like PaLM, LLaMA, and others
+    for improved expressiveness over standard FFN.
+
+    Note: GLU effectively doubles the parameters in the up-projection,
+    so we use ff_dim * 2/3 for each branch to keep param count similar
+    to standard FFN.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        ff_dim: int,
+        dropout: float = 0.1,
+        activation: str = "gelu",  # or "silu" for SwiGLU
+    ):
+        super().__init__()
+        # To maintain similar param count, each branch gets 2/3 of ff_dim
+        hidden_dim = int(ff_dim * 2 / 3)
+        # Round to multiple of 8 for efficiency
+        hidden_dim = ((hidden_dim + 7) // 8) * 8
+
+        self.gate_proj = nn.Linear(d_model, hidden_dim, bias=False)
+        self.up_proj = nn.Linear(d_model, hidden_dim, bias=False)
+        self.down_proj = nn.Linear(hidden_dim, d_model, bias=False)
+
+        self.dropout = nn.Dropout(dropout)
+
+        if activation == "gelu":
+            self.activation = nn.GELU()
+        elif activation == "silu":
+            self.activation = nn.SiLU()  # SwiGLU uses SiLU
+        else:
+            self.activation = nn.GELU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch, seq_len, d_model)
+        Returns:
+            Output tensor of shape (batch, seq_len, d_model)
+        """
+        # Gate branch: activation(gate_proj(x))
+        gate = self.activation(self.gate_proj(x))
+        # Up branch: up_proj(x)
+        up = self.up_proj(x)
+        # Gated combination
+        hidden = gate * up
+        # Down projection
+        output = self.down_proj(hidden)
+        return self.dropout(output)
+
+
+class RelativePositionBias(nn.Module):
+    """
+    Relative position bias for attention, similar to T5/ALiBi.
+
+    Adds learnable bias based on relative distance between query and key positions.
+    Uses bucketed distances to handle long sequences efficiently.
+
+    Args:
+        num_heads: Number of attention heads
+        max_distance: Maximum relative distance to consider
+        num_buckets: Number of distance buckets (for efficiency)
+        bidirectional: Whether to use separate buckets for forward/backward
+    """
+
+    def __init__(
+        self,
+        num_heads: int = 8,
+        max_distance: int = 128,
+        num_buckets: int = 32,
+        bidirectional: bool = True,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.num_buckets = num_buckets
+        self.max_distance = max_distance
+        self.bidirectional = bidirectional
+
+        # Learnable bias for each bucket and head
+        self.relative_attention_bias = nn.Embedding(num_buckets, num_heads)
+
+        # Initialize with small values for stable training
+        nn.init.normal_(self.relative_attention_bias.weight, std=0.02)
+
+    def _relative_position_bucket(
+        self,
+        relative_position: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Convert relative positions to bucket indices.
+        Uses logarithmic bucketing for distant positions (T5-style).
+
+        For bidirectional:
+        - Half the buckets are for negative (backward) positions
+        - Half are for positive (forward) positions
+        - Within each half: first quarter is exact, rest is log-bucketed
+        """
+        relative_buckets = torch.zeros_like(relative_position)
+
+        if self.bidirectional:
+            num_buckets = self.num_buckets
+            n = num_buckets // 2
+            # Offset for positive positions
+            relative_buckets += (relative_position > 0).long() * n
+            relative_position = torch.abs(relative_position)
+        else:
+            # Clamp to non-negative for unidirectional
+            relative_position = torch.clamp(-relative_position, min=0)
+            num_buckets = self.num_buckets
+            n = num_buckets
+
+        # First half of buckets are for exact positions
+        max_exact = n // 2
+        is_small = relative_position < max_exact
+
+        # Second half uses logarithmic bucketing
+        # Maps [max_exact, max_distance] -> [max_exact, n-1]
+        relative_position_if_large = max_exact + (
+            torch.log(relative_position.float() / max_exact)
+            / math.log(self.max_distance / max_exact)
+            * (n - max_exact)
+        ).long()
+
+        relative_position_if_large = torch.clamp(
+            relative_position_if_large, max=n - 1
+        )
+
+        relative_buckets += torch.where(
+            is_small, relative_position, relative_position_if_large
+        )
+
+        return relative_buckets
+
+    def forward(self, seq_len: int, device: torch.device) -> torch.Tensor:
+        """
+        Compute relative position bias matrix.
+
+        Args:
+            seq_len: Sequence length
+            device: Device to create tensors on
+
+        Returns:
+            Tensor of shape (1, num_heads, seq_len, seq_len)
+        """
+        # Create position indices
+        context_position = torch.arange(seq_len, device=device)[:, None]
+        memory_position = torch.arange(seq_len, device=device)[None, :]
+
+        # Relative positions: (seq_len, seq_len)
+        # Positive = memory is ahead of context, negative = behind
+        relative_position = memory_position - context_position
+
+        # Convert to bucket indices
+        relative_position_bucket = self._relative_position_bucket(relative_position)
+
+        # Look up bias values: (seq_len, seq_len, num_heads)
+        values = self.relative_attention_bias(relative_position_bucket)
+
+        # Reshape to (1, num_heads, seq_len, seq_len)
+        values = values.permute(2, 0, 1).unsqueeze(0)
+
+        return values
 
 
 class PreNormTransformerLayer(nn.Module):
     """
     Pre-norm transformer layer with stochastic depth.
-    
+
     IMPORTANT FIX: The attention mask handling was causing interference with learning.
     Now properly handles padding masks without interfering with attention computation.
+
+    Supports optional GLU FFN (Gated Linear Unit) for improved expressiveness.
     """
-    
+
     def __init__(
         self,
         d_model: int,
@@ -607,39 +805,50 @@ class PreNormTransformerLayer(nn.Module):
         dim_feedforward: int,
         dropout: float = 0.1,
         drop_path: float = 0.0,  # Stochastic depth probability
+        use_glu_ffn: bool = False,  # Use GLU-style FFN
+        glu_activation: str = "gelu",  # Activation for GLU: "gelu" or "silu"
     ):
         super().__init__()
         self.d_model = d_model
         self.nhead = nhead
         self.head_dim = d_model // nhead
-        
+
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
-        
+
         # Use custom attention for tighter control over masking behavior
         self.q_proj = nn.Linear(d_model, d_model)
         self.k_proj = nn.Linear(d_model, d_model)
         self.v_proj = nn.Linear(d_model, d_model)
         self.out_proj = nn.Linear(d_model, d_model)
-        
+
         self.attn_dropout = nn.Dropout(dropout)
         self.resid_dropout = nn.Dropout(dropout)
-        
-        # GLU-style FFN for better gradient flow (from Llama-style improvements)
-        self.ffn = nn.Sequential(
-            nn.Linear(d_model, dim_feedforward),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(dim_feedforward, d_model),
-            nn.Dropout(dropout),
-        )
-        
+
+        # FFN: either standard or GLU-style
+        if use_glu_ffn:
+            self.ffn = GLUFFN(
+                d_model=d_model,
+                ff_dim=dim_feedforward,
+                dropout=dropout,
+                activation=glu_activation,
+            )
+        else:
+            # Standard FFN
+            self.ffn = nn.Sequential(
+                nn.Linear(d_model, dim_feedforward),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(dim_feedforward, d_model),
+                nn.Dropout(dropout),
+            )
+
         # Stochastic depth for regularization
         self.drop_path_attn = StochasticDepth(drop_path)
         self.drop_path_ffn = StochasticDepth(drop_path)
-        
+
         self.scale = self.head_dim ** -0.5
-        
+
         # Initialize projections with scaled initialization
         self._init_weights()
     
@@ -654,20 +863,25 @@ class PreNormTransformerLayer(nn.Module):
         self,
         x: torch.Tensor,
         key_padding_mask: Optional[torch.Tensor] = None,
+        position_bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         B, L, D = x.shape
-        
+
         # Pre-norm
         normed = self.norm1(x)
-        
+
         # Project to Q, K, V
         q = self.q_proj(normed).view(B, L, self.nhead, self.head_dim).transpose(1, 2)
         k = self.k_proj(normed).view(B, L, self.nhead, self.head_dim).transpose(1, 2)
         v = self.v_proj(normed).view(B, L, self.nhead, self.head_dim).transpose(1, 2)
-        
+
         # Scaled dot-product attention
         attn_weights = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, L, L)
-        
+
+        # Add relative position bias BEFORE softmax (T5/ALiBi style)
+        if position_bias is not None:
+            attn_weights = attn_weights + position_bias
+
         # Apply padding mask
         if key_padding_mask is not None:
             # key_padding_mask: (B, L), True = pad
@@ -675,7 +889,7 @@ class PreNormTransformerLayer(nn.Module):
             attn_weights = attn_weights.masked_fill(
                 key_padding_mask.unsqueeze(1).unsqueeze(2), float('-inf')
             )
-        
+
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_weights = self.attn_dropout(attn_weights)
         
@@ -946,17 +1160,34 @@ class PostCNNTransformerAdapter(nn.Module):
         ff_dim: int = 384,
         dropout: float = 0.15,
         drop_path_rate: float = 0.1,  # Stochastic depth
+        use_glu_ffn: bool = False,  # Use GLU-style FFN
+        glu_activation: str = "gelu",  # Activation for GLU: "gelu" or "silu"
+        use_relative_position_bias: bool = False,  # Relative position bias
+        relative_position_num_buckets: int = 32,
+        relative_position_max_distance: int = 128,
     ):
         super().__init__()
         self.input_dim = input_dim
         self.transformer_dim = transformer_dim
-        
+        self.use_relative_position_bias = use_relative_position_bias
+
         # Projection to transformer dimension
         self.input_proj = nn.Linear(input_dim, transformer_dim)
         self.input_norm = nn.LayerNorm(transformer_dim)
-        
+
+        # Relative position bias (shared across all layers)
+        if use_relative_position_bias:
+            self.relative_position_bias = RelativePositionBias(
+                num_heads=num_heads,
+                max_distance=relative_position_max_distance,
+                num_buckets=relative_position_num_buckets,
+                bidirectional=True,
+            )
+        else:
+            self.relative_position_bias = None
+
         # Transformer layers (can be initialized from pretrained DNAEncoder)
-        
+
         # Linearly increasing stochastic depth
         if num_layers < 0:
             raise ValueError(f"num_layers must be >= 0, got {num_layers}")
@@ -972,12 +1203,14 @@ class PostCNNTransformerAdapter(nn.Module):
                 dim_feedforward=ff_dim,
                 dropout=dropout,
                 drop_path=dpr[i],
+                use_glu_ffn=use_glu_ffn,
+                glu_activation=glu_activation,
             )
             for i in range(num_layers)
         ])
-        
+
         self.final_norm = nn.LayerNorm(transformer_dim)
-        
+
         # Project back to original dimension for pooling
         self.output_proj = nn.Linear(transformer_dim, input_dim)
         self.output_norm = nn.LayerNorm(input_dim)
@@ -1019,23 +1252,28 @@ class PostCNNTransformerAdapter(nn.Module):
         """
         if len(self.layers) == 0:
             return x
-        
+
         B, L, D = x.shape
-        
+
         # Project to transformer dimension
         x = self.input_proj(x)
         x = self.input_norm(x)
-        
+
+        # Compute relative position bias once (shared across all layers)
+        position_bias = None
+        if self.relative_position_bias is not None:
+            position_bias = self.relative_position_bias(L, x.device)
+
         # Apply transformer layers
         for layer in self.layers:
-            x = layer(x, key_padding_mask=key_padding_mask)
-        
+            x = layer(x, key_padding_mask=key_padding_mask, position_bias=position_bias)
+
         x = self.final_norm(x)
-        
+
         # Project back to input dimension
         x = self.output_proj(x)
         x = self.output_norm(x)
-        
+
         return x
 
 
@@ -1094,6 +1332,13 @@ class GeneWhispererStage1(nn.Module):
         drop_path_rate: float = 0.1,
         # Maximum sequence length for positional embeddings
         max_seq_len: int = 256,
+        # Relative position bias parameters
+        use_relative_position_bias: bool = False,
+        relative_position_num_buckets: int = 32,
+        relative_position_max_distance: int = 128,
+        # GLU FFN parameters
+        use_glu_ffn: bool = False,
+        glu_activation: str = "gelu",
     ):
         super().__init__()
 
@@ -1101,11 +1346,11 @@ class GeneWhispererStage1(nn.Module):
         self.pad_token_id = pad_token_id
         self.max_seq_len = int(max_seq_len)
         self.pos_embedding = nn.Embedding(self.max_seq_len, embedding_dim)
-        
+
         # Step 1: Embedding layer (from DNAEncoder, but we only use embedding)
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_token_id)
         self.embed_dropout = nn.Dropout(dropout)
-        
+
         # Store the full encoder for MLM weight loading compatibility
         self._full_encoder = encoder or DNAEncoder(
             vocab_size=vocab_size,
@@ -1117,6 +1362,11 @@ class GeneWhispererStage1(nn.Module):
             dropout=dropout,
             pad_token_id=pad_token_id,
             drop_path_rate=drop_path_rate,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
         )
         # Copy embedding weights from encoder
         self.embedding.weight = self._full_encoder.embedding.weight
@@ -1138,7 +1388,7 @@ class GeneWhispererStage1(nn.Module):
             self.conv_bn = nn.BatchNorm1d(256)
             self.conv_act = nn.GELU()
             cnn_out_dim = 256
-        
+
         # Step 3: Transformer adapter for global contextualization (AFTER CNN)
         # Uses same dimension as pretrained encoder for weight transfer
         self.post_cnn_transformer = PostCNNTransformerAdapter(
@@ -1148,8 +1398,13 @@ class GeneWhispererStage1(nn.Module):
             num_heads=num_heads,
             ff_dim=ff_dim,
             dropout=dropout,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
         )
-        
+
         # Step 4: Attention pooling
         self.use_attention_pool = use_attention_pool
         if use_attention_pool:
@@ -1241,7 +1496,77 @@ class GeneWhispererStage1(nn.Module):
             num_layers = len(self.post_cnn_transformer.layers)
             loaded = self.post_cnn_transformer.load_pretrained_layers(self._full_encoder, num_layers)
             LOGGER.info("Transferred %d transformer layers to post-CNN adapter", loaded)
-    
+
+    def load_pretrained(
+        self,
+        checkpoint_path: Union[str, Path],
+        strict: bool = False,
+    ) -> None:
+        """
+        Load checkpoint with backward compatibility for architecture enhancements.
+
+        New layers (relative position bias, GLU FFN components) will be randomly
+        initialized if not present in the checkpoint. This allows loading older
+        checkpoints into models with new architectural features enabled.
+
+        Args:
+            checkpoint_path: Path to checkpoint file
+            strict: If False (default), allows missing keys for new components
+        """
+        state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+        # Handle nested state dict (e.g., from training checkpoints)
+        if "model_state_dict" in state_dict:
+            state_dict = state_dict["model_state_dict"]
+
+        # Get current model state
+        model_state = self.state_dict()
+
+        # Filter to only keys that exist in both and have matching shapes
+        filtered_state = {}
+        for k, v in state_dict.items():
+            if k in model_state:
+                if model_state[k].shape == v.shape:
+                    filtered_state[k] = v
+                else:
+                    LOGGER.warning(
+                        "Shape mismatch for %s: checkpoint %s vs model %s (skipping)",
+                        k, v.shape, model_state[k].shape
+                    )
+
+        # Log which keys are new (in model but not in checkpoint)
+        new_keys = set(model_state.keys()) - set(filtered_state.keys())
+        if new_keys:
+            # Group by component for cleaner logging
+            rel_pos_keys = [k for k in new_keys if "relative_position" in k]
+            glu_keys = [k for k in new_keys if "gate_proj" in k or "up_proj" in k or "down_proj" in k]
+            other_keys = [k for k in new_keys if k not in rel_pos_keys and k not in glu_keys]
+
+            if rel_pos_keys:
+                LOGGER.info("New relative position bias parameters (randomly initialized): %d keys", len(rel_pos_keys))
+            if glu_keys:
+                LOGGER.info("New GLU FFN parameters (randomly initialized): %d keys", len(glu_keys))
+            if other_keys:
+                LOGGER.info("Other new parameters (randomly initialized): %s", other_keys)
+
+        # Log which keys are in checkpoint but not in model (removed components)
+        missing_keys = set(state_dict.keys()) - set(model_state.keys())
+        if missing_keys:
+            LOGGER.info("Checkpoint keys not in model (ignored): %d keys", len(missing_keys))
+
+        # Load the filtered state dict
+        # When strict=True, fail if model has parameters not covered by checkpoint
+        if strict and new_keys:
+            raise RuntimeError(
+                f"strict=True but {len(new_keys)} model parameters not in checkpoint: "
+                f"{list(new_keys)[:5]}{'...' if len(new_keys) > 5 else ''}"
+            )
+        self.load_state_dict(filtered_state, strict=False)
+        LOGGER.info(
+            "Loaded %d/%d parameters from checkpoint (new: %d, ignored: %d)",
+            len(filtered_state), len(state_dict), len(new_keys), len(missing_keys)
+        )
+
     def _get_padding_mask(self, tokens: torch.Tensor) -> Optional[torch.Tensor]:
         """Generate padding mask from tokens."""
         if self.pad_token_id is not None:
@@ -1678,6 +2003,13 @@ class GeneWhispererStage2(nn.Module):
         fusion_hidden: int = 384,
         # Stochastic depth (drop path) rate for encoder
         drop_path_rate: float = 0.1,
+        # Relative position bias parameters
+        use_relative_position_bias: bool = False,
+        relative_position_num_buckets: int = 32,
+        relative_position_max_distance: int = 128,
+        # GLU FFN parameters
+        use_glu_ffn: bool = False,
+        glu_activation: str = "gelu",
     ):
         super().__init__()
 
@@ -1700,6 +2032,11 @@ class GeneWhispererStage2(nn.Module):
             dropout=dropout,
             pad_token_id=pad_token_id,
             drop_path_rate=drop_path_rate,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
         )
         # Copy embedding weights from encoder
         self.embedding.weight = self._full_encoder.embedding.weight
@@ -1730,6 +2067,8 @@ class GeneWhispererStage2(nn.Module):
             num_heads=num_heads,
             ff_dim=ff_dim,
             dropout=dropout,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
         )
 
         # Token-level feature dimension after backbone

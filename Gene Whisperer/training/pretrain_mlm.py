@@ -25,7 +25,7 @@ import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import torch
 import torch.nn as nn
@@ -78,6 +78,145 @@ def reverse_complement(sequence: str) -> str:
 def set_seed(seed: int) -> None:
     """Set all random seeds for reproducibility (wrapper for set_global_seed)."""
     set_global_seed(seed)
+
+
+class MaskingScheduler:
+    """
+    Progressive masking rate scheduler following DNABERT.
+
+    DNABERT uses curriculum learning for masking:
+    - First 80% of training: 15% masking rate (easier)
+    - Last 20% of training: 20% masking rate (harder)
+
+    This progressive approach starts easier and increases difficulty,
+    which improves final model performance.
+
+    Args:
+        initial_rate: Starting mask rate (default 0.15)
+        final_rate: Ending mask rate (default 0.20)
+        warmup_steps: Steps before starting to increase rate (default 0)
+        total_steps: Total training steps
+        transition_start_ratio: When to start transitioning (default 0.8 = 80% of training)
+
+    Example:
+        >>> scheduler = MaskingScheduler(
+        ...     initial_rate=0.15,
+        ...     final_rate=0.20,
+        ...     total_steps=100000,
+        ...     transition_start_ratio=0.8,
+        ... )
+        >>> scheduler.get_mask_rate(0)      # Start: 0.15
+        0.15
+        >>> scheduler.get_mask_rate(80000)  # At 80%: 0.15 (just starting transition)
+        0.15
+        >>> scheduler.get_mask_rate(90000)  # At 90%: 0.175 (midway through transition)
+        0.175
+        >>> scheduler.get_mask_rate(100000) # At 100%: 0.20
+        0.2
+    """
+
+    def __init__(
+        self,
+        initial_rate: float = 0.15,
+        final_rate: float = 0.20,
+        warmup_steps: int = 0,
+        total_steps: int = 100000,
+        transition_start_ratio: float = 0.8,
+    ):
+        if not 0.0 <= initial_rate <= 1.0:
+            raise ValueError(f"initial_rate must be in [0, 1], got {initial_rate}")
+        if not 0.0 <= final_rate <= 1.0:
+            raise ValueError(f"final_rate must be in [0, 1], got {final_rate}")
+        if warmup_steps < 0:
+            raise ValueError(f"warmup_steps must be >= 0, got {warmup_steps}")
+        if total_steps <= 0:
+            raise ValueError(f"total_steps must be > 0, got {total_steps}")
+        if not 0.0 <= transition_start_ratio <= 1.0:
+            raise ValueError(f"transition_start_ratio must be in [0, 1], got {transition_start_ratio}")
+
+        self.initial_rate = initial_rate
+        self.final_rate = final_rate
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.transition_start_ratio = transition_start_ratio
+
+        # Compute transition boundaries
+        self.transition_start_step = int(total_steps * transition_start_ratio)
+        self.transition_steps = total_steps - self.transition_start_step
+
+        # Track current step for logging
+        self._current_step = 0
+
+    def get_mask_rate(self, step: int) -> float:
+        """
+        Return the masking rate for the current step.
+
+        Schedule:
+        - Steps 0 to warmup_steps: initial_rate (warmup phase)
+        - Steps warmup_steps to transition_start_step: initial_rate (stable phase)
+        - Steps transition_start_step to total_steps: linear interpolation to final_rate
+        - Steps > total_steps: final_rate (clamped)
+
+        Args:
+            step: Current training step (0-indexed)
+
+        Returns:
+            Masking rate for this step
+        """
+        self._current_step = step
+
+        # Before transition starts: use initial rate
+        if step < self.transition_start_step:
+            return self.initial_rate
+
+        # During transition: linear interpolation
+        if step < self.total_steps:
+            progress = (step - self.transition_start_step) / max(1, self.transition_steps)
+            return self.initial_rate + progress * (self.final_rate - self.initial_rate)
+
+        # After total_steps: clamp to final rate
+        return self.final_rate
+
+    def state_dict(self) -> dict:
+        """Return state for checkpointing."""
+        return {
+            "initial_rate": self.initial_rate,
+            "final_rate": self.final_rate,
+            "warmup_steps": self.warmup_steps,
+            "total_steps": self.total_steps,
+            "transition_start_ratio": self.transition_start_ratio,
+            "current_step": self._current_step,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        """Load state for resuming training."""
+        self.initial_rate = state["initial_rate"]
+        self.final_rate = state["final_rate"]
+        self.warmup_steps = state["warmup_steps"]
+        self.total_steps = state["total_steps"]
+        self.transition_start_ratio = state["transition_start_ratio"]
+        self._current_step = state.get("current_step", 0)
+
+        # Recompute derived values
+        self.transition_start_step = int(self.total_steps * self.transition_start_ratio)
+        self.transition_steps = self.total_steps - self.transition_start_step
+
+    def get_schedule_info(self) -> dict:
+        """Return human-readable schedule information for logging."""
+        return {
+            "initial_rate": f"{self.initial_rate:.1%}",
+            "final_rate": f"{self.final_rate:.1%}",
+            "transition_start_step": self.transition_start_step,
+            "total_steps": self.total_steps,
+            "current_step": self._current_step,
+            "current_rate": f"{self.get_mask_rate(self._current_step):.1%}",
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"MaskingScheduler(initial={self.initial_rate:.1%}, final={self.final_rate:.1%}, "
+            f"transition_at={self.transition_start_ratio:.0%}, total_steps={self.total_steps})"
+        )
 
 
 def extract_windows(
@@ -148,6 +287,144 @@ class MLMDataset(Dataset):
 
     def __getitem__(self, idx: int) -> torch.LongTensor:
         return self.samples[idx]
+
+
+class PromoterMLMDataset(Dataset):
+    """
+    MLM Dataset with support for contiguous (DNABERT-style) and random masking.
+
+    This dataset stores raw sequences and applies masking on-the-fly during
+    __getitem__, allowing for:
+    - Dynamic mask rate updates (for progressive/curriculum masking)
+    - Switchable masking strategies (contiguous vs random span masking)
+    - Proper handling of k-mer specific masking
+
+    Args:
+        sequences: List of DNA sequences (raw strings)
+        vocab: KmerVocabulary for tokenization
+        max_len: Maximum sequence length in base pairs (default: 81)
+        mask_strategy: "contiguous" for DNABERT-style or "random" for span masking
+        mask_rate: Fraction of tokens to mask (can be updated during training)
+        mask_token_prob: Probability of replacing masked token with [MASK] (default: 0.8)
+        random_token_prob: Probability of replacing masked token with random token (default: 0.1)
+        max_span_len: Maximum span length for random strategy (default: 3)
+        mean_span: Mean span length for geometric distribution in random strategy (default: 3.0)
+    """
+
+    def __init__(
+        self,
+        sequences: List[str],
+        vocab: KmerVocabulary,
+        max_len: int = 81,
+        mask_strategy: str = "contiguous",
+        mask_rate: float = 0.15,
+        mask_token_prob: float = 0.8,
+        random_token_prob: float = 0.1,
+        max_span_len: int = 3,
+        mean_span: float = 3.0,
+    ):
+        if mask_strategy not in ("contiguous", "random"):
+            raise ValueError(f"mask_strategy must be 'contiguous' or 'random', got '{mask_strategy}'")
+        if not 0.0 <= mask_rate <= 1.0:
+            raise ValueError(f"mask_rate must be in [0, 1], got {mask_rate}")
+        if not 0.0 <= mask_token_prob <= 1.0:
+            raise ValueError(f"mask_token_prob must be in [0, 1], got {mask_token_prob}")
+        if not 0.0 <= random_token_prob <= 1.0:
+            raise ValueError(f"random_token_prob must be in [0, 1], got {random_token_prob}")
+        if mask_token_prob + random_token_prob > 1.0:
+            raise ValueError(
+                f"mask_token_prob + random_token_prob must be <= 1.0, "
+                f"got {mask_token_prob} + {random_token_prob} = {mask_token_prob + random_token_prob}"
+            )
+
+        self.sequences = sequences
+        self.vocab = vocab
+        self.max_len = max_len
+        self.mask_strategy = mask_strategy
+        self.mask_rate = mask_rate  # Mutable for progressive masking
+        self.mask_token_prob = mask_token_prob
+        self.random_token_prob = random_token_prob
+        self.max_span_len = max_span_len
+        self.mean_span = mean_span
+
+        # Pre-compute special token IDs for contiguous masking
+        self._special_token_ids = {vocab.pad_id, vocab.unk_id, vocab.mask_id}
+
+    def __len__(self) -> int:
+        return len(self.sequences)
+
+    def set_mask_rate(self, rate: float) -> None:
+        """
+        Update mask rate for progressive/curriculum masking.
+
+        This allows dynamically increasing mask difficulty during training.
+        Note: With num_workers > 0, worker processes won't see this update.
+        For progressive masking, use num_workers=0 or re-create the DataLoader.
+
+        Args:
+            rate: New masking rate (0.0 to 1.0)
+        """
+        if not 0.0 <= rate <= 1.0:
+            raise ValueError(f"mask_rate must be in [0, 1], got {rate}")
+        self.mask_rate = rate
+
+    def set_mask_strategy(self, strategy: str) -> None:
+        """
+        Switch between masking strategies.
+
+        Args:
+            strategy: "contiguous" for DNABERT-style or "random" for span masking
+        """
+        if strategy not in ("contiguous", "random"):
+            raise ValueError(f"mask_strategy must be 'contiguous' or 'random', got '{strategy}'")
+        self.mask_strategy = strategy
+
+    def __getitem__(self, idx: int) -> Tuple[torch.LongTensor, torch.LongTensor]:
+        """
+        Returns (masked_tokens, labels) for a single sequence.
+
+        Args:
+            idx: Index of the sequence
+
+        Returns:
+            masked_tokens: Token IDs with masking applied, shape (seq_len,)
+            labels: Original token IDs for masked positions, -100 for unmasked
+        """
+        sequence = self.sequences[idx]
+
+        # Tokenize the sequence
+        tokens = self.vocab.tokenize(sequence, self.max_len)
+
+        # Add batch dimension for masking functions (they expect batch input)
+        tokens_batch = tokens.unsqueeze(0)
+
+        if self.mask_strategy == "contiguous":
+            # Use DNABERT-style contiguous span masking
+            masked_tokens, labels, _ = create_contiguous_mask(
+                tokens_batch,
+                kmer=self.vocab.k,
+                mask_token_id=self.vocab.mask_id,
+                vocab_size=len(self.vocab.itos),
+                mask_prob=self.mask_rate,
+                mask_token_prob=self.mask_token_prob,
+                random_token_prob=self.random_token_prob,
+                special_token_ids=self._special_token_ids,
+            )
+        else:
+            # Use random span masking (backward compatible)
+            masked_tokens, labels = mask_tokens_span(
+                tokens_batch,
+                self.vocab,
+                mask_prob=self.mask_rate,
+                max_span_len=self.max_span_len,
+                track_spans=False,
+                span_distribution="geometric",
+                mean_span=self.mean_span,
+                exclude_special_from_labels=True,
+            )
+
+        # Remove batch dimension
+        return masked_tokens.squeeze(0), labels.squeeze(0)
 
 
 class GenomeMLMIterableDataset(IterableDataset):
@@ -279,6 +556,19 @@ class GenomeMLMIterableDataset(IterableDataset):
 
     def sample_raw_tokens(self, num_samples: int) -> List[torch.LongTensor]:
         return [self._sample_tokens()[0] for _ in range(num_samples)]
+
+    def set_mask_prob(self, mask_prob: float) -> None:
+        """
+        Update the mask probability for progressive masking.
+
+        Note: This only affects the main process. When using num_workers > 0,
+        worker processes won't see this update. For progressive masking with
+        streaming datasets, use num_workers=0.
+
+        Args:
+            mask_prob: New masking probability (0.0 to 1.0)
+        """
+        self.mask_prob = mask_prob
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -593,6 +883,159 @@ def mask_tokens_span(
     return inputs, labels
 
 
+def create_contiguous_mask(
+    tokens: torch.LongTensor,
+    kmer: int,
+    mask_token_id: int,
+    vocab_size: int,
+    mask_prob: float = 0.15,
+    mask_token_prob: float = 0.8,
+    random_token_prob: float = 0.1,
+    special_token_ids: Optional[Set[int]] = None,
+) -> Tuple[torch.LongTensor, torch.LongTensor, torch.BoolTensor]:
+    """
+    DNABERT-style contiguous span masking for MLM pretraining.
+
+    This implements the masking strategy from the DNABERT paper, which is more
+    effective for DNA sequences than random token masking because:
+    1. It forces the model to learn longer-range dependencies
+    2. It's more biologically meaningful (mutations often affect regions)
+    3. It achieved better downstream performance in the original paper
+
+    Algorithm:
+    1. Select ~mask_prob of POSITIONS as span START points
+    2. Each selected position masks a contiguous span of length k (k-mer size)
+    3. Spans can overlap (that's fine and expected)
+    4. For each masked token:
+       - mask_token_prob (80%) → replace with [MASK] token
+       - random_token_prob (10%) → replace with random token
+       - keep_prob (10%) → keep original token
+    5. Special tokens (PAD, CLS, SEP, etc.) are NEVER masked
+
+    Args:
+        tokens: Input token IDs, shape (batch_size, seq_len)
+        kmer: K-mer size (3, 4, 5, or 6) - determines span length
+        mask_token_id: ID of [MASK] token in vocabulary
+        vocab_size: Total vocabulary size (for random token sampling)
+        mask_prob: Probability of a position being a span START (default 0.15)
+        mask_token_prob: Probability of using [MASK] token (default 0.8)
+        random_token_prob: Probability of using random token (default 0.1)
+        special_token_ids: Set of token IDs to never mask (PAD, CLS, SEP, UNK, etc.)
+
+    Returns:
+        masked_tokens: Tokens with masking applied, shape (batch_size, seq_len)
+        labels: Original tokens for masked positions, -100 for unmasked (for loss)
+        mask: Boolean mask indicating which positions are masked
+
+    Example:
+        >>> tokens = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
+        >>> masked, labels, mask = create_contiguous_mask(
+        ...     tokens, kmer=3, mask_token_id=100, vocab_size=64,
+        ...     special_token_ids={0}  # PAD token
+        ... )
+        >>> # If position 2 is selected as span start, positions 2,3,4 get masked
+    """
+    device = tokens.device
+    batch_size, seq_len = tokens.shape
+
+    # Initialize special token set
+    if special_token_ids is None:
+        special_token_ids = set()
+
+    # Create a mask for special tokens (positions we should never mask)
+    special_mask = torch.zeros_like(tokens, dtype=torch.bool, device=device)
+    for special_id in special_token_ids:
+        special_mask |= (tokens == special_id)
+
+    # Step 1: Select span START positions
+    # We sample ~mask_prob of positions as potential span starts
+    # But we need to avoid starting spans too close to the end (within k-1 of end)
+    # and we need to avoid special tokens
+
+    # Create mask for valid span start positions
+    # A position can be a span start if:
+    # 1. It's not a special token
+    # 2. Starting a span of length k from here doesn't go past sequence end
+    valid_start_mask = ~special_mask.clone()
+
+    # Positions within (kmer-1) of the end cannot start a full span
+    # Set last (kmer-1) positions as invalid starts
+    if kmer > 1:
+        valid_start_mask[:, -(kmer - 1):] = False
+
+    # Sample span starts using Bernoulli distribution
+    # Only sample from valid positions
+    span_start_probs = torch.full_like(tokens, mask_prob, dtype=torch.float32, device=device)
+    span_start_probs[~valid_start_mask] = 0.0
+    span_starts = torch.bernoulli(span_start_probs).bool()
+
+    # Step 2: Expand span starts to full spans of length k
+    # Each span start masks positions [i, i+1, ..., i+k-1]
+    # Spans can overlap, which is fine
+
+    # Initialize the mask for all masked positions
+    mask = torch.zeros_like(tokens, dtype=torch.bool, device=device)
+
+    # For each span start, mark the next k positions as masked
+    # We use a sliding window approach: shift span_starts and OR together
+    for offset in range(kmer):
+        if offset == 0:
+            mask |= span_starts
+        else:
+            # Shift span_starts left by offset positions
+            # span_starts[:, offset:] aligns with mask[:, offset:]
+            shifted = torch.zeros_like(span_starts)
+            shifted[:, offset:] = span_starts[:, :-offset]
+            mask |= shifted
+
+    # Step 3: Ensure special tokens are NEVER masked
+    mask[special_mask] = False
+
+    # Step 4: Create labels tensor
+    # Labels are the original tokens for masked positions, -100 for unmasked
+    labels = tokens.clone()
+    labels[~mask] = -100
+
+    # Step 5: Apply 80/10/10 BERT masking strategy to masked positions
+    # 80% -> [MASK] token
+    # 10% -> random token
+    # 10% -> keep original token
+
+    masked_tokens = tokens.clone()
+
+    # Generate random values for each position to determine masking type
+    rand = torch.rand_like(tokens, dtype=torch.float32, device=device)
+
+    # Positions where we apply [MASK] (80% of masked positions)
+    mask_token_positions = mask & (rand < mask_token_prob)
+
+    # Positions where we apply random token (10% of masked positions)
+    random_token_positions = mask & (rand >= mask_token_prob) & (rand < mask_token_prob + random_token_prob)
+
+    # Remaining 10% keep their original tokens (no action needed)
+
+    # Apply [MASK] token
+    masked_tokens[mask_token_positions] = mask_token_id
+
+    # Apply random tokens
+    if random_token_positions.any():
+        num_random = random_token_positions.sum().item()
+        # Sample random tokens from vocab, but exclude special tokens
+        # For simplicity, we sample from [0, vocab_size - len(special_token_ids))
+        # This is a slight approximation; for perfect correctness we'd need
+        # to sample from base tokens only
+        random_token_values = torch.randint(
+            low=0,
+            high=vocab_size - len(special_token_ids) if special_token_ids else vocab_size,
+            size=(num_random,),
+            device=device,
+            dtype=tokens.dtype,
+        )
+        masked_tokens[random_token_positions] = random_token_values
+
+    return masked_tokens, labels, mask
+
+
 def debug_label_token_frequency(
     labels: torch.LongTensor,
     vocab: KmerVocabulary,
@@ -903,7 +1346,12 @@ def get_layer_wise_lr_groups(
 class MLMCollator:
     """
     Collator that supports curriculum learning via adjustable mask probability.
-    
+
+    Supports progressive masking via MaskingScheduler:
+    - Pass masking_scheduler to enable dynamic mask rate adjustment
+    - Call update_step(global_step) before each epoch/batch to update the rate
+    - Or manually call set_mask_prob(rate) to set a specific rate
+
     Debug mode (debug=True):
     - Prints original token ids, masked input token ids, and label token ids
     - For 5 positions per sequence, asserts:
@@ -911,23 +1359,46 @@ class MLMCollator:
       - label == -100 for unmasked positions
     - Raises AssertionError if any mismatch occurs
     - Debug mode runs once then auto-disables
-    
+
     track_spans mode:
     - Returns (masked_inputs, labels, span_lengths) instead of (masked_inputs, labels)
     - Used by health dashboard to log span length histograms
     """
     def __init__(
-        self, 
-        vocab: KmerVocabulary, 
-        mask_prob: float = 0.15, 
+        self,
+        vocab: KmerVocabulary,
+        mask_prob: float = 0.15,
         debug: bool = False,
         track_spans: bool = False,
+        masking_scheduler: MaskingScheduler | None = None,
     ):
         self.vocab = vocab
         self.mask_prob = mask_prob
         self.debug = debug
         self.track_spans = track_spans
         self._debug_ran = False
+        self.masking_scheduler = masking_scheduler
+
+    def set_mask_prob(self, mask_prob: float) -> None:
+        """Manually set the mask probability (for external control)."""
+        self.mask_prob = mask_prob
+
+    def update_step(self, step: int) -> float:
+        """
+        Update mask probability based on current training step.
+
+        If a masking_scheduler is set, updates mask_prob from the scheduler.
+        Otherwise, mask_prob remains unchanged.
+
+        Args:
+            step: Current global training step
+
+        Returns:
+            Current mask probability after update
+        """
+        if self.masking_scheduler is not None:
+            self.mask_prob = self.masking_scheduler.get_mask_rate(step)
+        return self.mask_prob
     
     def __call__(
         self, batch: Iterable[torch.LongTensor]
@@ -2907,6 +3378,15 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     dry_run = bool(cfg_run.get("mlm_dry_run", False))
     use_streaming = _should_use_streaming(cfg_run)
 
+    # Progressive masking configuration (DNABERT-style curriculum)
+    mlm_masking_cfg = cfg_run.get("mlm_masking", {})
+    if not isinstance(mlm_masking_cfg, dict):
+        mlm_masking_cfg = {}
+    progressive_masking_enabled = bool(mlm_masking_cfg.get("progressive", False))
+    initial_mask_rate = float(mlm_masking_cfg.get("initial_mask_rate", mask_prob))
+    final_mask_rate = float(mlm_masking_cfg.get("final_mask_rate", 0.20))
+    masking_transition_start_ratio = float(mlm_masking_cfg.get("transition_start_ratio", 0.8))
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = (script_dir / "../runs" / f"mlm_{timestamp}").resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -2992,6 +3472,13 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         "amp_force_fp32_loss": bool(cfg_run.get("amp_force_fp32_loss", True)),
         # Length curriculum
         "length_curriculum": length_curriculum_config.to_dict(),
+        # Progressive masking (DNABERT-style)
+        "progressive_masking": {
+            "enabled": progressive_masking_enabled,
+            "initial_rate": initial_mask_rate,
+            "final_rate": final_mask_rate,
+            "transition_start_ratio": masking_transition_start_ratio,
+        },
     }
 
     resolved_config_path = run_dir / "resolved_config.json"
@@ -3250,6 +3737,29 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         total_steps_for_curriculum = min(total_steps_for_curriculum, max_steps)
 
     curriculum_scheduler: LengthCurriculumScheduler | None = None
+    masking_scheduler: MaskingScheduler | None = None
+
+    # Create MaskingScheduler if progressive masking is enabled
+    if progressive_masking_enabled:
+        masking_scheduler = MaskingScheduler(
+            initial_rate=initial_mask_rate,
+            final_rate=final_mask_rate,
+            warmup_steps=0,
+            total_steps=total_steps_for_curriculum,
+            transition_start_ratio=masking_transition_start_ratio,
+        )
+        LOGGER.info("=" * 60)
+        LOGGER.info("PROGRESSIVE MASKING ENABLED (DNABERT-style)")
+        LOGGER.info("  Initial rate:      %.1f%%", initial_mask_rate * 100)
+        LOGGER.info("  Final rate:        %.1f%%", final_mask_rate * 100)
+        LOGGER.info("  Transition start:  %.0f%% of training (step %d)",
+                    masking_transition_start_ratio * 100,
+                    masking_scheduler.transition_start_step)
+        LOGGER.info("  Total steps:       %d", total_steps_for_curriculum)
+        LOGGER.info("=" * 60)
+        # Use initial rate as starting mask_prob
+        mask_prob = initial_mask_rate
+
     if length_curriculum_config.enabled:
         LOGGER.info("=" * 60)
         LOGGER.info("LENGTH CURRICULUM ENABLED")
@@ -3271,9 +3781,18 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             track_spans=True,
             debug=label_debug,
         )
+        # If we also have progressive masking, attach the scheduler to the collator
+        if masking_scheduler is not None:
+            collator.masking_scheduler = masking_scheduler
     else:
         LOGGER.info("Length curriculum: DISABLED (using fixed length)")
-        collator = MLMCollator(vocab, mask_prob=mask_prob, debug=label_debug, track_spans=True)
+        collator = MLMCollator(
+            vocab,
+            mask_prob=mask_prob,
+            debug=label_debug,
+            track_spans=True,
+            masking_scheduler=masking_scheduler,
+        )
 
     deterministic_kwargs = get_deterministic_dataloader_kwargs(seed, num_workers=num_workers)
 
@@ -3358,6 +3877,11 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         )
         transformer_dropout = float(cfg_run.get("mlm_transformer_dropout", cfg_run.get("transformer_dropout", 0.1)))
 
+        # Relative position bias settings
+        use_relative_position_bias = bool(cfg_run.get("use_relative_position_bias", False))
+        relative_position_num_buckets = int(cfg_run.get("relative_position_num_buckets", 32))
+        relative_position_max_distance = int(cfg_run.get("relative_position_max_distance", 128))
+
         encoder = DNAEncoder(
             vocab_size=len(vocab.itos),
             kmer=vocab.k,
@@ -3368,6 +3892,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             dropout=transformer_dropout,
             pad_token_id=vocab.pad_id,
             drop_path_rate=0.0,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
         )
 
         special_token_ids = [vocab.mask_id, vocab.unk_id, vocab.pad_id]
@@ -3483,6 +4010,11 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("  Dropout: %.2f", transformer_dropout)
     LOGGER.info("=" * 60)
 
+    # Relative position bias settings
+    use_relative_position_bias = bool(cfg_run.get("use_relative_position_bias", False))
+    relative_position_num_buckets = int(cfg_run.get("relative_position_num_buckets", 32))
+    relative_position_max_distance = int(cfg_run.get("relative_position_max_distance", 128))
+
     encoder = DNAEncoder(
         vocab_size=len(vocab.itos),
         kmer=vocab.k,
@@ -3493,6 +4025,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         dropout=transformer_dropout,
         pad_token_id=vocab.pad_id,
         drop_path_rate=0.0,
+        use_relative_position_bias=use_relative_position_bias,
+        relative_position_num_buckets=relative_position_num_buckets,
+        relative_position_max_distance=relative_position_max_distance,
     )
 
     tie_weights = bool(cfg_run.get("mlm_tie_weights", True))
@@ -3736,6 +4271,8 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         }
         if scaler is not None:
             checkpoint["scaler_state_dict"] = scaler.state_dict()
+        if masking_scheduler is not None:
+            checkpoint["masking_scheduler_state_dict"] = masking_scheduler.state_dict()
         if torch.cuda.is_available():
             checkpoint["rng_state_cuda"] = torch.cuda.get_rng_state_all()
         torch.save(checkpoint, ckpt_path)
@@ -3751,6 +4288,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         if scaler is not None and "scaler_state_dict" in checkpoint:
             scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        if masking_scheduler is not None and "masking_scheduler_state_dict" in checkpoint:
+            masking_scheduler.load_state_dict(checkpoint["masking_scheduler_state_dict"])
+            LOGGER.info("Restored masking scheduler: %s", masking_scheduler)
         if "rng_state_python" in checkpoint:
             random.setstate(checkpoint["rng_state_python"])
         if "rng_state_torch" in checkpoint:
@@ -3784,7 +4324,13 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     LOGGER.info("=" * 60)
     LOGGER.info("STARTING MLM PRETRAINING")
-    LOGGER.info("Epochs: %d, LR: %.2e, Mask prob: %.1f%%", epochs, lr, mask_prob * 100)
+    if masking_scheduler is not None:
+        LOGGER.info(
+            "Epochs: %d, LR: %.2e, Mask prob: %.1f%% → %.1f%% (progressive)",
+            epochs, lr, initial_mask_rate * 100, final_mask_rate * 100
+        )
+    else:
+        LOGGER.info("Epochs: %d, LR: %.2e, Mask prob: %.1f%%", epochs, lr, mask_prob * 100)
     if max_steps is not None:
         LOGGER.info("Ablation enabled: stopping after %d optimizer steps", max_steps)
     LOGGER.info("=" * 60)
@@ -4023,6 +4569,26 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                     new_length = curriculum_scheduler.step(global_step)
                     if curriculum_scheduler.is_ramping() and global_step % 100 == 0:
                         LOGGER.debug("Step %d: Curriculum length = %d tokens", global_step, new_length)
+
+                # Update progressive masking rate
+                if masking_scheduler is not None:
+                    new_mask_rate = masking_scheduler.get_mask_rate(global_step)
+                    # Update collator (for non-streaming mode with num_workers=0)
+                    if hasattr(collator, 'set_mask_prob'):
+                        collator.set_mask_prob(new_mask_rate)
+                    elif hasattr(collator, 'mask_prob'):
+                        collator.mask_prob = new_mask_rate
+                    # For streaming mode, update the dataset directly
+                    if use_streaming and hasattr(train_dataset, 'set_mask_prob'):
+                        train_dataset.set_mask_prob(new_mask_rate)
+                    # Log mask rate changes periodically
+                    if global_step % lr_log_interval == 0:
+                        in_transition = global_step >= masking_scheduler.transition_start_step
+                        phase = "transition" if in_transition else "stable"
+                        LOGGER.debug(
+                            "Step %d: Mask rate = %.1f%% (%s phase)",
+                            global_step, new_mask_rate * 100, phase
+                        )
 
                 health_metrics = health_dashboard.log_step(
                     step=global_step,
@@ -4529,7 +5095,12 @@ def main() -> None:
         transformer_heads = int(cfg.get("mlm_transformer_heads", cfg.get("transformer_heads", 8)))
         transformer_ff_dim = int(cfg.get("mlm_transformer_ff_dim", cfg.get("transformer_ff_dim", embedding_dim * 4)))
         transformer_dropout = float(cfg.get("mlm_transformer_dropout", cfg.get("transformer_dropout", 0.1)))
-        
+
+        # Relative position bias settings
+        use_relative_position_bias = bool(cfg.get("use_relative_position_bias", False))
+        relative_position_num_buckets = int(cfg.get("relative_position_num_buckets", 32))
+        relative_position_max_distance = int(cfg.get("relative_position_max_distance", 128))
+
         encoder = DNAEncoder(
             vocab_size=len(vocab.itos),
             kmer=vocab.k,
@@ -4540,8 +5111,11 @@ def main() -> None:
             dropout=transformer_dropout,
             pad_token_id=vocab.pad_id,
             drop_path_rate=0.0,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
         )
-        
+
         special_token_ids = [vocab.mask_id, vocab.unk_id, vocab.pad_id]
         model = DNAMLM(
             encoder,
@@ -4550,7 +5124,7 @@ def main() -> None:
             tie_weights=bool(cfg.get("mlm_tie_weights", True)),
             use_output_norm=bool(cfg.get("mlm_use_output_norm", True)),
         )
-        
+
         metadata = {
             "config": str(config_path),
             "embedding_dim": embedding_dim,
@@ -4648,6 +5222,11 @@ def main() -> None:
     LOGGER.info("  Dropout: %.2f", transformer_dropout)
     LOGGER.info("=" * 60)
 
+    # Relative position bias settings
+    use_relative_position_bias = bool(cfg.get("use_relative_position_bias", False))
+    relative_position_num_buckets = int(cfg.get("relative_position_num_buckets", 32))
+    relative_position_max_distance = int(cfg.get("relative_position_max_distance", 128))
+
     encoder = DNAEncoder(
         vocab_size=len(vocab.itos),
         kmer=vocab.k,
@@ -4658,8 +5237,11 @@ def main() -> None:
         dropout=transformer_dropout,
         pad_token_id=vocab.pad_id,
         drop_path_rate=0.0,  # NO stochastic depth during pretraining
+        use_relative_position_bias=use_relative_position_bias,
+        relative_position_num_buckets=relative_position_num_buckets,
+        relative_position_max_distance=relative_position_max_distance,
     )
-    
+
     # DNAMLM with weight tying (critical for lower loss)
     tie_weights = bool(cfg.get("mlm_tie_weights", True))
     use_output_norm = bool(cfg.get("mlm_use_output_norm", True))

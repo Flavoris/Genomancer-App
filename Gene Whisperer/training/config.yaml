@@ -1,409 +1,285 @@
-# Gene Whisperer V2 Configuration
-# Optimized for 90%+ accuracy on Apple M4 chip
-# Based on insights from DNABERT, msBERT, and Procables papers
+# Gene Whisperer Configuration v4.0
+# Includes all optimizations for 90%+ accuracy target
+# NOTE: Section maps are merged into the root for backward compatibility.
 
-# =============================================================================
-# RANDOM SEED
-# =============================================================================
+# == RANDOM SEED ==
 seed: 1337
 
-# =============================================================================
-# DATA SETTINGS
-# =============================================================================
-max_bp_len: 234
-batch_size: 32  # Smaller batch for M4 memory, compensated by grad_accum
-delimiter: "\t"
-train_val_split: 0.9
+# == DATA SETTINGS ==
+data: &data
+  max_bp_len: 234
+  batch_size: 32
+  delimiter: "\t"
+  train_val_split: 0.9
+  stage1_train: ../data/stage1_train.tsv
+  stage1_val: ../data/stage1_val.tsv
+  stage2_train: ../data/stage2_train.tsv
+  stage2_val: ../data/stage2_val.tsv
+  stage2_test: ../data/stage2_val.tsv
+  stage2_strength_positive: 1
+  stage2_strength_negative: 0
+  cache_engineered_features: false
+  cache_tokens: false
 
-# =============================================================================
-# DATALOADER PERFORMANCE OPTIONS
-# =============================================================================
-# num_workers: Number of subprocesses for data loading (default 0 on Mac)
-num_workers: 0
-# persistent_workers: Keep workers alive between batches (only if num_workers > 0)
-persistent_workers: false
-# prefetch_factor: Batches to prefetch per worker (only if num_workers > 0)
-# prefetch_factor: 2
+# == DATALOADER AND HARDWARE ==
+hardware: &hardware
+  num_workers: 0
+  persistent_workers: false
+  prefetch_factor: null
+  pin_memory: false
 
-# =============================================================================
-# CACHING OPTIONS (Performance optimization)
-# =============================================================================
-# Precompute engineered features (TNC+PseEIIP+CKSNAP+PSTNP) once in dataset init
-# Only effective for validation sets and Stage 2 (no augmentation)
-cache_engineered_features: false
-# Pre-tokenize sequences once in dataset init
-# Only effective for validation sets and Stage 2 (no augmentation)
-cache_tokens: false
+# == MODEL ARCHITECTURE ==
+model: &model
+  embedding_dim: 256
+  transformer_layers: 8
+  transformer_heads: 8
+  transformer_ff_dim: 1024
+  transformer_dropout: 0.12
+  use_glu_ffn: true
+  glu_activation: "gelu"
+  use_relative_position_bias: true
+  relative_position_num_buckets: 32
+  relative_position_max_distance: 128
+  use_attention_pool: true
+  use_tcn: true
+  tcn_hidden: 256
+  tcn_levels: 5
+  tcn_kernel: 3
+  multiscale_channels: 64  # Per-kernel channels
+  multiscale_kernels: [3, 5, 7, 9, 15]
+  lstm_hidden: 192
+  post_cnn_transformer_layers: 4
+  kmer: 6
+  stage2_kmer: 6
+  vocab_size: 4099  # 4096 + 3 special tokens
+  pad_token_id: 4098
+  vocab_cache_dir: ../artifacts/vocabs
 
-# Data paths (relative to training/ directory)
-stage1_train: ../data/stage1_train.tsv
-stage1_val: ../data/stage1_val.tsv
-stage2_train: ../data/stage2_train.tsv
-stage2_val: ../data/stage2_val.tsv
-stage2_test: ../data/stage2_val.tsv
-
-# Stage 2 strength mapping
-stage2_strength_positive: 1
-stage2_strength_negative: 0
-
-# =============================================================================
-# MODEL ARCHITECTURE (Enhanced for 90%+ accuracy)
-# =============================================================================
-# Transformer settings
-# NOTE: These should match MLM pretraining dimensions for proper weight transfer
-embedding_dim: 256       # Match mlm_embedding_dim for weight transfer
-transformer_layers: 8    # Was 6,Reduced from 8 to prevent overfitting with TCN/testing 8
-transformer_heads: 8
-transformer_ff_dim: 1024  # Match mlm_transformer_ff_dim (4x embedding)
-transformer_dropout: 0.12  # Slightly higher for fine-tuning
-
-# Position encoding (learned embeddings)
-
-# Attention pooling (KEY for promoter detection)
-use_attention_pool: true
-
-# K-mer tokenization
-kmer: 6                     # Default k-mer for Stage 1 (must match mlm_kmer when stage1_load_mlm_weights=true)
-stage2_kmer: 6              # K-mer for Stage 2 (recommended: 6 for better promoter strength prediction)
-vocab_size: 4099  # 4096 + 3 special tokens (4^6 for 6-mers)
-pad_token_id: 4098
-vocab_cache_dir: ../artifacts/vocabs
-
-# =============================================================================
-# TCN + MULTI-SCALE CNN (KEY for 90%+ accuracy)
-# =============================================================================
-# Based on iPro-TCN and PROCABLES papers
-# Multi-scale CNN captures different motif lengths (TATA box, -10/-35 elements)
-# TCN provides exponentially growing receptive field via dilated convolutions
-
-use_tcn: true  # Set to false to use original single CNN for comparison
-
-# TCN (Temporal Convolutional Network) settings
-tcn_hidden: 256       # Hidden dimension in TCN blocks
-tcn_levels: 5         # Number of dilated conv levels (dilation: 1,2,4,8,16)
-tcn_kernel: 3         # Kernel size for dilated convolutions
-
-# Multi-scale CNN settings (parallel convolutions for different motif lengths)
-multiscale_channels: 64           # Channels per kernel size branch
-multiscale_kernels: [3, 5, 7, 9, 15]  # Kernel sizes to capture 3-15bp motifs
-
-# BiLSTM settings
-lstm_hidden: 192      # Hidden size (output will be 2x for bidirectional)
-
-# =============================================================================
-# POST-CNN TRANSFORMER (Global context after local feature extraction)
-# =============================================================================
-# Lightweight transformer applied AFTER CNN/TCN for global contextualization
-# This follows the new architecture order: Embedding → CNN/TCN → Transformer → Pool
-post_cnn_transformer_layers: 4  # Fewer layers since CNN/TCN already extracted features
-
-# =============================================================================
-# ENGINEERED FEATURES (Enhanced with separate MLP branch)
-# =============================================================================
-# TNC(64) + PseEIIP(64) + CKSNAP(96) + PSTNP(64) = 288
-stage1_use_engineered_features: true
-# Per-feature toggles (zeroed when disabled to keep engineered_dim stable)
-stage1_feature_enable_tnc: true
-stage1_feature_enable_pseeiip: true
-stage1_feature_enable_cksnap: true
-stage1_feature_enable_pstnp: true
-engineered_dim: 288
-
-# Separate MLP branch for engineered features (increases their influence)
-engineered_mlp_hidden: 512    # Hidden dimension in engineered feature MLP
-engineered_mlp_output: 256    # Output dimension before fusion
-
-# Feature flags (engineered feature families)
-features:
+# == ENGINEERED FEATURES ==
+features: &features
   use_tnc: true
   use_pseeiip: true
   use_cksnap: true
   use_pstnp: true
+  engineered_dim: 288  # 64 + 64 + 96 + 64
+  engineered_mlp_hidden: 512
+  engineered_mlp_output: 256
+  fusion_hidden: 384
+  stage1_use_engineered_features: true
+  stage1_feature_enable_tnc: true
+  stage1_feature_enable_pseeiip: true
+  stage1_feature_enable_cksnap: true
+  stage1_feature_enable_pstnp: true
 
-# =============================================================================
-# ATTENTION-BASED FUSION (Instead of simple concatenation)
-# =============================================================================
-# Gated cross-attention fusion between sequence and engineered features
-# This allows the model to learn optimal weighting between modalities
-fusion_hidden: 384            # Hidden dimension in fusion module
+# == TRAINING SETTINGS ==
+training: &training
+  optimizer: "adamw"
+  optimizer_foreach: true
+  lr: 0.00005
+  weight_decay: 0.01
+  warmup_ratio: 0.10
+  epochs: 150
+  early_stopping_patience: 50
+  grad_accum_steps: 8
+  grad_clip_norm: 1.0
+  param_norm_warn: 250
+  param_norm_cap: 300
+  layer_lr_decay: 0.85
+  drop_path_rate: 0.1
 
-# Reverse complement augmentation
-stage1_reverse_complement_prob: 0.0 # Was 0.5
+# == LOSS AND REGULARIZATION ==
+loss: &loss
+  stage1_use_focal_loss: false
+  stage1_focal_alpha: 0.5
+  stage1_focal_gamma: 2.0
+  label_smoothing: 0.02
 
-# =============================================================================
-# TRAINING SETTINGS (Optimized for 90%+ accuracy)
-# =============================================================================
-# Optimizer settings
-optimizer: "adamw"
-optimizer_foreach: true  # Use foreach implementation for ~20-30% faster optimizer steps
+# == AUGMENTATION ==
+augmentation: &augmentation
+  use_mixup: true
+  mixup_alpha: 0.1
+  stage1_reverse_complement_prob: 0.0
 
-# Learning rate and schedule
-lr: 0.00005  # Slightly lower for stability (was 2e-4)
-weight_decay: 0.01  # Slightly stronger regularization
-warmup_ratio: 0.10  # 10% warmup for better stability (was 10%)
+# == STOCHASTIC WEIGHT AVERAGING ==
+swa: &swa
+  use_swa: true
+  swa_start_epoch: 80
+  swa_lr: 0.00003
+  swa_anneal_epochs: 10
 
-# Training duration
-epochs: 150  # More epochs with better early stopping
-early_stopping_patience: 50  # More patience for better convergence
+# == STAGE-SPECIFIC OVERRIDES ==
+stage_overrides: &stage_overrides
+  stage1_label_smoothing: 0.0
+  stage1_use_mixup: null
+  stage1_mixup_alpha: null
+  stage1_use_swa: null
+  stage1_swa_start_epoch: null
+  stage1_swa_lr: null
+  stage1_drop_path_rate: null
+  stage2_label_smoothing: 0.0
+  stage2_use_mixup: false
+  stage2_mixup_alpha: 0.0
+  stage2_use_swa: false
+  stage2_swa_start_epoch: null
+  stage2_swa_lr: null
+  stage2_drop_path_rate: 0.0
 
-# Gradient settings
-grad_accum_steps: 8  # Effective batch = 32 * 8 = 256
-grad_clip_norm: 1.0
+# == MLM PRETRAINING ==
+mlm: &mlm
+  stage1_load_mlm_weights: true
+  stage2_load_mlm_weights: false
+  stage1_mlm_transfer_mode: embed_plus_adapter
+  stage2_mlm_transfer_mode: embed_plus_adapter
+  stage1_freeze_layers: 0
+  stage1_unfreeze_epoch: null
+  mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k6.pt
+  include_reverse_complements: true
+  mlm_fasta_path: ../data/GCF_000005845.2_ASM584v2_genomic.fna
+  mlm_fasta_paths:
+    - ../data/GCF_000005845.2_ASM584v2_genomic.fna
+    - ../data/B_subtilis_genome
+    - ../data/S_cerevisiae_genome
+  mlm_species_weights: [0.45, 0.35, 0.20]
+  mlm_steps_per_epoch: 5000
+  mlm_unknown_base_strategy: "random"
+  mlm_window_size: 234
+  mlm_stride: 20
+  mlm_batch_size: 128
+  mlm_epochs: 200
+  mlm_lr: 0.0002
+  mlm_weight_decay: 0.01
+  mlm_kmer: 6
+  mlm_vocab_path: ../artifacts/vocabs/mlm_k6_vocab.json
+  mlm_encoder_path: ../artifacts/mlm_encoder_k6.pt
+  mlm_embedding_dim: 256
+  mlm_transformer_layers: 8
+  mlm_transformer_heads: 8
+  mlm_transformer_ff_dim: 1024
+  mlm_transformer_dropout: 0.1
+  mlm_tie_weights: true
+  mlm_use_output_norm: true
+  mlm_use_layer_lr_decay: false
+  mlm_layer_lr_decay: 0.9
+  mlm_val_ratio: 0.1
+  mlm_val_exclude_patterns: ["mitochond"]
+  mlm_min_val_records_per_species: 1
+  mlm_single_record_val_ratio: 0.1
+  mlm_grad_accum_steps: 4
+  mlm_warmup_ratio: 0.06
+  mlm_final_lr_ratio: 0.1
+  mlm_lr_log_interval: 50
+  mlm_patience: 30
+  mlm_mask_prob: 0.15
+  mlm_masking:
+    # Contiguous span masking (DNABERT-style)
+    progressive: false
+    initial_mask_rate: 0.15
+    final_mask_rate: 0.20
+    transition_start_ratio: 0.8
+    max_span_len: 3
+    span_distribution: "geometric"
+    mean_span: 3.0
+    exclude_special_from_labels: true
+  mlm_length_curriculum_enabled: true
+  mlm_length_curriculum_start_tokens: 32
+  mlm_length_curriculum_end_tokens: 79
+  mlm_length_curriculum_start_pct: 0.0
+  mlm_length_curriculum_end_pct: 0.3
 
-# Parameter norm monitoring (adjusted for 8-layer model with ~14M params)
-# After MLM weight loading, param norm is ~200, so thresholds need headroom
-param_norm_warn: 250   # Warning threshold (was 150, too low for 8-layer model)
-param_norm_cap: 300    # Hard cap - params scaled down if exceeded (was 200)
+# == CHECKPOINTS ==
+checkpoints: &checkpoints
+  stage1_checkpoint_name: null
+  stage1_ckpt_by_k:
+    3: ../artifacts/checkpoints/stage1_k3.pt
+    4: ../artifacts/checkpoints/stage1_k4.pt
+    5: ../artifacts/checkpoints/stage1_k5.pt
+    6: ../artifacts/checkpoints/stage1_k6.pt
 
-# Layer-wise learning rate decay (lower LR for earlier layers)
-# This helps preserve pretrained features while fine-tuning upper layers
-layer_lr_decay: 0.85  # Each layer gets 0.85x the LR of the layer above
+# == VISUALIZATION ==
+visualization: &visualization
+  stage1_embed_plot_epoch: null
+  stage1_embed_plot_method: pca
+  stage1_embed_plot_samples: 512
 
-# Stochastic depth (drop path) rate for regularization
-drop_path_rate: 0.1
+# == METRICS ==
+metrics: &metrics
+  metrics_stage1: ["accuracy", "precision", "recall", "f1", "mcc", "specificity"]
+  metrics_stage2: ["accuracy", "mcc", "roc_auc"]
 
-# =============================================================================
-# LOSS FUNCTION
-# =============================================================================
-# Focal loss with REDUCED label smoothing (was too aggressive)
-stage1_use_focal_loss: false
-stage1_focal_alpha: 0.5
-stage1_focal_gamma: 2.0
-label_smoothing: 0.02  # Reduced from 0.1 - less smoothing for higher accuracy
+# == MULTI-SCALE ENSEMBLE ==
+ensemble: &ensemble
+  use_multi_scale: true
+  multi_scale_kmers: [3, 4, 5, 6]
+  ensemble_method: "soft_voting"
+  ensemble_learn_weights: true
+  ensemble_weights:
+    3: 0.20
+    4: 0.25
+    5: 0.25
+    6: 0.30
 
-# =============================================================================
-# AUGMENTATION
-# =============================================================================
-use_mixup: true
-mixup_alpha: 0.1  # Reduced from 0.4 - less aggressive mixup for higher accuracy
+# == TRANSFER SMOKETEST ==
+smoketest: &smoketest
+  smoketest_steps_pretrain: 300
+  smoketest_steps_stage1: 300
+  smoketest_steps_stage2: 300
 
-# =============================================================================
-# STOCHASTIC WEIGHT AVERAGING (SWA) for breaking plateaus
-# =============================================================================
-use_swa: true
-swa_start_epoch: 80  # Start SWA after 80 epochs (when base training plateaus)
-swa_lr: 0.00003  # Low constant LR for SWA phase
-swa_anneal_epochs: 10  # Anneal to SWA LR over 10 epochs
+# == MIXED PRECISION (AMP) ==
+amp: &amp
+  amp_enabled: true
+  amp_dtype: "bfloat16"
+  amp_force_fp32_loss: true
 
-# =============================================================================
-# STAGE-SPECIFIC OVERRIDES
-# =============================================================================
-# Optional per-stage overrides. If not set, falls back to global value.
-# These allow fine-grained control of training hyperparameters per stage.
-
-# Stage 1 overrides (Step 4: disable focal loss and label smoothing)
-stage1_label_smoothing: 0.0
-stage1_use_mixup: null        # null = use global use_mixup
-stage1_mixup_alpha: null      # null = use global mixup_alpha
-stage1_use_swa: null          # null = use global use_swa
-stage1_swa_start_epoch: null  # null = use global swa_start_epoch
-stage1_swa_lr: null           # null = use global swa_lr
-stage1_drop_path_rate: null   # null = use global drop_path_rate
-
-# Stage 2 overrides (Step 3: disable regularization for cleaner signal)
-stage2_label_smoothing: 0.0
-stage2_use_mixup: false
-stage2_mixup_alpha: 0.0
-stage2_use_swa: false
-stage2_swa_start_epoch: null  # null = use global swa_start_epoch
-stage2_swa_lr: null           # null = use global swa_lr
-stage2_drop_path_rate: 0.0
-
-# =============================================================================
-# MLM PRETRAINING (Enhanced V4 - targeting loss < 1.0)
-# =============================================================================
-# Based on DNABERT, msBERT, and iPro-TCN papers
-# Key changes for lower loss:
-# 1. Larger model capacity (256 dim, 8 layers, 4x FF)
-# 2. Weight tying between embedding and LM head (BERT-style)
-# 3. Layer-wise learning rate decay
-# 4. Better initialization and normalization
-
-stage1_load_mlm_weights: true
-stage2_load_mlm_weights: false
-stage1_mlm_transfer_mode: embed_plus_adapter
-stage2_mlm_transfer_mode: embed_plus_adapter
-stage1_freeze_layers: 0  # Don't freeze - let all layers adapt
-stage1_unfreeze_epoch: null
-# mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k3.pt  # k=3 reference (legacy)
-mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k6.pt
-
-# MLM training settings (for pretraining script)
-# If true, include reverse-complement for every window (≈2x corpus)
-include_reverse_complements: true
-mlm_fasta_path: ../data/GCF_000005845.2_ASM584v2_genomic.fna  # Backward compat (single genome fallback)
-mlm_fasta_paths:  # Multi-genome training (E. coli, B. subtilis, S. cerevisiae)
-  - ../data/GCF_000005845.2_ASM584v2_genomic.fna  # E. coli (~4.7 MB)
-  - ../data/B_subtilis_genome                     # B. subtilis (~4.3 MB)
-  - ../data/S_cerevisiae_genome                   # S. cerevisiae / yeast (~12.3 MB)
-mlm_species_weights: [0.45, 0.35, 0.20]  # Sampling weights: E. coli, B. subtilis, yeast
-mlm_steps_per_epoch: 5000  # Batches per epoch for streaming (reasonable for MacBook)
-mlm_unknown_base_strategy: "random"  # Replace unknown bases (N, etc.) with random A/C/G/T
-mlm_window_size: 234
-mlm_stride: 20
-mlm_batch_size: 128
-mlm_epochs: 200  # More epochs for better convergence
-mlm_lr: 0.0002  # Lower LR for stability (was 1e-3, now 2e-4)
-mlm_weight_decay: 0.01
-mlm_kmer: 6
-mlm_vocab_path: ../artifacts/vocabs/mlm_k6_vocab.json
-mlm_encoder_path: ../artifacts/mlm_encoder_k6.pt
-
-# MLM architecture settings (ENHANCED for lower loss)
-# Larger model learns better representations during pretraining
-mlm_embedding_dim: 256      # Larger capacity (was 192)
-mlm_transformer_layers: 8   # Deeper model (was 6)
-mlm_transformer_heads: 8    # Keep same
-mlm_transformer_ff_dim: 1024  # 4x embedding dim (BERT-style)
-mlm_transformer_dropout: 0.1  # Lower dropout during pretraining
-
-# MLM optimization settings (CRITICAL for low loss)
-mlm_tie_weights: true       # Share embedding/LM head weights (BERT-style)
-mlm_use_output_norm: true   # Layer norm before LM head
-mlm_use_layer_lr_decay: false  # DISABLED for pretraining stability (was true)
-mlm_layer_lr_decay: 0.9     # Each lower layer gets 0.9x LR
-
-# MLM additional settings
-mlm_val_ratio: 0.1  # 10% validation split
-mlm_val_exclude_patterns: ["mitochond"]  # Ensure val is not all matching these patterns when possible
-mlm_min_val_records_per_species: 1  # Minimum val records per species
-mlm_single_record_val_ratio: 0.1  # Default to mlm_val_ratio for single-record species
-mlm_grad_accum_steps: 4  # Effective batch = 512
-mlm_warmup_ratio: 0.06  # 6% warmup (linear warmup)
-mlm_final_lr_ratio: 0.1  # Decay to 10% of peak LR via cosine
-mlm_lr_log_interval: 50  # Log LR every N optimizer steps
-mlm_patience: 30  # More patience for convergence
-
-# =============================================================================
-# MLM LENGTH CURRICULUM (Progressive sequence length training)
-# =============================================================================
-# Starts training with shorter sequences, gradually increasing to full length.
-# This helps the model learn local patterns first before global context.
-# Based on curriculum learning research showing faster convergence.
-mlm_length_curriculum_enabled: true
-mlm_length_curriculum_start_tokens: 32   # Starting sequence length in tokens
-mlm_length_curriculum_end_tokens: 79     # Final length (mlm_window_size - k + 1)
-mlm_length_curriculum_start_pct: 0.0     # % of training steps to start ramp
-mlm_length_curriculum_end_pct: 0.3       # % of steps to reach full length (30%)
-
-# =============================================================================
-# CHECKPOINTS
-# =============================================================================
-stage1_checkpoint_name: null  # Auto-generated: stage1_v2_k{kmer}.pt
-
-# Stage 1 checkpoint mapping by k-mer size (for Stage 2 auto-selection)
-# Stage 2 will auto-select the matching Stage 1 checkpoint based on its k-mer
-# Override with --stage1_ckpt CLI arg if needed
-stage1_ckpt_by_k:
-  3: ../artifacts/checkpoints/stage1_k3.pt
-  4: ../artifacts/checkpoints/stage1_k4.pt
-  5: ../artifacts/checkpoints/stage1_k5.pt
-  6: ../artifacts/checkpoints/stage1_k6.pt
-
-# =============================================================================
-# VISUALIZATION (Optional)
-# =============================================================================
-stage1_embed_plot_epoch: null
-stage1_embed_plot_method: pca
-stage1_embed_plot_samples: 512
-
-# =============================================================================
-# METRICS
-# =============================================================================
-metrics_stage1: ["accuracy", "precision", "recall", "f1", "mcc", "specificity"]
-metrics_stage2: ["accuracy", "mcc", "roc_auc"]
-
-# =============================================================================
-# MULTI-SCALE ENSEMBLE (Advanced - for >92% accuracy)
-# =============================================================================
-# Enable to train multiple k-mer models and ensemble
-use_multi_scale: true
-multi_scale_kmers: [3, 4, 5, 6]
-ensemble_method: "soft_voting"
-ensemble_learn_weights: true
-ensemble_weights:
-  3: 0.20
-  4: 0.25
-  5: 0.25
-  6: 0.30
-
-# =============================================================================
-# TRANSFER SMOKETEST (Tiny transfer sanity run)
-# =============================================================================
-# Optimizer step budgets used by training/transfer_smoketest.py
-smoketest_steps_pretrain: 300
-smoketest_steps_stage1: 300
-smoketest_steps_stage2: 300
-
-# =============================================================================
-# MIXED PRECISION (AMP) SETTINGS
-# =============================================================================
-# Enable automatic mixed precision for faster training on supported devices
-amp_enabled: true
-# Dtype to use for mixed precision: "float16" or "bfloat16"
-# - bfloat16: Recommended for MPS (Apple Silicon) - wider dynamic range
-# - float16: Recommended for CUDA with GradScaler
-amp_dtype: "bfloat16"
-# Force loss computation in fp32 for numerical stability
-amp_force_fp32_loss: true
-
-# =============================================================================
-# ABLATION / SCORING (Safe defaults; no behavior change)
-# =============================================================================
-# Proxy budgets and scoring knobs for fast ablation runs.
+# == ABLATION / SCORING ==
 ablation:
   enabled: false
   seeds: [1337]
-
-  # Pretrain proxy
-  pretrain_bp_limit: 200000         # max genome bases to use (slice)
-  pretrain_max_steps: 300           # cap optimizer steps
-  pretrain_epochs: 5               # fallback if steps not hit
-
-  # Stage 1 proxy
+  pretrain_bp_limit: 200000
+  pretrain_max_steps: 300
+  pretrain_epochs: 5
   stage1_max_train_samples: 2048
   stage1_max_val_samples: 2048
   stage1_max_steps: 300
   stage1_epochs: 5
-
-  # Stage 2 proxy
   stage2_max_train_samples: 2048
   stage2_max_val_samples: 2048
   stage2_max_steps: 300
   stage2_epochs: 5
-
-  # Transfer efficiency
   compute_transfer_efficiency: true
-  transfer_efficiency_mode: per_total_second  # per_pretrain_second | per_total_second | per_deploy_param
-
-  # Cost proxy for distillation ("deploy_params", "deploy_params_sum", "train_time")
+  transfer_efficiency_mode: per_total_second
   cost_mode: deploy_params
-
-  # Scoring weights (multi-objective)
   score_weights:
     pretrain: 0.15
     stage1: 0.35
     stage2: 0.35
     transfer: 0.15
     cost: 0.10
+  distill_base_variant: baseline
+  negligible_score_drop: 0.01
+  min_cost_improvement: 0.03
 
-  # Distillation thresholds
-  distill_base_variant: baseline  # reference variant for score/cost deltas
-  negligible_score_drop: 0.01   # within 1% of base composite score = "safe to remove"
-  min_cost_improvement: 0.03    # requires >=3% cost improvement to recommend removal
-
-# =============================================================================
-# KNOWLEDGE DISTILLATION (6-mer teacher → 4-mer student)
-# =============================================================================
-# Enables training a smaller k-mer model (student) using soft targets from
-# a larger k-mer model (teacher). This allows transferring knowledge from
-# a well-trained 6-mer model to a 4-mer model without token alignment.
-#
-# Loss: L = CE(student, labels) + alpha * KL(softmax(student/T), softmax(teacher/T))
-# Where T is temperature (higher = softer targets) and alpha balances losses.
+# == KNOWLEDGE DISTILLATION ==
 distill:
   enabled: false
-  alpha: 0.5              # Weight for KL loss (0 = CE only, 1 = KL only)
-  temperature: 2.0        # Temperature for softening logits (higher = softer)
-  teacher_ckpt: ../artifacts/checkpoints/stage1_k6.pt  # Path to trained teacher checkpoint
-  teacher_kmer: 6         # K-mer size used by the teacher model
+  alpha: 0.5
+  temperature: 2.0
+  teacher_ckpt: ../artifacts/checkpoints/stage1_k6.pt
+  teacher_kmer: 6
+
+# == MERGED ROOT KEYS (BACKWARD COMPATIBILITY) ==
+<<: *data
+<<: *hardware
+<<: *model
+<<: *features
+<<: *training
+<<: *loss
+<<: *augmentation
+<<: *swa
+<<: *stage_overrides
+<<: *mlm
+<<: *checkpoints
+<<: *visualization
+<<: *metrics
+<<: *ensemble
+<<: *smoketest
+<<: *amp
