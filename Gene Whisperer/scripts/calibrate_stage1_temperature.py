@@ -158,15 +158,14 @@ def collect_logits_and_labels(
     model.eval()
     all_logits = []
     all_labels = []
-
     with torch.no_grad():
         for batch in val_loader:
             tokens, engineered, labels = batch
             tokens = tokens.to(device)
             engineered = engineered.to(device)
 
-            # Get logits via return_logits=True
-            _, logits = model(tokens, engineered_features=engineered, return_logits=True)
+            # Model outputs logits; apply sigmoid in this script when needed
+            logits = model(tokens, engineered_features=engineered)
 
             all_logits.append(logits.squeeze(-1).cpu())
             all_labels.append(labels)
@@ -382,6 +381,23 @@ def main():
     # Statistics before calibration
     probs_before = torch.sigmoid(logits).numpy()
     labels_np = labels.numpy().astype(int)
+
+    total_samples = int(labels_np.size)
+    positive_count = int((labels_np == 1).sum())
+    positive_pct = (positive_count / total_samples) * 100 if total_samples else 0.0
+    prob_min = float(probs_before.min())
+    prob_mean = float(probs_before.mean())
+    prob_max = float(probs_before.max())
+    logit_min = float(logits.min().item())
+    logit_mean = float(logits.mean().item())
+    logit_max = float(logits.max().item())
+
+    print("\nwhat am I evaluating?")
+    print(f"checkpoint path actually loaded: {ckpt_path}")
+    print(f"number of val samples: {total_samples}")
+    print(f"label balance (% positives): {positive_pct:.2f}% ({positive_count}/{total_samples})")
+    print(f"prob min/mean/max: {prob_min:.4f}/{prob_mean:.4f}/{prob_max:.4f}")
+    print(f"logit min/mean/max: {logit_min:.4f}/{logit_mean:.4f}/{logit_max:.4f}")
 
     print("\n" + "=" * 70)
     print("BEFORE CALIBRATION (T=1.0)")

@@ -35,6 +35,10 @@ BASES: Tuple[str, ...] = ("A", "C", "G", "T")
 BASES_SET: set = {"A", "C", "G", "T"}  # For fast membership checks
 TRI_KMER_VOCAB: List[str] = ["".join(kmer) for kmer in product(BASES, repeat=3)]
 TRI_KMER_TO_IDX: Dict[str, int] = {kmer: idx for idx, kmer in enumerate(TRI_KMER_VOCAB)}
+DI_KMER_VOCAB: List[str] = ["".join(kmer) for kmer in product(BASES, repeat=2)]
+DI_KMER_TO_IDX: Dict[str, int] = {kmer: idx for idx, kmer in enumerate(DI_KMER_VOCAB)}
+BASE_TO_IDX: Dict[str, int] = {base: idx for idx, base in enumerate(BASES)}
+PSTNP_CORE_WEIGHT = 2.0
 EIIP_VALUES: Dict[str, float] = {
     "A": 0.1260,
     "C": 0.1340,
@@ -295,6 +299,68 @@ def compute_pseeiip(sequence: str, lag: int = 3) -> torch.FloatTensor:
     return torch.from_numpy(vec)
 
 
+def compute_cksnap(sequence: str, max_gap: int = 5) -> torch.FloatTensor:
+    """
+    Compute CKSNAP (Composition of K-Spaced Nucleotide Acid Pairs).
+
+    For each gap size k in [0, max_gap], count all 16 dinucleotide pairs
+    separated by k bases. Counts are normalized to frequencies per gap.
+    """
+    cleaned = _sanitize_sequence(sequence)
+    gap_count = max(0, int(max_gap)) + 1
+    counts = np.zeros((gap_count, len(DI_KMER_VOCAB)), dtype=np.float32)
+    seq_len = len(cleaned)
+    if seq_len < 2:
+        return torch.from_numpy(counts.reshape(-1))
+
+    for gap in range(gap_count):
+        total_pairs = seq_len - gap - 1
+        if total_pairs <= 0:
+            continue
+        for i in range(total_pairs):
+            left = cleaned[i]
+            right = cleaned[i + gap + 1]
+            pair_idx = BASE_TO_IDX[left] * 4 + BASE_TO_IDX[right]
+            counts[gap, pair_idx] += 1.0
+        counts[gap] /= float(total_pairs)
+
+    return torch.from_numpy(counts.reshape(-1))
+
+
+def compute_pstnp(sequence: str) -> torch.FloatTensor:
+    """
+    Compute PSTNP (Position-Specific Trinucleotide Propensity).
+
+    Uses position-weighted trinucleotide frequencies, emphasizing promoter core
+    regions (-10 and -35) relative to the sequence end (TSS).
+    """
+    cleaned = _sanitize_sequence(sequence)
+    counts = np.zeros(len(TRI_KMER_VOCAB), dtype=np.float32)
+    seq_len = len(cleaned)
+    if seq_len < 3:
+        return torch.from_numpy(counts)
+
+    # Core regions for 81bp sequences: -10 ~ 66-76, -35 ~ 41-51 (1-based).
+    # Generalize relative to sequence end (TSS at seq_len).
+    start_10 = max(0, seq_len - 16)
+    end_10 = min(seq_len - 1, seq_len - 6)
+    start_35 = max(0, seq_len - 41)
+    end_35 = min(seq_len - 1, seq_len - 31)
+
+    total_weight = 0.0
+    for i in range(seq_len - 2):
+        kmer = cleaned[i : i + 3]
+        weight = 1.0
+        if (start_10 <= i <= end_10) or (start_35 <= i <= end_35):
+            weight = PSTNP_CORE_WEIGHT
+        counts[TRI_KMER_TO_IDX[kmer]] += weight
+        total_weight += weight
+
+    if total_weight > 0:
+        counts /= float(total_weight)
+    return torch.from_numpy(counts)
+
+
 def _load_dataframe(path: Optional[str], delimiter: str) -> Optional[pd.DataFrame]:
     if not path:
         return None
@@ -419,16 +485,16 @@ class PromoterDatasetStage1(Dataset):
     2. Random base substitution (5% per base) - Sequencing error simulation
     3. Random indels (2% per base) - Optional, more aggressive augmentation
 
-    Features: TNC(64) + PseEIIP(64) = 128
+    Features: TNC(64) + PseEIIP(64) + CKSNAP(96) + PSTNP(64) = 288
 
     Performance options:
-    - cache_engineered_features: Precompute TNC+PseEIIP once in init
+    - cache_engineered_features: Precompute TNC+PseEIIP+CKSNAP+PSTNP once in init
     - cache_tokens: Pre-tokenize sequences once in init
 
     Note: Caching is only effective when augmentation is disabled (e.g., for validation).
     With augmentation enabled, sequences vary each epoch so caching provides limited benefit.
     """
-    ENGINEERED_DIM = 64 + 64
+    ENGINEERED_DIM = 64 + 64 + 96 + 64
 
     def __init__(
         self,
@@ -438,6 +504,8 @@ class PromoterDatasetStage1(Dataset):
         use_engineered_features: bool = True,
         feature_enable_tnc: bool = True,
         feature_enable_pseeiip: bool = True,
+        feature_enable_cksnap: bool = True,
+        feature_enable_pstnp: bool = True,
         engineered_dim: int = ENGINEERED_DIM,
         reverse_complement_prob: float = 0.5,
         base_substitution_prob: float = 0.0,  # Set > 0 for training augmentation
@@ -454,6 +522,8 @@ class PromoterDatasetStage1(Dataset):
         self.use_engineered_features = use_engineered_features
         self.feature_enable_tnc = bool(feature_enable_tnc)
         self.feature_enable_pseeiip = bool(feature_enable_pseeiip)
+        self.feature_enable_cksnap = bool(feature_enable_cksnap)
+        self.feature_enable_pstnp = bool(feature_enable_pstnp)
         self.engineered_dim = int(engineered_dim)
         self.reverse_complement_prob = max(0.0, min(1.0, reverse_complement_prob))
         self.base_substitution_prob = max(0.0, min(0.2, base_substitution_prob))
@@ -490,7 +560,7 @@ class PromoterDatasetStage1(Dataset):
             self._precompute_tokens()
 
     def _precompute_engineered_features(self) -> None:
-        """Precompute engineered features (TNC + PseEIIP) for all sequences."""
+        """Precompute engineered features (TNC + PseEIIP + CKSNAP + PSTNP) for all sequences."""
         LOGGER.info("Precomputing engineered features for %d sequences...", len(self.sequences))
         self._cached_engineered = []
         for seq in self.sequences:
@@ -518,18 +588,28 @@ class PromoterDatasetStage1(Dataset):
                 f"expected {self.engineered_dim}"
             )
             return engineered
-        tnc = compute_tnc(sequence)           # 64-dim
-        pseeiip = compute_pseeiip(sequence)   # 64-dim
-        if not self.feature_enable_tnc:
-            tnc = torch.zeros_like(tnc)
-        if not self.feature_enable_pseeiip:
-            pseeiip = torch.zeros_like(pseeiip)
-        engineered = torch.cat([tnc, pseeiip], dim=0)
+        engineered = self._compute_engineered_features(sequence)
         assert engineered.shape[-1] == self.engineered_dim, (
             f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
             f"expected {self.engineered_dim}"
         )
         return engineered
+
+    def _compute_engineered_features(self, sequence: str) -> torch.FloatTensor:
+        """Compute engineered features with per-feature toggles."""
+        tnc = compute_tnc(sequence)           # 64-dim
+        pseeiip = compute_pseeiip(sequence)   # 64-dim
+        cksnap = compute_cksnap(sequence)     # 96-dim
+        pstnp = compute_pstnp(sequence)       # 64-dim
+        if not self.feature_enable_tnc:
+            tnc = torch.zeros_like(tnc)
+        if not self.feature_enable_pseeiip:
+            pseeiip = torch.zeros_like(pseeiip)
+        if not self.feature_enable_cksnap:
+            cksnap = torch.zeros_like(cksnap)
+        if not self.feature_enable_pstnp:
+            pstnp = torch.zeros_like(pstnp)
+        return torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
 
     def _augment_sequence(self, sequence: str) -> str:
         """Apply augmentation chain."""
@@ -621,13 +701,15 @@ class PromoterDatasetStage2(Dataset):
             self._precompute_tokens()
 
     def _precompute_engineered_features(self) -> None:
-        """Precompute engineered features (TNC + PseEIIP) for all sequences."""
+        """Precompute engineered features (TNC + PseEIIP + CKSNAP + PSTNP) for all sequences."""
         LOGGER.info("Precomputing Stage2 engineered features for %d sequences...", len(self.sequences))
         self._cached_engineered = []
         for seq in self.sequences:
             tnc = compute_tnc(seq)
             pseeiip = compute_pseeiip(seq)
-            engineered = torch.cat([tnc, pseeiip], dim=0)
+            cksnap = compute_cksnap(seq)
+            pstnp = compute_pstnp(seq)
+            engineered = torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
             self._cached_engineered.append(engineered)
         LOGGER.info("Stage2 engineered features cached.")
 
@@ -676,7 +758,9 @@ class PromoterDatasetStage2(Dataset):
         else:
             tnc = compute_tnc(sequence)
             pseeiip = compute_pseeiip(sequence)
-            engineered = torch.cat([tnc, pseeiip], dim=0)
+            cksnap = compute_cksnap(sequence)
+            pstnp = compute_pstnp(sequence)
+            engineered = torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
 
         assert engineered.shape[-1] == self.engineered_dim, (
             f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
@@ -724,6 +808,8 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     stage1_use_engineered = bool(_cfg_value(cfg, "stage1_use_engineered_features", True))
     stage1_feature_enable_tnc = bool(_cfg_value(cfg, "stage1_feature_enable_tnc", True))
     stage1_feature_enable_pseeiip = bool(_cfg_value(cfg, "stage1_feature_enable_pseeiip", True))
+    stage1_feature_enable_cksnap = bool(_cfg_value(cfg, "stage1_feature_enable_cksnap", True))
+    stage1_feature_enable_pstnp = bool(_cfg_value(cfg, "stage1_feature_enable_pstnp", True))
     engineered_dim = int(_cfg_value(cfg, "engineered_dim", PromoterDatasetStage1.ENGINEERED_DIM))
     stage1_rc_prob = float(_cfg_value(cfg, "stage1_reverse_complement_prob", 0.5))
     kmer = int(_cfg_value(cfg, "kmer", 3))
@@ -798,6 +884,8 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         use_engineered_features=stage1_use_engineered,
         feature_enable_tnc=stage1_feature_enable_tnc,
         feature_enable_pseeiip=stage1_feature_enable_pseeiip,
+        feature_enable_cksnap=stage1_feature_enable_cksnap,
+        feature_enable_pstnp=stage1_feature_enable_pstnp,
         engineered_dim=engineered_dim,
         reverse_complement_prob=stage1_rc_prob,
         # Caching is less effective for training with augmentation
@@ -811,6 +899,8 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         use_engineered_features=stage1_use_engineered,
         feature_enable_tnc=stage1_feature_enable_tnc,
         feature_enable_pseeiip=stage1_feature_enable_pseeiip,
+        feature_enable_cksnap=stage1_feature_enable_cksnap,
+        feature_enable_pstnp=stage1_feature_enable_pstnp,
         engineered_dim=engineered_dim,
         reverse_complement_prob=0.0,  # No augmentation for validation
         # Caching is effective for validation (no augmentation)

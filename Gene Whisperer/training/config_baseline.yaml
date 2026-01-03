@@ -53,7 +53,7 @@ multiscale_kernels: [3, 5, 7, 9, 15]
 lstm_hidden: 192
 post_cnn_transformer_layers: 3
 stage1_use_engineered_features: true
-engineered_dim: 128
+engineered_dim: 288
 engineered_mlp_hidden: 256
 engineered_mlp_output: 128
 fusion_hidden: 256

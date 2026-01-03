@@ -1,0 +1,200 @@
+seed: 1337
+max_bp_len: 234
+batch_size: 32
+delimiter: "\t"
+train_val_split: 0.9
+num_workers: 0
+persistent_workers: false
+cache_engineered_features: false
+cache_tokens: false
+stage1_train: ../data/stage1_train.tsv
+stage1_val: ../data/stage1_val.tsv
+stage2_train: ../data/stage2_train.tsv
+stage2_val: ../data/stage2_val.tsv
+stage2_test: ../data/stage2_val.tsv
+stage2_strength_positive: 1
+stage2_strength_negative: 0
+embedding_dim: 256
+transformer_layers: 8
+transformer_heads: 8
+transformer_ff_dim: 1024
+transformer_dropout: 0.15
+use_attention_pool: true
+kmer: 5
+stage2_kmer: 6
+vocab_size: 4099
+pad_token_id: 4098
+vocab_cache_dir: ../artifacts/vocabs
+use_tcn: true
+tcn_hidden: 256
+tcn_levels: 4
+tcn_kernel: 3
+multiscale_channels: 64
+multiscale_kernels:
+- 3
+- 5
+- 7
+- 9
+- 15
+lstm_hidden: 192
+post_cnn_transformer_layers: 3
+stage1_use_engineered_features: true
+engineered_dim: 128
+engineered_mlp_hidden: 256
+engineered_mlp_output: 128
+fusion_hidden: 256
+stage1_reverse_complement_prob: 0.0
+optimizer: adamw
+optimizer_foreach: true
+lr: 0.0001
+weight_decay: 0.02
+warmup_ratio: 0.05
+epochs: 120
+early_stopping_patience: 35
+grad_accum_steps: 4
+grad_clip_norm: 1.0
+param_norm_warn: 250
+param_norm_cap: 300
+layer_lr_decay: 0.8
+drop_path_rate: 0.1
+stage1_use_focal_loss: false
+stage1_focal_alpha: 0.5
+stage1_focal_gamma: 2.0
+label_smoothing: 0.05
+use_mixup: true
+mixup_alpha: 0.2
+use_swa: true
+swa_start_epoch: 60
+swa_lr: 5.0e-05
+swa_anneal_epochs: 10
+stage1_label_smoothing: 0.0
+stage1_use_mixup: null
+stage1_mixup_alpha: null
+stage1_use_swa: null
+stage1_swa_start_epoch: null
+stage1_swa_lr: null
+stage1_drop_path_rate: null
+stage2_label_smoothing: 0.0
+stage2_use_mixup: false
+stage2_mixup_alpha: 0.0
+stage2_use_swa: false
+stage2_swa_start_epoch: null
+stage2_swa_lr: null
+stage2_drop_path_rate: 0.0
+stage1_load_mlm_weights: false
+stage2_load_mlm_weights: false
+stage1_mlm_transfer_mode: embed_plus_adapter
+stage2_mlm_transfer_mode: embed_plus_adapter
+stage1_freeze_layers: 0
+stage1_unfreeze_epoch: null
+mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k6.pt
+include_reverse_complements: true
+mlm_fasta_path: ../data/GCF_000005845.2_ASM584v2_genomic.fna
+mlm_fasta_paths:
+- ../data/GCF_000005845.2_ASM584v2_genomic.fna
+- ../data/B_subtilis_genome
+- ../data/S_cerevisiae_genome
+mlm_species_weights:
+- 0.45
+- 0.35
+- 0.2
+mlm_steps_per_epoch: 5000
+mlm_unknown_base_strategy: random
+mlm_window_size: 234
+mlm_stride: 20
+mlm_batch_size: 128
+mlm_epochs: 200
+mlm_lr: 0.0002
+mlm_weight_decay: 0.01
+mlm_kmer: 6
+mlm_vocab_path: ../artifacts/vocabs/mlm_k6_vocab.json
+mlm_encoder_path: ../artifacts/mlm_encoder_k6.pt
+mlm_embedding_dim: 256
+mlm_transformer_layers: 8
+mlm_transformer_heads: 8
+mlm_transformer_ff_dim: 1024
+mlm_transformer_dropout: 0.1
+mlm_tie_weights: true
+mlm_use_output_norm: true
+mlm_use_layer_lr_decay: false
+mlm_layer_lr_decay: 0.9
+mlm_val_ratio: 0.1
+mlm_val_exclude_patterns:
+- mitochond
+mlm_min_val_records_per_species: 1
+mlm_single_record_val_ratio: 0.1
+mlm_grad_accum_steps: 4
+mlm_warmup_ratio: 0.06
+mlm_final_lr_ratio: 0.1
+mlm_lr_log_interval: 50
+mlm_patience: 30
+mlm_length_curriculum_enabled: true
+mlm_length_curriculum_start_tokens: 32
+mlm_length_curriculum_end_tokens: 79
+mlm_length_curriculum_start_pct: 0.0
+mlm_length_curriculum_end_pct: 0.3
+stage1_checkpoint_name: stage1_k5.pt
+stage1_ckpt_by_k:
+  3: ../artifacts/checkpoints/stage1_k3.pt
+  4: ../artifacts/checkpoints/stage1_k4.pt
+  5: ../artifacts/checkpoints/stage1_k5.pt
+  6: ../artifacts/checkpoints/stage1_k6.pt
+stage1_embed_plot_epoch: null
+stage1_embed_plot_method: pca
+stage1_embed_plot_samples: 512
+metrics_stage1:
+- accuracy
+- precision
+- recall
+- f1
+- mcc
+- specificity
+metrics_stage2:
+- accuracy
+- mcc
+- roc_auc
+use_multi_scale: true
+multi_scale_kmers:
+- 3
+- 4
+- 5
+- 6
+smoketest_steps_pretrain: 300
+smoketest_steps_stage1: 300
+smoketest_steps_stage2: 300
+amp_enabled: true
+amp_dtype: bfloat16
+amp_force_fp32_loss: true
+ablation:
+  enabled: false
+  seeds:
+  - 1337
+  pretrain_bp_limit: 200000
+  pretrain_max_steps: 300
+  pretrain_epochs: 5
+  stage1_max_train_samples: 2048
+  stage1_max_val_samples: 2048
+  stage1_max_steps: 300
+  stage1_epochs: 5
+  stage2_max_train_samples: 2048
+  stage2_max_val_samples: 2048
+  stage2_max_steps: 300
+  stage2_epochs: 5
+  compute_transfer_efficiency: true
+  transfer_efficiency_mode: per_total_second
+  cost_mode: deploy_params
+  score_weights:
+    pretrain: 0.15
+    stage1: 0.35
+    stage2: 0.35
+    transfer: 0.15
+    cost: 0.1
+  distill_base_variant: baseline
+  negligible_score_drop: 0.01
+  min_cost_improvement: 0.03
+distill:
+  enabled: false
+  alpha: 0.5
+  temperature: 2.0
+  teacher_ckpt: ../artifacts/checkpoints/stage1_k6.pt
+  teacher_kmer: 6

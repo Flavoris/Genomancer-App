@@ -174,6 +174,7 @@ def main():
     all_probs_model = []
     all_probs2 = []
     all_logits = []
+    all_logits2 = []
     all_labels = []
 
     with torch.no_grad():
@@ -182,22 +183,42 @@ def main():
             tokens = tokens.to(device)
             engineered = engineered.to(device)
 
-            # Get model default output (should be probs after sigmoid)
-            probs_model = model(tokens, engineered_features=engineered)
+            # Get model default output (logits)
+            logits_model = model(tokens, engineered_features=engineered)
+            probs_model = torch.sigmoid(logits_model)
 
             # Get both probs and logits via return_logits=True
-            probs2, logits = model(tokens, engineered_features=engineered, return_logits=True)
+            probs2, logits2 = model(tokens, engineered_features=engineered, return_logits=True)
 
             all_probs_model.append(probs_model.squeeze(-1).cpu())
             all_probs2.append(probs2.squeeze(-1).cpu())
-            all_logits.append(logits.squeeze(-1).cpu())
+            all_logits.append(logits_model.squeeze(-1).cpu())
+            all_logits2.append(logits2.squeeze(-1).cpu())
             all_labels.append(labels)
 
     # Concatenate all batches
     probs_model = torch.cat(all_probs_model).numpy()
     probs2 = torch.cat(all_probs2).numpy()
     logits = torch.cat(all_logits).numpy()
+    logits2 = torch.cat(all_logits2).numpy()
     labels = np.concatenate(all_labels).astype(int)
+
+    total_samples = int(labels.size)
+    positive_count = int((labels == 1).sum())
+    positive_pct = (positive_count / total_samples) * 100 if total_samples else 0.0
+    prob_min = float(probs_model.min())
+    prob_mean = float(probs_model.mean())
+    prob_max = float(probs_model.max())
+    logit_min = float(logits.min())
+    logit_mean = float(logits.mean())
+    logit_max = float(logits.max())
+
+    print("\nwhat am I evaluating?")
+    print(f"checkpoint path actually loaded: {ckpt_path}")
+    print(f"number of val samples: {total_samples}")
+    print(f"label balance (% positives): {positive_pct:.2f}% ({positive_count}/{total_samples})")
+    print(f"prob min/mean/max: {prob_min:.4f}/{prob_mean:.4f}/{prob_max:.4f}")
+    print(f"logit min/mean/max: {logit_min:.4f}/{logit_mean:.4f}/{logit_max:.4f}")
 
     # =========================================================================
     # LOGITS VS PROBS SANITY CHECK
@@ -215,6 +236,10 @@ def main():
     diff2 = np.abs(probs_model - probs2)
     max_diff2 = diff2.max()
 
+    # Check 3: logits from default path should match return_logits path
+    diff3 = np.abs(logits - logits2)
+    max_diff3 = diff3.max()
+
     print(f"\nAssertion 1: probs_model ≈ sigmoid(logits)")
     print(f"  Max absolute difference: {max_diff1:.2e}")
     if max_diff1 < 1e-6:
@@ -229,6 +254,14 @@ def main():
         print("  ✓ PASSED: probs_model equals probs2")
     else:
         print("  ✗ FAILED: Mismatch! Default output differs from return_logits output.")
+        print("           Check for inconsistent forward path.")
+
+    print(f"\nAssertion 3: logits ≈ logits2 (from return_logits path)")
+    print(f"  Max absolute difference: {max_diff3:.2e}")
+    if max_diff3 < 1e-6:
+        print("  ✓ PASSED: logits equals logits2")
+    else:
+        print("  ✗ FAILED: Mismatch! Logits differ between paths.")
         print("           Check for inconsistent forward path.")
 
     # Print logits and probs statistics

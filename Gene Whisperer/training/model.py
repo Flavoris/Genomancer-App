@@ -704,16 +704,33 @@ class EngineeredFeatureMLP(nn.Module):
     This gives engineered features (TNC, PseEIIP) their own
     representation space before fusion with sequence features, allowing
     the model to learn better feature interactions.
+
+    Includes optional pre-norm, gated hidden block, and residual projection
+    to stabilize training on larger feature spaces.
     """
     
     def __init__(
         self,
-        input_dim: int = 128,
-        hidden_dim: int = 256,
-        output_dim: int = 128,
+        input_dim: int = 288,
+        hidden_dim: int = 512,
+        output_dim: int = 256,
         dropout: float = 0.3,
+        use_pre_norm: bool = True,
+        input_dropout: float = 0.05,
+        use_gated: bool = True,
+        use_residual: bool = True,
     ):
         super().__init__()
+        self.use_pre_norm = use_pre_norm
+        self.use_gated = use_gated
+        self.use_residual = use_residual
+
+        self.input_norm = nn.LayerNorm(input_dim) if use_pre_norm else None
+        self.pre_norm_scale = (
+            nn.Parameter(torch.tensor(0.0)) if use_pre_norm else None
+        )
+        self.input_dropout = nn.Dropout(input_dropout) if input_dropout > 0 else None
+
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -726,6 +743,26 @@ class EngineeredFeatureMLP(nn.Module):
             nn.Linear(hidden_dim, output_dim),
             nn.LayerNorm(output_dim),
         )
+        if use_gated:
+            self.gate_proj = nn.Linear(hidden_dim, hidden_dim)
+            # Initialized to a no-op so old checkpoints still load cleanly.
+            self.gate_scale = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.gate_proj = None
+            self.gate_scale = None
+
+        if use_residual:
+            self.residual_proj = (
+                nn.Identity()
+                if input_dim == output_dim
+                else nn.Linear(input_dim, output_dim)
+            )
+            # Initialized to a no-op for backwards compatibility.
+            self.residual_scale = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.residual_proj = None
+            self.residual_scale = None
+
         self.output_dim = output_dim
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -735,7 +772,39 @@ class EngineeredFeatureMLP(nn.Module):
         Returns:
             (B, output_dim) processed features
         """
-        return self.mlp(x)
+        residual_in = x
+        if self.input_norm is not None:
+            normed = self.input_norm(x)
+            scale = torch.tanh(self.pre_norm_scale)
+            x = x + scale * (normed - x)
+
+        if self.input_dropout is not None:
+            x = self.input_dropout(x)
+
+        # Keep layer ordering explicit to insert gated block without renaming weights.
+        x = self.mlp[0](x)
+        x = self.mlp[1](x)
+        x = self.mlp[2](x)
+        x = self.mlp[3](x)
+
+        if self.gate_proj is not None:
+            gate = torch.sigmoid(self.gate_proj(x))
+            scale = torch.tanh(self.gate_scale)
+            x = x * (1.0 + scale * (gate - 0.5) * 2.0)
+
+        x = self.mlp[4](x)
+        x = self.mlp[5](x)
+        x = self.mlp[6](x)
+        x = self.mlp[7](x)
+        x = self.mlp[8](x)
+        x = self.mlp[9](x)
+
+        if self.residual_proj is not None:
+            residual = self.residual_proj(residual_in)
+            scale = torch.tanh(self.residual_scale)
+            x = x + scale * residual
+
+        return x
 
 
 class GatedAttentionFusion(nn.Module):
@@ -999,7 +1068,7 @@ class GeneWhispererStage1(nn.Module):
         dropout: float = 0.15,
         pad_token_id: Optional[int] = None,
         encoder: Optional[DNAEncoder] = None,
-        engineered_dim: int = 128,
+        engineered_dim: int = 288,
         use_engineered_features: bool = True,
         use_attention_pool: bool = True,
         # TCN parameters
@@ -1014,9 +1083,13 @@ class GeneWhispererStage1(nn.Module):
         lstm_hidden: int = 192,
         # New architecture parameters
         post_cnn_transformer_layers: int = 3,
-        engineered_mlp_hidden: int = 256,
-        engineered_mlp_output: int = 128,
-        fusion_hidden: int = 256,
+        engineered_mlp_hidden: int = 512,
+        engineered_mlp_output: int = 256,
+        engineered_mlp_pre_norm: bool = True,
+        engineered_mlp_input_dropout: float = 0.05,
+        engineered_mlp_use_gated: bool = True,
+        engineered_mlp_use_residual: bool = True,
+        fusion_hidden: int = 384,
         # Stochastic depth (drop path) rate for encoder
         drop_path_rate: float = 0.1,
         # Maximum sequence length for positional embeddings
@@ -1094,8 +1167,12 @@ class GeneWhispererStage1(nn.Module):
                 hidden_dim=engineered_mlp_hidden,
                 output_dim=engineered_mlp_output,
                 dropout=dropout,
+                use_pre_norm=engineered_mlp_pre_norm,
+                input_dropout=engineered_mlp_input_dropout,
+                use_gated=engineered_mlp_use_gated,
+                use_residual=engineered_mlp_use_residual,
             )
-            eng_out_dim = engineered_mlp_output
+            eng_out_dim = self.engineered_mlp.output_dim
             
             # Step 6: Attention-based fusion
             self.fusion = GatedAttentionFusion(
@@ -1105,11 +1182,11 @@ class GeneWhispererStage1(nn.Module):
                 num_heads=4,
                 dropout=dropout,
             )
-            classifier_in = fusion_hidden
+            classifier_in = self.fusion.output_dim
         else:
             classifier_in = seq_out_dim
         
-        # Step 7: Classifier head with reduced dropout
+        # Step 7: Classifier head with reduced dropout (outputs logits)
         # Original had 0.4/0.3 dropout which was too aggressive
         classifier_hidden = 512 if use_tcn else 384
         classifier_dropout = dropout * 1.5  # Scale with base dropout (0.15 -> 0.225)
@@ -1124,7 +1201,6 @@ class GeneWhispererStage1(nn.Module):
             nn.GELU(),
             nn.Dropout(classifier_dropout * 0.8),  # Was 0.3, now ~0.18
             nn.Linear(classifier_hidden // 2, 1),
-            nn.Sigmoid(),
         )
     
     @property
@@ -1305,24 +1381,18 @@ class GeneWhispererStage1(nn.Module):
         Args:
             tokens: (B, L) k-mer token indices
             engineered_features: Optional (B, engineered_dim) hand-crafted features
-            return_logits: If True, also return pre-sigmoid logits for distillation
+        return_logits: If True, also return sigmoid probabilities alongside logits
         Returns:
-            (B, 1) promoter probability, or tuple of (probs, logits) if return_logits=True
+            (B, 1) promoter logits, or tuple of (probs, logits) if return_logits=True
         """
         _, fused = self.extract_features(tokens, engineered_features)
 
+        logits = self.classifier(fused)
         if return_logits:
-            # Run classifier up to (but not including) sigmoid
-            # classifier is: Linear -> LayerNorm -> GELU -> Dropout -> Linear -> LayerNorm -> GELU -> Dropout -> Linear -> Sigmoid
-            # We need output of the last Linear (index -2, before Sigmoid at index -1)
-            x = fused
-            for layer in list(self.classifier)[:-1]:  # All except final Sigmoid
-                x = layer(x)
-            logits = x
             probs = torch.sigmoid(logits)
             return probs, logits
 
-        return self.classifier(fused)
+        return logits
 
     def forward_from_embeds(
         self,
@@ -1342,22 +1412,18 @@ class GeneWhispererStage1(nn.Module):
             embeds: (B, L, embedding_dim) pre-computed embeddings
             padding_mask: Optional (B, L) padding mask (True = pad)
             engineered_features: Optional (B, engineered_dim) hand-crafted features
-            return_logits: If True, also return pre-sigmoid logits for distillation
+        return_logits: If True, also return sigmoid probabilities alongside logits
         Returns:
-            (B, 1) promoter probability, or tuple of (probs, logits) if return_logits=True
+            (B, 1) promoter logits, or tuple of (probs, logits) if return_logits=True
         """
         _, fused = self.extract_features_from_embeds(embeds, padding_mask, engineered_features)
 
+        logits = self.classifier(fused)
         if return_logits:
-            # Run classifier up to (but not including) sigmoid
-            x = fused
-            for layer in list(self.classifier)[:-1]:  # All except final Sigmoid
-                x = layer(x)
-            logits = x
             probs = torch.sigmoid(logits)
             return probs, logits
 
-        return self.classifier(fused)
+        return logits
 
 
 # =============================================================================
@@ -1564,7 +1630,7 @@ class GeneWhispererStage2(nn.Module):
     - "bilstm": StrengthBiLSTMHead (BiLSTM hidden=128)
     - "both": CombinedStrengthHead (transformer + BiLSTM)
 
-    Final classifier is a small MLP -> sigmoid for binary strong/weak.
+    Final classifier is a small MLP -> logits for binary strong/weak.
     """
 
     def __init__(
@@ -1578,7 +1644,7 @@ class GeneWhispererStage2(nn.Module):
         dropout: float = 0.15,
         pad_token_id: Optional[int] = None,
         encoder: Optional[DNAEncoder] = None,
-        engineered_dim: int = 128,
+        engineered_dim: int = 288,
         use_engineered_features: bool = True,
         use_attention_pool: bool = True,
         # TCN parameters
@@ -1603,9 +1669,13 @@ class GeneWhispererStage2(nn.Module):
         stage2_combine_mode: str = "concat",  # For "both": "concat" or "avg"
         stage2_combine_order: str = "transformer_first",
         # Engineered features MLP parameters
-        engineered_mlp_hidden: int = 256,
-        engineered_mlp_output: int = 128,
-        fusion_hidden: int = 256,
+        engineered_mlp_hidden: int = 512,
+        engineered_mlp_output: int = 256,
+        engineered_mlp_pre_norm: bool = True,
+        engineered_mlp_input_dropout: float = 0.05,
+        engineered_mlp_use_gated: bool = True,
+        engineered_mlp_use_residual: bool = True,
+        fusion_hidden: int = 384,
         # Stochastic depth (drop path) rate for encoder
         drop_path_rate: float = 0.1,
     ):
@@ -1708,21 +1778,25 @@ class GeneWhispererStage2(nn.Module):
                 hidden_dim=engineered_mlp_hidden,
                 output_dim=engineered_mlp_output,
                 dropout=dropout,
+                use_pre_norm=engineered_mlp_pre_norm,
+                input_dropout=engineered_mlp_input_dropout,
+                use_gated=engineered_mlp_use_gated,
+                use_residual=engineered_mlp_use_residual,
             )
 
             # Fusion of sequence head output and engineered features
             self.fusion = GatedAttentionFusion(
                 seq_dim=head_out_dim,
-                eng_dim=engineered_mlp_output,
+                eng_dim=self.engineered_mlp.output_dim,
                 hidden_dim=fusion_hidden,
                 num_heads=4,
                 dropout=dropout,
             )
-            classifier_in = fusion_hidden
+            classifier_in = self.fusion.output_dim
         else:
             classifier_in = head_out_dim
 
-        # Step 6: Final classifier (small MLP -> sigmoid)
+        # Step 6: Final classifier (small MLP -> logits)
         classifier_dropout = dropout * 1.2
         self.classifier = nn.Sequential(
             nn.Linear(classifier_in, classifier_in // 2),
@@ -1730,7 +1804,6 @@ class GeneWhispererStage2(nn.Module):
             nn.GELU(),
             nn.Dropout(classifier_dropout),
             nn.Linear(classifier_in // 2, 1),
-            nn.Sigmoid(),
         )
 
     @property
@@ -1892,7 +1965,7 @@ class GeneWhispererStage2(nn.Module):
             tokens: (B, L) k-mer token indices
             engineered_features: Optional (B, engineered_dim) hand-crafted features
         Returns:
-            (B, 1) strength probability (1 = strong, 0 = weak)
+            (B, 1) strength logits (1 = strong, 0 = weak)
         """
         # Get token-level features from backbone
         token_features = self._backbone_forward(tokens)  # (B, L, D)
@@ -1908,35 +1981,67 @@ class GeneWhispererStage2(nn.Module):
         else:
             fused = pooled
 
-        # Final classification
+        # Final classification (logits)
         return self.classifier(fused)
 
 
 class MultiScaleEnsemble(nn.Module):
     """
     Multi-scale k-mer ensemble following msBERT approach.
-    
-    Trains separate models for k=3,4,5,6 and averages predictions.
-    This captures patterns at different scales - crucial for 
-    improving beyond 80% accuracy.
-    
+
+    Trains separate models for k=3,4,5,6 and averages predictions
+    via soft voting (probability averaging).
+
     For CoreML/iPhone deployment, we can either:
     1. Export each model separately and average in Swift
     2. Use a smaller subset (k=3,4) for efficiency
     """
-    
-    def __init__(self, models: List[nn.Module]):
+
+    def __init__(
+        self,
+        models: List[nn.Module],
+        weights: Optional[List[float]] = None,
+        learnable_weights: bool = False,
+    ):
         super().__init__()
         if not models:
             raise ValueError("MultiScaleEnsemble requires at least one model")
         self.models = nn.ModuleList(models)
-    
-    def forward(self, batch: dict) -> torch.Tensor:
+        self.learnable_weights = learnable_weights
+
+        if weights is not None and len(weights) != len(models):
+            raise ValueError("Weights length must match number of models")
+
+        if learnable_weights:
+            if weights is None:
+                init_logits = torch.zeros(len(models), dtype=torch.float32)
+            else:
+                weights_tensor = torch.tensor(weights, dtype=torch.float32)
+                weight_sum = weights_tensor.sum()
+                if weight_sum.item() == 0.0:
+                    raise ValueError("Weights must sum to a non-zero value")
+                normed = weights_tensor / weight_sum
+                eps = torch.finfo(normed.dtype).eps
+                normed = normed.clamp(min=eps)
+                init_logits = torch.log(normed)
+            self.weights = nn.Parameter(init_logits)
+        else:
+            if weights is None:
+                self.weights = None
+            else:
+                weights_tensor = torch.tensor(weights, dtype=torch.float32)
+                weight_sum = weights_tensor.sum()
+                if weight_sum.item() == 0.0:
+                    raise ValueError("Weights must sum to a non-zero value")
+                self.register_buffer("weights", weights_tensor / weight_sum)
+
+    def forward(self, batch: dict, return_logits: bool = False) -> torch.Tensor:
         """
         Args:
             batch: Dict mapping k-mer size to (tokens, engineered_features)
+            return_logits: If True, return logits instead of probabilities
         Returns:
-            Averaged predictions
+            Ensemble probabilities by default; logits if return_logits=True
         """
         outputs = []
         for model in self.models:
@@ -1948,9 +2053,26 @@ class MultiScaleEnsemble(nn.Module):
                 raise KeyError(f"No batch entry for k-mer {kmer}")
             tokens, engineered = batch[kmer]
             outputs.append(model(tokens, engineered))
-        
+
         stacked = torch.stack(outputs, dim=0)
-        return stacked.mean(dim=0)
+        probs = torch.sigmoid(stacked)
+
+        if self.learnable_weights:
+            weights = torch.softmax(self.weights, dim=0)
+            weights = weights.to(device=probs.device, dtype=probs.dtype)
+            probs = (weights.view(-1, 1, 1) * probs).sum(dim=0)
+        elif self.weights is None:
+            probs = probs.mean(dim=0)
+        else:
+            weights = self.weights.to(device=probs.device, dtype=probs.dtype)
+            probs = (weights.view(-1, 1, 1) * probs).sum(dim=0)
+
+        if return_logits:
+            eps = torch.finfo(probs.dtype).eps
+            probs = probs.clamp(min=eps, max=1 - eps)
+            return torch.logit(probs)
+
+        return probs
 
 
 def _post_cnn_checksums(model: GeneWhispererStage1) -> dict:
@@ -2016,7 +2138,7 @@ if __name__ == "__main__":
         ff_dim=int(cfg.get("transformer_ff_dim", 384)),
         dropout=float(cfg.get("transformer_dropout", 0.15)),
         pad_token_id=cfg.get("pad_token_id"),
-        engineered_dim=int(cfg.get("engineered_dim", 128)),
+        engineered_dim=int(cfg.get("engineered_dim", 288)),
         use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
         use_attention_pool=bool(cfg.get("use_attention_pool", True)),
         use_tcn=bool(cfg.get("use_tcn", True)),

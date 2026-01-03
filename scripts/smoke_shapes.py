@@ -57,7 +57,7 @@ def main() -> int:
     kmer = int(cfg.get("kmer", 3))
     vocab = KmerVocabulary.build_from_sequences(df["sequence"].astype(str).tolist(), k=kmer)
 
-    engineered_dim = int(cfg.get("engineered_dim", 128))
+    engineered_dim = int(cfg.get("engineered_dim", 288))
     dataset = PromoterDatasetStage1(
         df,
         max_bp_len=max_bp_len,

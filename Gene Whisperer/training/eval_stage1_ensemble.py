@@ -22,7 +22,7 @@ import torch
 import yaml
 from tqdm.auto import tqdm
 
-from dataset import KmerVocabulary, compute_tnc, compute_pseeiip, _sanitize_sequence
+from dataset import KmerVocabulary, compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc, _sanitize_sequence
 from ensemble_infer import build_model, load_checkpoint, select_device
 
 LOGGER = logging.getLogger("gene_whisperer.eval_ensemble")
@@ -35,15 +35,21 @@ def load_vocab(vocab_path: Path) -> KmerVocabulary:
 
 
 def compute_engineered_features(sequence: str, cfg: Optional[Dict] = None) -> torch.Tensor:
-    """Compute engineered features: TNC(64) + PseEIIP(64) = 128."""
+    """Compute engineered features: TNC(64) + PseEIIP(64) + CKSNAP(96) + PSTNP(64) = 288."""
     tnc = compute_tnc(sequence)
     pseeiip = compute_pseeiip(sequence)
+    cksnap = compute_cksnap(sequence)
+    pstnp = compute_pstnp(sequence)
     if cfg is not None:
         if not bool(cfg.get("stage1_feature_enable_tnc", True)):
             tnc = torch.zeros_like(tnc)
         if not bool(cfg.get("stage1_feature_enable_pseeiip", True)):
             pseeiip = torch.zeros_like(pseeiip)
-    return torch.cat([tnc, pseeiip], dim=0)
+        if not bool(cfg.get("stage1_feature_enable_cksnap", True)):
+            cksnap = torch.zeros_like(cksnap)
+        if not bool(cfg.get("stage1_feature_enable_pstnp", True)):
+            pstnp = torch.zeros_like(pstnp)
+    return torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
 
 
 def prepare_inputs(

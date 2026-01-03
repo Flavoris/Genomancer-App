@@ -37,11 +37,23 @@ import torch.nn.functional as F
 import yaml
 from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.profiler import profile, ProfilerActivity, schedule, tensorboard_trace_handler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm.auto import tqdm
 
 from amp_utils import get_amp_context, log_amp_status, AMPContext
-from dataset import build_dataloaders
-from model import GeneWhispererStage1, DNAEncoder
+from dataset import (
+    KmerVocabulary,
+    build_dataloaders,
+    compute_cksnap,
+    compute_pseeiip,
+    compute_pstnp,
+    compute_tnc,
+    random_base_deletion,
+    random_base_insertion,
+    random_base_substitution,
+    reverse_complement,
+)
+from model import GeneWhispererStage1, DNAEncoder, MultiScaleEnsemble
 from numerics import cap_model_param_norm_
 from seed_utils import set_global_seed
 
@@ -60,7 +72,7 @@ class DistillationLoss(nn.Module):
     Combines standard cross-entropy with KL divergence between teacher/student
     logits, using temperature scaling to soften the distributions.
 
-    For binary classification with sigmoid, we convert logits to 2-class
+    For binary classification with logits, we convert logits to 2-class
     distributions: [1-sigmoid(logit), sigmoid(logit)] for proper KL.
 
     Loss = (1-alpha)*CE(student, labels) + alpha*T^2*KL(soft_student, soft_teacher)
@@ -77,11 +89,10 @@ class DistillationLoss(nn.Module):
         super().__init__()
         self.alpha = alpha
         self.temperature = temperature
-        self.base_criterion = base_criterion or nn.BCELoss()
+        self.base_criterion = base_criterion or nn.BCEWithLogitsLoss()
 
     def forward(
         self,
-        student_probs: torch.Tensor,
         student_logits: torch.Tensor,
         teacher_logits: torch.Tensor,
         labels: torch.Tensor,
@@ -90,15 +101,14 @@ class DistillationLoss(nn.Module):
         Compute combined CE + KL distillation loss.
 
         Args:
-            student_probs: (B, 1) student sigmoid outputs
             student_logits: (B, 1) student pre-sigmoid logits
             teacher_logits: (B, 1) teacher pre-sigmoid logits (detached)
             labels: (B, 1) ground truth labels
         Returns:
             Combined loss and dict with loss components
         """
-        # Standard cross-entropy loss
-        ce_loss = self.base_criterion(student_probs, labels)
+        # Standard cross-entropy loss on logits
+        ce_loss = self.base_criterion(student_logits, labels)
 
         # Convert binary logits to 2-class log-softmax with temperature
         # For binary: [logit_class0, logit_class1] = [-logit, logit]
@@ -184,7 +194,7 @@ def load_teacher_model(
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
         pad_token_id=teacher_vocab.pad_id,
-        engineered_dim=int(cfg.get("engineered_dim", 128)),
+        engineered_dim=int(cfg.get("engineered_dim", 288)),
         use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
         use_attention_pool=bool(cfg.get("use_attention_pool", True)),
         use_tcn=bool(cfg.get("use_tcn", True)),
@@ -311,20 +321,12 @@ def verify_distillation_dry_run(
     try:
         with torch.no_grad():
             # Student forward with logits
-            student_out = student(tokens_student, engineered, return_logits=True)
-            if isinstance(student_out, tuple):
-                student_probs, student_logits = student_out
-            else:
-                LOGGER.error("Student model did not return logits!")
-                return False
+            student_logits = student(tokens_student, engineered)
+            student_probs = torch.sigmoid(student_logits)
 
             # Teacher forward with logits
-            teacher_out = teacher(tokens_teacher, engineered, return_logits=True)
-            if isinstance(teacher_out, tuple):
-                teacher_probs, teacher_logits = teacher_out
-            else:
-                LOGGER.error("Teacher model did not return logits!")
-                return False
+            teacher_logits = teacher(tokens_teacher, engineered)
+            teacher_probs = torch.sigmoid(teacher_logits)
 
         LOGGER.info("Student logits shape: %s", student_logits.shape)
         LOGGER.info("Teacher logits shape: %s", teacher_logits.shape)
@@ -345,7 +347,6 @@ def verify_distillation_dry_run(
         # Quick distillation loss test
         distill_loss = DistillationLoss(alpha=0.5, temperature=2.0)
         loss, loss_dict = distill_loss(
-            student_probs,
             student_logits,
             teacher_logits,
             labels.unsqueeze(1),
@@ -429,6 +430,14 @@ def load_config(path: Path) -> Dict:
     return cfg or {}
 
 
+def get_with_fallback(cfg: dict, stage_key: str, global_key: str, default: Any) -> Any:
+    """Get stage-specific value, falling back to global if missing or null."""
+    value = cfg.get(stage_key)
+    if value is not None:
+        return value
+    return cfg.get(global_key, default)
+
+
 class LabelSmoothingBCE(nn.Module):
     """
     Binary cross entropy with label smoothing.
@@ -437,18 +446,20 @@ class LabelSmoothingBCE(nn.Module):
     improves generalization. For binary classification:
     - Smooth 0 → smoothing/2
     - Smooth 1 → 1 - smoothing/2
+    
+    Expects logits as input.
     """
     
     def __init__(self, smoothing: float = 0.1):
         super().__init__()
         self.smoothing = smoothing
     
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # Smooth labels
         target_smooth = target * (1 - self.smoothing) + 0.5 * self.smoothing
         
-        # Binary cross entropy
-        loss = F.binary_cross_entropy(pred, target_smooth, reduction='mean')
+        # Binary cross entropy on logits
+        loss = F.binary_cross_entropy_with_logits(logits, target_smooth, reduction='mean')
         return loss
 
 
@@ -458,6 +469,8 @@ class FocalLossWithSmoothing(nn.Module):
     
     Combines focal loss (handles class imbalance) with 
     label smoothing (prevents overconfidence).
+    
+    Expects logits as input.
     """
     
     def __init__(
@@ -473,12 +486,13 @@ class FocalLossWithSmoothing(nn.Module):
         self.smoothing = smoothing
         self.eps = eps
     
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # Label smoothing
         target_smooth = target * (1 - self.smoothing) + 0.5 * self.smoothing
         
         # Focal loss
-        p_t = pred * target_smooth + (1 - pred) * (1 - target_smooth)
+        probs = torch.sigmoid(logits)
+        p_t = probs * target_smooth + (1 - probs) * (1 - target_smooth)
         alpha_t = self.alpha * target_smooth + (1 - self.alpha) * (1 - target_smooth)
         
         focal_weight = (1 - p_t) ** self.gamma
@@ -486,6 +500,1101 @@ class FocalLossWithSmoothing(nn.Module):
         
         return loss.mean()
 
+
+# =============================================================================
+# MULTI-SCALE ENSEMBLE UTILITIES
+# =============================================================================
+
+class MultiKmerStage1Dataset(Dataset):
+    """Stage 1 dataset that returns tokens for multiple k-mer vocabularies."""
+
+    def __init__(
+        self,
+        sequences: List[str],
+        labels: List[float],
+        max_bp_len: int,
+        vocabs: Dict[int, KmerVocabulary],
+        use_engineered_features: bool = True,
+        feature_enable_tnc: bool = True,
+        feature_enable_pseeiip: bool = True,
+        feature_enable_cksnap: bool = True,
+        feature_enable_pstnp: bool = True,
+        engineered_dim: int = 288,
+        reverse_complement_prob: float = 0.5,
+        base_substitution_prob: float = 0.0,
+        base_indel_prob: float = 0.0,
+        cache_engineered_features: bool = False,
+        cache_tokens: bool = False,
+    ):
+        if len(sequences) != len(labels):
+            raise ValueError(
+                f"Sequences/labels length mismatch: {len(sequences)} vs {len(labels)}"
+            )
+        if not vocabs:
+            raise ValueError("MultiKmerStage1Dataset requires at least one vocabulary")
+
+        self.sequences = list(sequences)
+        self.labels = list(labels)
+        self.max_bp_len = int(max_bp_len)
+        self.vocabs = {int(k): vocab for k, vocab in vocabs.items()}
+        self.use_engineered_features = bool(use_engineered_features)
+        self.feature_enable_tnc = bool(feature_enable_tnc)
+        self.feature_enable_pseeiip = bool(feature_enable_pseeiip)
+        self.feature_enable_cksnap = bool(feature_enable_cksnap)
+        self.feature_enable_pstnp = bool(feature_enable_pstnp)
+        self.engineered_dim = int(engineered_dim)
+        self.reverse_complement_prob = max(0.0, min(1.0, float(reverse_complement_prob)))
+        self.base_substitution_prob = max(0.0, min(0.2, float(base_substitution_prob)))
+        self.base_indel_prob = max(0.0, min(0.1, float(base_indel_prob)))
+        self._zero_engineered = torch.zeros(self.engineered_dim, dtype=torch.float32)
+
+        self.cache_engineered_features = bool(cache_engineered_features)
+        self.cache_tokens = bool(cache_tokens)
+        self._cached_engineered: Optional[List[torch.FloatTensor]] = None
+        self._cached_tokens: Optional[List[Dict[int, torch.LongTensor]]] = None
+
+        has_augmentation = (
+            self.reverse_complement_prob > 0
+            or self.base_substitution_prob > 0
+            or self.base_indel_prob > 0
+        )
+
+        if self.cache_engineered_features:
+            if has_augmentation:
+                LOGGER.warning(
+                    "cache_engineered_features=True but augmentation is enabled; "
+                    "caching is less effective with augmentation"
+                )
+            self._precompute_engineered_features()
+
+        if self.cache_tokens:
+            if has_augmentation:
+                LOGGER.warning(
+                    "cache_tokens=True but augmentation is enabled; "
+                    "caching is less effective with augmentation"
+                )
+            self._precompute_tokens()
+
+    def __len__(self) -> int:
+        return len(self.sequences)
+
+    def _compute_engineered_features(self, sequence: str) -> torch.FloatTensor:
+        tnc = compute_tnc(sequence)
+        pseeiip = compute_pseeiip(sequence)
+        cksnap = compute_cksnap(sequence)
+        pstnp = compute_pstnp(sequence)
+        if not self.feature_enable_tnc:
+            tnc = torch.zeros_like(tnc)
+        if not self.feature_enable_pseeiip:
+            pseeiip = torch.zeros_like(pseeiip)
+        if not self.feature_enable_cksnap:
+            cksnap = torch.zeros_like(cksnap)
+        if not self.feature_enable_pstnp:
+            pstnp = torch.zeros_like(pstnp)
+        engineered = torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
+        if engineered.shape[-1] != self.engineered_dim:
+            raise ValueError(
+                f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
+                f"expected {self.engineered_dim}"
+            )
+        return engineered
+
+    def _build_engineered_features(self, sequence: str) -> torch.FloatTensor:
+        if not self.use_engineered_features:
+            engineered = self._zero_engineered.clone()
+            if engineered.shape[-1] != self.engineered_dim:
+                raise ValueError(
+                    f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
+                    f"expected {self.engineered_dim}"
+                )
+            return engineered
+        return self._compute_engineered_features(sequence)
+
+    def _augment_sequence(self, sequence: str) -> str:
+        if self.reverse_complement_prob > 0 and random.random() < self.reverse_complement_prob:
+            sequence = reverse_complement(sequence)
+        if self.base_substitution_prob > 0:
+            sequence = random_base_substitution(sequence, self.base_substitution_prob)
+        if self.base_indel_prob > 0:
+            if random.random() < 0.5:
+                sequence = random_base_deletion(sequence, self.base_indel_prob)
+            else:
+                sequence = random_base_insertion(sequence, self.base_indel_prob)
+        return sequence
+
+    def _tokenize_all(self, sequence: str) -> Dict[int, torch.LongTensor]:
+        return {
+            k: vocab.tokenize(sequence, self.max_bp_len)
+            for k, vocab in self.vocabs.items()
+        }
+
+    def _precompute_engineered_features(self) -> None:
+        LOGGER.info("Precomputing engineered features for %d sequences...", len(self.sequences))
+        self._cached_engineered = []
+        for seq in self.sequences:
+            engineered = self._build_engineered_features(seq)
+            self._cached_engineered.append(engineered)
+        LOGGER.info("Engineered features cached.")
+
+    def _precompute_tokens(self) -> None:
+        LOGGER.info("Pre-tokenizing %d sequences for %d k-mers...", len(self.sequences), len(self.vocabs))
+        self._cached_tokens = []
+        for seq in self.sequences:
+            tokens_by_k = self._tokenize_all(seq)
+            self._cached_tokens.append(tokens_by_k)
+        LOGGER.info("Tokens cached.")
+
+    def __getitem__(self, idx: int):
+        sequence = self.sequences[idx]
+        has_augmentation = (
+            self.reverse_complement_prob > 0
+            or self.base_substitution_prob > 0
+            or self.base_indel_prob > 0
+        )
+
+        if has_augmentation:
+            sequence = self._augment_sequence(sequence)
+            tokens_by_k = self._tokenize_all(sequence)
+            engineered = self._build_engineered_features(sequence)
+        else:
+            if self._cached_tokens is not None:
+                tokens_by_k = self._cached_tokens[idx]
+            else:
+                tokens_by_k = self._tokenize_all(sequence)
+
+            if self._cached_engineered is not None:
+                engineered = self._cached_engineered[idx]
+            else:
+                engineered = self._build_engineered_features(sequence)
+
+        label = torch.tensor(float(self.labels[idx]), dtype=torch.float32)
+        return tokens_by_k, engineered, label
+
+
+def make_weighted_sampler(
+    labels: List[float],
+    imbalance_threshold: float = 0.2,
+) -> Optional[WeightedRandomSampler]:
+    """Create a weighted sampler when class imbalance is large."""
+    total = len(labels)
+    if total == 0:
+        return None
+    pos = sum(1 for label in labels if label >= 0.5)
+    neg = total - pos
+    if pos == 0 or neg == 0:
+        return None
+    pos_fraction = pos / total
+    if abs(pos_fraction - 0.5) <= imbalance_threshold:
+        return None
+    weights = torch.zeros(total, dtype=torch.double)
+    neg_weight = total / (2.0 * neg)
+    pos_weight = total / (2.0 * pos)
+    for idx, label in enumerate(labels):
+        weights[idx] = pos_weight if label >= 0.5 else neg_weight
+    LOGGER.info(
+        "Using WeightedRandomSampler (pos_frac=%.3f, threshold=%.2f)",
+        pos_fraction,
+        imbalance_threshold,
+    )
+    return WeightedRandomSampler(weights, num_samples=total, replacement=True)
+
+
+def combine_multiscale_losses(
+    ensemble_loss: torch.Tensor,
+    individual_losses: List[torch.Tensor],
+    individual_loss_weight: float,
+) -> torch.Tensor:
+    """Combine ensemble and per-model losses for co-training."""
+    if individual_loss_weight < 0:
+        raise ValueError("individual_loss_weight must be >= 0")
+    if not individual_losses:
+        return ensemble_loss
+    return ensemble_loss + individual_loss_weight * torch.stack(individual_losses).sum()
+
+
+def _normalize_kmers(kmers: List[int]) -> List[int]:
+    normalized: List[int] = []
+    seen = set()
+    for kmer in kmers:
+        kmer_int = int(kmer)
+        if kmer_int not in seen:
+            normalized.append(kmer_int)
+            seen.add(kmer_int)
+    if not normalized:
+        raise ValueError("multi_scale_kmers must contain at least one k-mer size")
+    return normalized
+
+
+def _resolve_ensemble_weights(cfg_run: dict, kmers: List[int]) -> Optional[List[float]]:
+    raw = cfg_run.get("ensemble_weights")
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        weights: List[float] = []
+        for kmer in kmers:
+            value = raw.get(kmer)
+            if value is None:
+                value = raw.get(str(kmer))
+            if value is None:
+                raise ValueError(f"ensemble_weights missing entry for k={kmer}")
+            weights.append(float(value))
+        return weights
+    if isinstance(raw, (list, tuple)):
+        if len(raw) != len(kmers):
+            raise ValueError("ensemble_weights length must match multi_scale_kmers")
+        return [float(value) for value in raw]
+    raise ValueError("ensemble_weights must be a dict or list when provided")
+
+
+def _build_loader_kwargs(cfg_run: dict, device: torch.device) -> Dict[str, Any]:
+    num_workers = int(cfg_run.get("num_workers", 0))
+    persistent_workers = bool(cfg_run.get("persistent_workers", False)) and num_workers > 0
+    prefetch_factor_raw = cfg_run.get("prefetch_factor", None)
+    prefetch_factor = int(prefetch_factor_raw) if prefetch_factor_raw is not None and num_workers > 0 else None
+    pin_memory = bool(cfg_run.get("pin_memory", False)) and device.type == "cuda"
+
+    if num_workers > 0:
+        LOGGER.info(
+            "DataLoader config: num_workers=%d, persistent_workers=%s, prefetch_factor=%s, pin_memory=%s",
+            num_workers,
+            persistent_workers,
+            prefetch_factor,
+            pin_memory,
+        )
+
+    loader_kwargs: Dict[str, Any] = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if persistent_workers:
+        loader_kwargs["persistent_workers"] = True
+    if prefetch_factor is not None:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+    return loader_kwargs
+
+
+def _build_multiscale_vocabs(
+    cfg_run: dict,
+    kmers: List[int],
+    sequences: List[str],
+    script_dir: Path,
+) -> Dict[int, KmerVocabulary]:
+    vocab_cache_dir = Path(cfg_run.get("vocab_cache_dir", "../artifacts/vocabs"))
+    if not vocab_cache_dir.is_absolute():
+        vocab_cache_dir = (script_dir / vocab_cache_dir).resolve()
+    vocab_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    mlm_vocab_path = cfg_run.get("mlm_vocab_path")
+    mlm_kmer = int(cfg_run.get("mlm_kmer", 0))
+    mlm_vocab_resolved: Optional[Path] = None
+    if mlm_vocab_path:
+        candidate = Path(mlm_vocab_path)
+        if not candidate.is_absolute():
+            candidate = (script_dir / candidate).resolve()
+        if candidate.exists():
+            mlm_vocab_resolved = candidate
+        else:
+            LOGGER.warning("mlm_vocab_path not found: %s", candidate)
+
+    vocabs: Dict[int, KmerVocabulary] = {}
+    for kmer in kmers:
+        if mlm_vocab_resolved is not None and mlm_kmer == kmer:
+            vocab = KmerVocabulary.load(mlm_vocab_resolved)
+            if vocab.k != kmer:
+                raise ValueError(
+                    f"MLM vocab k={vocab.k} does not match requested k={kmer}"
+                )
+            cache_path = vocab_cache_dir / f"k{kmer}_vocab.json"
+            try:
+                vocab.save(cache_path)
+            except Exception:
+                pass
+            LOGGER.info(
+                "Loaded MLM vocab for k=%d from %s (vocab_size=%d)",
+                kmer,
+                mlm_vocab_resolved,
+                len(vocab.itos),
+            )
+        else:
+            cache_path = vocab_cache_dir / f"k{kmer}_vocab.json"
+            if cache_path.exists():
+                vocab = KmerVocabulary.load(cache_path)
+                if vocab.k != kmer:
+                    raise ValueError(
+                        f"Vocabulary at {cache_path} was built for k={vocab.k}, expected {kmer}"
+                    )
+            else:
+                vocab = KmerVocabulary.build_from_sequences(sequences, kmer)
+                vocab.save(cache_path)
+                LOGGER.info("Built k=%d vocabulary with %d entries", kmer, len(vocab.itos))
+        vocabs[kmer] = vocab
+    return vocabs
+
+
+def _build_multiscale_dataloaders(
+    cfg_run: dict,
+    kmers: List[int],
+    device: torch.device,
+    script_dir: Path,
+) -> Tuple[DataLoader, DataLoader, Dict[int, KmerVocabulary]]:
+    base_cfg = dict(cfg_run)
+    base_cfg["kmer"] = kmers[0]
+    # Avoid MLM vocab guardrails here; multi-scale handles MLM loading per k-mer.
+    base_cfg["stage1_load_mlm_weights"] = False
+    base_dataloaders = build_dataloaders(base_cfg)
+    train_base = base_dataloaders["stage1"]["train"].dataset
+    val_base = base_dataloaders["stage1"]["val"].dataset
+
+    sequences_train = getattr(train_base, "sequences", None)
+    labels_train = getattr(train_base, "labels", None)
+    sequences_val = getattr(val_base, "sequences", None)
+    labels_val = getattr(val_base, "labels", None)
+
+    if sequences_train is None or labels_train is None:
+        raise ValueError("Stage1 train dataset missing sequences/labels")
+    if sequences_val is None or labels_val is None:
+        raise ValueError("Stage1 val dataset missing sequences/labels")
+
+    vocabs = _build_multiscale_vocabs(cfg_run, kmers, sequences_train, script_dir)
+
+    max_bp_len = int(cfg_run.get("max_bp_len", 81))
+    stage1_use_engineered = bool(cfg_run.get("stage1_use_engineered_features", True))
+    stage1_feature_enable_tnc = bool(cfg_run.get("stage1_feature_enable_tnc", True))
+    stage1_feature_enable_pseeiip = bool(cfg_run.get("stage1_feature_enable_pseeiip", True))
+    stage1_feature_enable_cksnap = bool(cfg_run.get("stage1_feature_enable_cksnap", True))
+    stage1_feature_enable_pstnp = bool(cfg_run.get("stage1_feature_enable_pstnp", True))
+    engineered_dim = int(cfg_run.get("engineered_dim", 288))
+    stage1_rc_prob = float(cfg_run.get("stage1_reverse_complement_prob", 0.5))
+    base_sub_prob = float(cfg_run.get("stage1_base_substitution_prob", 0.0))
+    base_indel_prob = float(cfg_run.get("stage1_base_indel_prob", 0.0))
+    cache_engineered_features = bool(cfg_run.get("cache_engineered_features", False))
+    cache_tokens = bool(cfg_run.get("cache_tokens", False))
+
+    train_dataset = MultiKmerStage1Dataset(
+        sequences_train,
+        labels_train,
+        max_bp_len,
+        vocabs=vocabs,
+        use_engineered_features=stage1_use_engineered,
+        feature_enable_tnc=stage1_feature_enable_tnc,
+        feature_enable_pseeiip=stage1_feature_enable_pseeiip,
+        feature_enable_cksnap=stage1_feature_enable_cksnap,
+        feature_enable_pstnp=stage1_feature_enable_pstnp,
+        engineered_dim=engineered_dim,
+        reverse_complement_prob=stage1_rc_prob,
+        base_substitution_prob=base_sub_prob,
+        base_indel_prob=base_indel_prob,
+        cache_engineered_features=False,
+        cache_tokens=False,
+    )
+
+    val_dataset = MultiKmerStage1Dataset(
+        sequences_val,
+        labels_val,
+        max_bp_len,
+        vocabs=vocabs,
+        use_engineered_features=stage1_use_engineered,
+        feature_enable_tnc=stage1_feature_enable_tnc,
+        feature_enable_pseeiip=stage1_feature_enable_pseeiip,
+        feature_enable_cksnap=stage1_feature_enable_cksnap,
+        feature_enable_pstnp=stage1_feature_enable_pstnp,
+        engineered_dim=engineered_dim,
+        reverse_complement_prob=0.0,
+        base_substitution_prob=0.0,
+        base_indel_prob=0.0,
+        cache_engineered_features=cache_engineered_features,
+        cache_tokens=cache_tokens,
+    )
+
+    batch_size = int(cfg_run.get("batch_size", 64))
+    loader_kwargs = _build_loader_kwargs(cfg_run, device)
+    sampler = make_weighted_sampler(train_dataset.labels)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=sampler is None,
+        sampler=sampler,
+        **loader_kwargs,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        **loader_kwargs,
+    )
+
+    return train_loader, val_loader, vocabs
+
+
+def _build_stage1_model_for_kmer(
+    cfg_run: dict,
+    vocab: KmerVocabulary,
+    device: torch.device,
+) -> GeneWhispererStage1:
+    embedding_dim = int(cfg_run.get("embedding_dim", 192))
+    transformer_layers = int(cfg_run.get("transformer_layers", 6))
+    transformer_heads = int(cfg_run.get("transformer_heads", 8))
+    transformer_ff_dim = int(cfg_run.get("transformer_ff_dim", 384))
+    transformer_dropout = float(cfg_run.get("transformer_dropout", 0.15))
+
+    use_attention_pool = bool(cfg_run.get("use_attention_pool", True))
+    use_engineered_features = bool(cfg_run.get("stage1_use_engineered_features", True))
+    engineered_dim = int(cfg_run.get("engineered_dim", 288))
+
+    use_tcn = bool(cfg_run.get("use_tcn", True))
+    tcn_hidden = int(cfg_run.get("tcn_hidden", 256))
+    tcn_levels = int(cfg_run.get("tcn_levels", 4))
+    tcn_kernel = int(cfg_run.get("tcn_kernel", 3))
+    multiscale_channels = int(cfg_run.get("multiscale_channels", 64))
+    multiscale_kernels_cfg = cfg_run.get("multiscale_kernels", [3, 5, 7, 9, 15])
+    multiscale_kernels = tuple(multiscale_kernels_cfg)
+    lstm_hidden = int(cfg_run.get("lstm_hidden", 192))
+
+    post_cnn_transformer_layers = int(cfg_run.get("post_cnn_transformer_layers", 3))
+    engineered_mlp_hidden = int(cfg_run.get("engineered_mlp_hidden", 256))
+    engineered_mlp_output = int(cfg_run.get("engineered_mlp_output", 128))
+    fusion_hidden = int(cfg_run.get("fusion_hidden", 256))
+    stage1_drop_path_rate = get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)
+
+    model = GeneWhispererStage1(
+        vocab_size=len(vocab.itos),
+        kmer=vocab.k,
+        embedding_dim=embedding_dim,
+        num_layers=transformer_layers,
+        num_heads=transformer_heads,
+        ff_dim=transformer_ff_dim,
+        dropout=transformer_dropout,
+        pad_token_id=vocab.pad_id,
+        engineered_dim=engineered_dim,
+        use_engineered_features=use_engineered_features,
+        use_attention_pool=use_attention_pool,
+        use_tcn=use_tcn,
+        tcn_hidden=tcn_hidden,
+        tcn_levels=tcn_levels,
+        tcn_kernel=tcn_kernel,
+        multiscale_channels=multiscale_channels,
+        multiscale_kernels=multiscale_kernels,
+        lstm_hidden=lstm_hidden,
+        post_cnn_transformer_layers=post_cnn_transformer_layers,
+        engineered_mlp_hidden=engineered_mlp_hidden,
+        engineered_mlp_output=engineered_mlp_output,
+        fusion_hidden=fusion_hidden,
+        drop_path_rate=stage1_drop_path_rate,
+        max_seq_len=int(cfg_run.get("max_bp_len", 81)) - vocab.k + 1,
+    ).to(device)
+
+    return model
+
+
+def _maybe_load_mlm_weights(
+    model: GeneWhispererStage1,
+    cfg_run: dict,
+    *,
+    kmer: int,
+    script_dir: Path,
+) -> bool:
+    load_mlm_weights = bool(cfg_run.get("stage1_load_mlm_weights", False))
+    transfer_mode = str(cfg_run.get("stage1_mlm_transfer_mode", "embed_only"))
+    if transfer_mode not in {"none", "embed_only", "embed_plus_adapter"}:
+        raise ValueError(f"Invalid stage1_mlm_transfer_mode: {transfer_mode}")
+
+    if not load_mlm_weights or transfer_mode == "none":
+        return False
+
+    mlm_kmer = int(cfg_run.get("mlm_kmer", kmer))
+    if kmer != mlm_kmer:
+        LOGGER.info(
+            "Skipping MLM load for k=%d (mlm_kmer=%d)",
+            kmer,
+            mlm_kmer,
+        )
+        return False
+
+    mlm_checkpoint = cfg_run.get("mlm_encoder_path") or cfg_run.get("mlm_encoder_checkpoint")
+    if not mlm_checkpoint:
+        LOGGER.warning("stage1_load_mlm_weights=true but no MLM checkpoint configured")
+        return False
+
+    checkpoint_path = Path(mlm_checkpoint)
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = (script_dir / checkpoint_path).resolve()
+    if not checkpoint_path.exists():
+        LOGGER.warning("MLM checkpoint not found at %s", checkpoint_path)
+        return False
+
+    LOGGER.info(
+        "Loading MLM encoder weights for k=%d from %s (transfer_mode=%s)",
+        kmer,
+        checkpoint_path,
+        transfer_mode,
+    )
+    model.load_pretrained_weights(checkpoint_path, strict=False, transfer_mode=transfer_mode)
+
+    freeze_layers = int(cfg_run.get("stage1_freeze_layers", 0))
+    if freeze_layers > 0:
+        LOGGER.info("Freezing bottom %d encoder layers for k=%d", freeze_layers, kmer)
+        model.encoder.freeze_bottom_layers(freeze_layers)
+
+    return True
+
+
+def _resolve_stage1_ckpt_paths(
+    cfg_run: dict,
+    kmers: List[int],
+    script_dir: Path,
+) -> Dict[int, Path]:
+    ckpt_by_k = cfg_run.get("stage1_ckpt_by_k")
+    resolved: Dict[int, Path] = {}
+    for kmer in kmers:
+        candidate = None
+        if isinstance(ckpt_by_k, dict):
+            candidate = ckpt_by_k.get(kmer) or ckpt_by_k.get(str(kmer))
+        if not candidate:
+            candidate = f"../artifacts/checkpoints/stage1_k{kmer}.pt"
+        path = Path(candidate)
+        if not path.is_absolute():
+            path = (script_dir / path).resolve()
+        resolved[kmer] = path
+    return resolved
+
+
+def _current_ensemble_weights(
+    ensemble: MultiScaleEnsemble,
+    kmers: List[int],
+) -> List[float]:
+    if ensemble.learnable_weights:
+        weights = torch.softmax(ensemble.weights.detach().cpu(), dim=0)
+        return [float(value) for value in weights.tolist()]
+    if ensemble.weights is None:
+        return [1.0 / len(kmers)] * len(kmers)
+    return [float(value) for value in ensemble.weights.detach().cpu().tolist()]
+
+
+def save_multiscale_checkpoints(
+    checkpoint_paths: Dict[int, Path],
+    models: Dict[int, nn.Module],
+    optimizer: torch.optim.Optimizer,
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
+    epoch: int,
+    metrics: Dict[str, float],
+) -> None:
+    for kmer, model in models.items():
+        path = checkpoint_paths[kmer]
+        save_checkpoint(path, model, optimizer, scheduler, epoch, metrics)
+
+
+def save_ensemble_weights(
+    path: Path,
+    ensemble: MultiScaleEnsemble,
+    kmers: List[int],
+) -> None:
+    payload = {
+        "kmers": kmers,
+        "weights": _current_ensemble_weights(ensemble, kmers),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
+def run_multiscale_epoch(
+    loader: DataLoader,
+    models: Dict[int, nn.Module],
+    ensemble: MultiScaleEnsemble,
+    ordered_kmers: List[int],
+    criterion: nn.Module,
+    device: torch.device,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+    desc: str = "Train",
+    grad_accum_steps: int = 1,
+    max_optimizer_steps: Optional[int] = None,
+    grad_clip_norm: float = 1.0,
+    amp_ctx: Optional[AMPContext] = None,
+    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    param_norm_warn: float = 150.0,
+    param_norm_cap: float = 200.0,
+    individual_loss_weight: float = 0.2,
+) -> Dict[str, float]:
+    """Run one epoch of multi-scale co-training."""
+    is_train = optimizer is not None
+    ensemble.train(is_train)
+
+    use_autocast = amp_ctx is not None and amp_ctx.enabled
+    use_cuda_scaler = scaler is not None and device.type == "cuda"
+    force_fp32_loss = amp_ctx.force_fp32_loss if amp_ctx else True
+
+    if is_train and max_optimizer_steps is not None and max_optimizer_steps <= 0:
+        return {
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "mcc": 0.0,
+            "roc_auc": 0.5,
+            "specificity": 0.0,
+            "loss": 0.0,
+            "ensemble_loss": 0.0,
+            "individual_loss": 0.0,
+            "optimizer_steps": 0,
+        }
+
+    total_loss = 0.0
+    total_ensemble_loss = 0.0
+    total_individual_loss = 0.0
+    total_samples = 0
+    all_probs: List[torch.Tensor] = []
+    all_labels: List[torch.Tensor] = []
+
+    optimizer_step_count = 0
+    prev_param_norm: Optional[float] = None
+    hit_max_steps = False
+
+    iterable = tqdm(loader, desc=desc, leave=False)
+    for batch_idx, (tokens_by_k, engineered, labels) in enumerate(iterable):
+        engineered = engineered.to(device)
+        labels = labels.to(device).unsqueeze(1)
+
+        tokens_for_k = {}
+        for kmer in ordered_kmers:
+            tokens = tokens_by_k.get(kmer)
+            if tokens is None:
+                raise KeyError(f"Missing tokens for k={kmer} in multiscale batch")
+            tokens_for_k[kmer] = tokens.to(device)
+
+        with torch.set_grad_enabled(is_train):
+            if use_autocast and amp_ctx is not None:
+                with amp_ctx.autocast():
+                    logits_list = [
+                        models[kmer](tokens_for_k[kmer], engineered)
+                        for kmer in ordered_kmers
+                    ]
+            else:
+                logits_list = [
+                    models[kmer](tokens_for_k[kmer], engineered)
+                    for kmer in ordered_kmers
+                ]
+
+            if force_fp32_loss:
+                logits_for_loss = [logits.float() for logits in logits_list]
+            else:
+                logits_for_loss = logits_list
+
+            individual_losses = [
+                criterion(logits, labels) for logits in logits_for_loss
+            ]
+
+            # Manual soft voting to avoid a second forward pass through the ensemble.
+            stacked = torch.stack(logits_for_loss, dim=0)
+            probs = torch.sigmoid(stacked)
+            if ensemble.learnable_weights:
+                weights = torch.softmax(ensemble.weights, dim=0)
+                weights = weights.to(device=probs.device, dtype=probs.dtype)
+                probs = (weights.view(-1, 1, 1) * probs).sum(dim=0)
+            elif ensemble.weights is None:
+                probs = probs.mean(dim=0)
+            else:
+                weights = ensemble.weights.to(device=probs.device, dtype=probs.dtype)
+                probs = (weights.view(-1, 1, 1) * probs).sum(dim=0)
+
+            eps = torch.finfo(probs.dtype).eps
+            ensemble_logits = torch.logit(probs.clamp(min=eps, max=1 - eps))
+            ensemble_loss = criterion(ensemble_logits, labels)
+            combined_loss = combine_multiscale_losses(
+                ensemble_loss, individual_losses, individual_loss_weight
+            )
+
+            if is_train:
+                loss_scaled = combined_loss / grad_accum_steps
+                if use_cuda_scaler:
+                    scaler.scale(loss_scaled).backward()
+                else:
+                    loss_scaled.backward()
+
+                if (batch_idx + 1) % grad_accum_steps == 0:
+                    if grad_clip_norm > 0:
+                        if use_cuda_scaler:
+                            scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(ensemble.parameters(), grad_clip_norm)
+
+                    if use_cuda_scaler:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+
+                    total_norm, scale = cap_model_param_norm_(ensemble, max_norm=param_norm_cap)
+                    if scale < 1.0:
+                        LOGGER.warning(
+                            "Step %d: param_norm=%.2f exceeded cap=%.2f; scaled params by %.6f",
+                            optimizer_step_count,
+                            total_norm,
+                            param_norm_cap,
+                            scale,
+                        )
+                        prev_param_norm = param_norm_cap
+                    else:
+                        if (
+                            param_norm_warn > 0
+                            and (prev_param_norm is None or prev_param_norm <= param_norm_warn)
+                            and total_norm > param_norm_warn
+                        ):
+                            LOGGER.warning(
+                                "Step %d: param_norm=%.2f exceeded warn=%.2f",
+                                optimizer_step_count,
+                                total_norm,
+                                param_norm_warn,
+                            )
+                        prev_param_norm = total_norm
+
+                    optimizer.zero_grad()
+
+                    if scheduler is not None:
+                        scheduler.step()
+
+                    optimizer_step_count += 1
+                    if max_optimizer_steps is not None and optimizer_step_count >= max_optimizer_steps:
+                        hit_max_steps = True
+
+        batch_size = labels.size(0)
+        total_loss += combined_loss.item() * batch_size
+        total_ensemble_loss += ensemble_loss.item() * batch_size
+        total_individual_loss += sum(loss.item() for loss in individual_losses) * batch_size
+        total_samples += batch_size
+
+        all_probs.append(probs.detach().float().cpu())
+        all_labels.append(labels.detach().cpu())
+
+        iterable.set_postfix(loss=combined_loss.item())
+
+        if hit_max_steps:
+            LOGGER.info("%s: reached max optimizer steps (%d)", desc, max_optimizer_steps)
+            break
+
+    avg_loss = total_loss / total_samples if total_samples else 0.0
+    avg_ensemble_loss = total_ensemble_loss / total_samples if total_samples else 0.0
+    avg_individual_loss = total_individual_loss / total_samples if total_samples else 0.0
+
+    if total_samples == 0 or not all_probs:
+        return {
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "mcc": 0.0,
+            "roc_auc": 0.5,
+            "specificity": 0.0,
+            "loss": float(avg_loss),
+            "ensemble_loss": float(avg_ensemble_loss),
+            "individual_loss": float(avg_individual_loss),
+            "optimizer_steps": int(optimizer_step_count),
+        }
+
+    probs_tensor = torch.cat(all_probs, dim=0)
+    labels_tensor = torch.cat(all_labels, dim=0)
+    metrics = calculate_metrics(probs_tensor, labels_tensor)
+    metrics["loss"] = float(avg_loss)
+    metrics["ensemble_loss"] = float(avg_ensemble_loss)
+    metrics["individual_loss"] = float(avg_individual_loss)
+    metrics["optimizer_steps"] = int(optimizer_step_count)
+
+    return metrics
+
+
+def train_multi_scale_ensemble(
+    cfg_run: dict,
+    device: torch.device,
+    amp_ctx: AMPContext,
+    scaler: Optional[torch.cuda.amp.GradScaler],
+    run_dir: Path,
+    resolved_config_path: Path,
+    resolved_config: Dict[str, Any],
+    *,
+    epochs: int,
+    ablation_max_steps: Optional[int],
+    seed: int,
+    config_id: str,
+    start_time: float,
+) -> Dict[str, Any]:
+    """Co-train all k-mer models with a soft voting ensemble loss."""
+    kmers = _normalize_kmers(cfg_run.get("multi_scale_kmers", [3, 4, 5, 6]))
+    ensemble_method = str(cfg_run.get("ensemble_method", "soft_voting")).lower()
+    if ensemble_method not in {"soft_voting", "soft-voting"}:
+        raise ValueError(f"Unsupported ensemble_method: {ensemble_method}")
+
+    if bool(cfg_run.get("overfit_debug", False)):
+        LOGGER.warning("overfit_debug ignored in multi-scale mode")
+    if bool(cfg_run.get("profile", False)):
+        LOGGER.warning("profile ignored in multi-scale mode")
+    if bool(cfg_run.get("distill", {}).get("enabled", False)):
+        LOGGER.warning("distillation ignored in multi-scale mode")
+
+    stage1_use_mixup = get_with_fallback(cfg_run, "stage1_use_mixup", "use_mixup", True)
+    if stage1_use_mixup:
+        LOGGER.warning("mixup disabled in multi-scale mode")
+    stage1_use_swa = get_with_fallback(cfg_run, "stage1_use_swa", "use_swa", True)
+    if stage1_use_swa:
+        LOGGER.warning("SWA disabled in multi-scale mode")
+
+    script_dir = Path(__file__).resolve().parent
+    train_loader, val_loader, vocabs = _build_multiscale_dataloaders(
+        cfg_run, kmers, device, script_dir
+    )
+
+    models: Dict[int, GeneWhispererStage1] = {}
+    for kmer in kmers:
+        model = _build_stage1_model_for_kmer(cfg_run, vocabs[kmer], device)
+        _maybe_load_mlm_weights(model, cfg_run, kmer=kmer, script_dir=script_dir)
+        models[kmer] = model
+
+    total_params = sum(p.numel() for model in models.values() for p in model.parameters())
+    trainable_params = sum(
+        p.numel() for model in models.values() for p in model.parameters() if p.requires_grad
+    )
+    LOGGER.info(
+        "Multi-scale models: %.2fM total params, %.2fM trainable",
+        total_params / 1e6,
+        trainable_params / 1e6,
+    )
+
+    resolved_config["system_info"]["device"] = str(device)
+    resolved_config["system_info"]["stage1_multiscale_total_params"] = total_params
+    resolved_config["system_info"]["stage1_multiscale_trainable_params"] = trainable_params
+    resolved_config["multi_scale_kmers"] = kmers
+    resolved_config["ensemble_method"] = ensemble_method
+    resolved_config["ensemble_learn_weights"] = bool(cfg_run.get("ensemble_learn_weights", False))
+    resolved_config["ensemble_weights"] = cfg_run.get("ensemble_weights")
+    with resolved_config_path.open("w", encoding="utf-8") as handle:
+        json.dump(resolved_config, handle, indent=2)
+
+    ensemble_weights = _resolve_ensemble_weights(cfg_run, kmers)
+    ensemble = MultiScaleEnsemble(
+        [models[kmer] for kmer in kmers],
+        weights=ensemble_weights,
+        learnable_weights=bool(cfg_run.get("ensemble_learn_weights", False)),
+    ).to(device)
+
+    lr = float(cfg_run.get("lr", 2e-4))
+    weight_decay = float(cfg_run.get("weight_decay", 0.02))
+    optimizer_foreach = bool(cfg_run.get("optimizer_foreach", True))
+    optimizer = torch.optim.AdamW(
+        ensemble.parameters(),
+        lr=lr,
+        weight_decay=weight_decay,
+        betas=(0.9, 0.999),
+        foreach=optimizer_foreach,
+    )
+
+    steps_per_epoch = len(train_loader)
+    total_steps = epochs * steps_per_epoch
+    warmup_ratio = float(cfg_run.get("warmup_ratio", 0.15))
+    warmup_steps = int(warmup_ratio * total_steps)
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps,
+        min_lr_ratio=0.02,
+    )
+
+    stage1_label_smoothing = get_with_fallback(cfg_run, "stage1_label_smoothing", "label_smoothing", 0.05)
+    stage1_use_focal_loss = bool(cfg_run.get("stage1_use_focal_loss", True))
+    focal_alpha = float(cfg_run.get("stage1_focal_alpha", 0.5))
+    focal_gamma = float(cfg_run.get("stage1_focal_gamma", 2.0))
+
+    if stage1_use_focal_loss:
+        criterion = FocalLossWithSmoothing(
+            alpha=focal_alpha,
+            gamma=focal_gamma,
+            smoothing=stage1_label_smoothing,
+        )
+    else:
+        criterion = LabelSmoothingBCE(smoothing=stage1_label_smoothing)
+
+    grad_accum_steps = int(cfg_run.get("grad_accum_steps", 2))
+    grad_clip_norm = float(cfg_run.get("grad_clip_norm", 1.0))
+    param_norm_warn = float(cfg_run.get("param_norm_warn", 150.0))
+    param_norm_cap = float(cfg_run.get("param_norm_cap", 200.0))
+    patience = int(cfg_run.get("early_stopping_patience", 15))
+    individual_loss_weight = float(cfg_run.get("ensemble_individual_loss_weight", 0.2))
+
+    class_balance = compute_class_balance(train_loader)
+    LOGGER.info(
+        "Class balance: %.2f%% positive (%d/%d)",
+        class_balance["positive_ratio"] * 100.0,
+        class_balance["positive"],
+        class_balance["total"],
+    )
+
+    checkpoint_paths = _resolve_stage1_ckpt_paths(cfg_run, kmers, script_dir)
+    ensemble_weights_path = run_dir / "stage1_ensemble_weights.json"
+
+    best_val_mcc = -float("inf")
+    best_val_acc = 0.0
+    best_epoch = 0
+    best_train_metrics = None
+    best_val_metrics = None
+    patience_counter = 0
+    global_optimizer_steps = 0
+
+    for epoch in range(1, epochs + 1):
+        current_lr = optimizer.param_groups[0]["lr"]
+        LOGGER.info("Epoch %d/%d (LR: %.2e)", epoch, epochs, current_lr)
+
+        remaining_steps = None if ablation_max_steps is None else max(ablation_max_steps - global_optimizer_steps, 0)
+
+        train_metrics = run_multiscale_epoch(
+            loader=train_loader,
+            models=models,
+            ensemble=ensemble,
+            ordered_kmers=kmers,
+            criterion=criterion,
+            device=device,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            desc="Train-Multi",
+            grad_accum_steps=grad_accum_steps,
+            max_optimizer_steps=remaining_steps,
+            grad_clip_norm=grad_clip_norm,
+            amp_ctx=amp_ctx,
+            scaler=scaler,
+            param_norm_warn=param_norm_warn,
+            param_norm_cap=param_norm_cap,
+            individual_loss_weight=individual_loss_weight,
+        )
+        global_optimizer_steps += int(train_metrics.get("optimizer_steps", 0))
+        reached_max_steps = ablation_max_steps is not None and global_optimizer_steps >= ablation_max_steps
+
+        val_metrics = run_multiscale_epoch(
+            loader=val_loader,
+            models=models,
+            ensemble=ensemble,
+            ordered_kmers=kmers,
+            criterion=criterion,
+            device=device,
+            optimizer=None,
+            desc="Val-Multi",
+            amp_ctx=amp_ctx,
+            individual_loss_weight=individual_loss_weight,
+        )
+
+        LOGGER.info(
+            "Train - Loss: %.4f (ensemble=%.4f, indiv=%.4f) | Acc: %.4f | F1: %.4f | MCC: %.4f",
+            train_metrics["loss"],
+            train_metrics.get("ensemble_loss", 0.0),
+            train_metrics.get("individual_loss", 0.0),
+            train_metrics["accuracy"],
+            train_metrics["f1"],
+            train_metrics["mcc"],
+        )
+        LOGGER.info(
+            "Val   - Loss: %.4f | Acc@0.5: %.4f | Acc@best: %.4f (thr=%.2f) | MCC@best: %.4f",
+            val_metrics["loss"],
+            val_metrics["accuracy"],
+            val_metrics.get("acc_best", val_metrics["accuracy"]),
+            val_metrics.get("best_threshold", 0.5),
+            val_metrics.get("mcc_best", val_metrics["mcc"]),
+        )
+
+        eval_mcc_best = val_metrics.get("mcc_best", val_metrics["mcc"])
+        eval_acc_best = val_metrics.get("acc_best", val_metrics["accuracy"])
+        improved = False
+        if eval_mcc_best > best_val_mcc + 1e-4:
+            improved = True
+        elif abs(eval_mcc_best - best_val_mcc) < 1e-4 and eval_acc_best > best_val_acc:
+            improved = True
+
+        if improved:
+            patience_counter = 0
+            best_val_mcc = eval_mcc_best
+            best_val_acc = eval_acc_best
+            best_epoch = epoch
+            best_train_metrics = train_metrics
+            best_val_metrics = val_metrics
+
+            save_multiscale_checkpoints(
+                checkpoint_paths=checkpoint_paths,
+                models=models,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                epoch=epoch,
+                metrics=val_metrics,
+            )
+            save_ensemble_weights(ensemble_weights_path, ensemble, kmers)
+            LOGGER.info(
+                "New best! MCC@best: %.4f, Acc@best: %.4f (%.2f%%)",
+                best_val_mcc,
+                best_val_acc,
+                best_val_acc * 100,
+            )
+        else:
+            patience_counter += 1
+            LOGGER.info("No improvement. Patience %d/%d", patience_counter, patience)
+            if patience_counter >= patience:
+                LOGGER.info("Early stopping triggered at epoch %d", epoch)
+                break
+
+        if reached_max_steps:
+            LOGGER.info(
+                "Reached ablation_max_steps_stage1=%d (optimizer steps); stopping after validation",
+                ablation_max_steps,
+            )
+            break
+
+    if best_val_metrics is None:
+        best_train_metrics = train_metrics
+        best_val_metrics = val_metrics
+        best_epoch = epochs
+
+    report = {
+        "config": config_id,
+        "best_epoch": best_epoch,
+        "train_metrics": best_train_metrics,
+        "val_metrics": best_val_metrics,
+        "class_balance": class_balance,
+        "device": str(device),
+        "seed": seed,
+        "multi_scale": {
+            "kmers": kmers,
+            "ensemble_method": ensemble_method,
+            "ensemble_learn_weights": bool(cfg_run.get("ensemble_learn_weights", False)),
+            "ensemble_weights": _current_ensemble_weights(ensemble, kmers),
+            "individual_loss_weight": individual_loss_weight,
+        },
+        "model_params": {
+            "total": total_params,
+            "trainable": trainable_params,
+        },
+    }
+
+    report_path = run_dir / "stage1_ensemble_report.json"
+    with report_path.open("w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2)
+    LOGGER.info("Saved multi-scale training report to %s", report_path)
+
+    stage1_seconds = float(time.perf_counter() - start_time)
+    best_val_auc = float(best_val_metrics.get("roc_auc", 0.5)) if best_val_metrics else 0.5
+
+    LOGGER.info("=" * 60)
+    LOGGER.info("MULTI-SCALE TRAINING COMPLETE")
+    LOGGER.info("Best Epoch: %d", best_epoch)
+    LOGGER.info("Best Val Acc@best: %.4f (%.2f%%)", best_val_acc, best_val_acc * 100)
+    LOGGER.info("Best Val MCC@best: %.4f", best_val_mcc)
+    LOGGER.info("Ensemble weights saved to %s", ensemble_weights_path)
+    LOGGER.info("=" * 60)
+
+    return {
+        "stage1_acc": float(best_val_acc),
+        "stage1_auc": best_val_auc,
+        "stage1_mcc": float(best_val_mcc),
+        "best_val_acc": float(best_val_acc),
+        "best_val_auc": best_val_auc,
+        "best_val_mcc": float(best_val_mcc),
+        "best_epoch": int(best_epoch),
+        "best_ckpt_path": str(ensemble_weights_path),
+        "stage1_seconds": stage1_seconds,
+        "params": int(total_params),
+    }
 
 def get_layer_wise_lr_groups(
     model: nn.Module,
@@ -953,6 +2062,7 @@ def run_epoch(
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
     param_norm_warn: float = 150.0,
     param_norm_cap: float = 200.0,
+    eval_checkpoint_path: Optional[Path] = None,
 ) -> Dict[str, float]:
     """Run one epoch of training or evaluation."""
     is_train = optimizer is not None
@@ -988,6 +2098,11 @@ def run_epoch(
     accumulated_loss = 0.0
     prev_param_norm: Optional[float] = None
     hit_max_steps = False
+
+    logits_min: Optional[float] = None
+    logits_max: Optional[float] = None
+    logits_sum = 0.0
+    logits_count = 0
     
     iterable = tqdm(loader, desc=desc, leave=False)
     for batch_idx, (tokens, engineered, labels) in enumerate(iterable):
@@ -1013,26 +2128,25 @@ def run_epoch(
                     if is_train and use_mixup and lam < 1.0:
                         # Use embedding route for mixup
                         core = unwrap_model(model)
-                        probs = core.forward_from_embeds(mixed_emb, mix_padding_mask, engineered)
+                        logits = core.forward_from_embeds(mixed_emb, mix_padding_mask, engineered)
                     else:
-                        probs = model(tokens, engineered)
+                        logits = model(tokens, engineered)
             else:
                 if is_train and use_mixup and lam < 1.0:
                     # Use embedding route for mixup
                     core = unwrap_model(model)
-                    probs = core.forward_from_embeds(mixed_emb, mix_padding_mask, engineered)
+                    logits = core.forward_from_embeds(mixed_emb, mix_padding_mask, engineered)
                 else:
-                    probs = model(tokens, engineered)
+                    logits = model(tokens, engineered)
 
-            # Ensure probs are in fp32 for loss computation if force_fp32_loss is True
+            # Ensure logits are in fp32 for loss computation if force_fp32_loss is True
             if force_fp32_loss:
-                probs = probs.float()
-            probs = probs.clamp(min=1e-6, max=1 - 1e-6)
+                logits = logits.float()
 
             if use_mixup and lam < 1.0:
-                loss = lam * criterion(probs, labels) + (1 - lam) * criterion(probs, labels_b)
+                loss = lam * criterion(logits, labels) + (1 - lam) * criterion(logits, labels_b)
             else:
-                loss = criterion(probs, labels)
+                loss = criterion(logits, labels)
             
             # Backward pass with gradient accumulation
             if is_train:
@@ -1104,8 +2218,17 @@ def run_epoch(
         batch_size = labels.size(0)
         total_loss += loss.item() * batch_size
         total_samples += batch_size
-        all_probs.append(probs.detach().cpu())
+        probs = torch.sigmoid(logits.detach().float())
+        all_probs.append(probs.cpu())
         all_labels.append(labels.detach().cpu())
+
+        logits_float = logits.detach().float()
+        batch_min = float(logits_float.min().item())
+        batch_max = float(logits_float.max().item())
+        logits_min = batch_min if logits_min is None else min(logits_min, batch_min)
+        logits_max = batch_max if logits_max is None else max(logits_max, batch_max)
+        logits_sum += float(logits_float.sum().item())
+        logits_count += logits_float.numel()
         
         iterable.set_postfix(loss=loss.item())
 
@@ -1115,6 +2238,18 @@ def run_epoch(
     
     avg_loss = total_loss / total_samples if total_samples else 0.0
     if total_samples == 0 or not all_probs:
+        if not is_train:
+            checkpoint_display = (
+                str(eval_checkpoint_path)
+                if eval_checkpoint_path is not None
+                else "<in-memory (no checkpoint load)>"
+            )
+            LOGGER.info("what am I evaluating?")
+            LOGGER.info("checkpoint path actually loaded: %s", checkpoint_display)
+            LOGGER.info("number of val samples: %d", int(total_samples))
+            LOGGER.info("label balance (%% positives): n/a")
+            LOGGER.info("prob min/mean/max: n/a")
+            LOGGER.info("logit min/mean/max: n/a")
         return {
             "accuracy": 0.0,
             "precision": 0.0,
@@ -1131,6 +2266,47 @@ def run_epoch(
     metrics = calculate_metrics(probs_tensor, labels_tensor)
     metrics["loss"] = float(avg_loss)
     metrics["optimizer_steps"] = int(optimizer_step_count)
+
+    if not is_train:
+        checkpoint_display = (
+            str(eval_checkpoint_path)
+            if eval_checkpoint_path is not None
+            else "<in-memory (no checkpoint load)>"
+        )
+        labels_flat = labels_tensor.view(-1)
+        total_eval = int(labels_flat.numel())
+        positive_count = int((labels_flat >= 0.5).sum().item())
+        positive_pct = (positive_count / total_eval) * 100 if total_eval else 0.0
+        probs_flat = probs_tensor.view(-1)
+        prob_min = float(probs_flat.min().item())
+        prob_mean = float(probs_flat.mean().item())
+        prob_max = float(probs_flat.max().item())
+
+        LOGGER.info("what am I evaluating?")
+        LOGGER.info("checkpoint path actually loaded: %s", checkpoint_display)
+        LOGGER.info("number of val samples: %d", total_eval)
+        LOGGER.info(
+            "label balance (%% positives): %.2f%% (%d/%d)",
+            positive_pct,
+            positive_count,
+            total_eval,
+        )
+        LOGGER.info(
+            "prob min/mean/max: %.6f/%.6f/%.6f",
+            prob_min,
+            prob_mean,
+            prob_max,
+        )
+        if logits_count > 0 and logits_min is not None and logits_max is not None:
+            logit_mean = logits_sum / logits_count
+            LOGGER.info(
+                "logit min/mean/max: %.6f/%.6f/%.6f",
+                logits_min,
+                logit_mean,
+                logits_max,
+            )
+        else:
+            LOGGER.info("logit min/mean/max: n/a")
     
     return metrics
 
@@ -1247,36 +2423,30 @@ def run_distillation_epoch(
 
         # Forward pass
         with torch.set_grad_enabled(is_train):
-            # Student forward with logits
             if use_autocast and amp_ctx is not None:
                 with amp_ctx.autocast():
-                    student_out = student_model(tokens_student, engineered, return_logits=True)
+                    student_logits = student_model(tokens_student, engineered)
             else:
-                student_out = student_model(tokens_student, engineered, return_logits=True)
-
-            student_probs, student_logits = student_out
+                student_logits = student_model(tokens_student, engineered)
 
             # Teacher forward with logits (no grad needed)
             with torch.no_grad():
                 if use_autocast and amp_ctx is not None:
                     with amp_ctx.autocast():
-                        teacher_out = teacher_model(tokens_teacher, engineered, return_logits=True)
+                        teacher_logits = teacher_model(tokens_teacher, engineered)
                 else:
-                    teacher_out = teacher_model(tokens_teacher, engineered, return_logits=True)
-
-                _, teacher_logits = teacher_out
+                    teacher_logits = teacher_model(tokens_teacher, engineered)
 
             # Ensure fp32 for loss computation
             if force_fp32_loss:
-                student_probs = student_probs.float()
                 student_logits = student_logits.float()
                 teacher_logits = teacher_logits.float()
 
-            student_probs = student_probs.clamp(min=1e-6, max=1 - 1e-6)
+            student_probs = torch.sigmoid(student_logits.detach().float())
 
             # Compute distillation loss
             loss, loss_dict = distill_criterion(
-                student_probs, student_logits, teacher_logits, labels
+                student_logits, teacher_logits, labels
             )
 
             # Backward pass with gradient accumulation
@@ -1329,7 +2499,7 @@ def run_distillation_epoch(
         total_ce_loss += loss_dict["ce_loss"] * batch_size
         total_kl_loss += loss_dict["kl_loss"] * batch_size
         total_samples += batch_size
-        all_probs.append(student_probs.detach().cpu())
+        all_probs.append(student_probs.cpu())
         all_labels.append(labels.detach().cpu())
 
         iterable.set_postfix(
@@ -1441,9 +2611,9 @@ def run_profiling_epoch(
 
             # Measure forward + backward time
             t_fwd_start = time.perf_counter()
-            probs = model(tokens, engineered)
-            probs = probs.float().clamp(min=1e-6, max=1 - 1e-6)
-            loss = criterion(probs, labels)
+            logits = model(tokens, engineered)
+            logits = logits.float()
+            loss = criterion(logits, labels)
             loss_scaled = loss / grad_accum_steps
             loss_scaled.backward()
             accumulated_loss += loss.item()
@@ -1621,9 +2791,8 @@ def run_overfit_debug_stage1(
     
     for step in range(num_steps):
         optimizer.zero_grad()
-        probs = model(tokens, engineered)
-        probs = probs.clamp(min=1e-6, max=1 - 1e-6)
-        loss = criterion(probs, labels)
+        logits = model(tokens, engineered)
+        loss = criterion(logits, labels)
         loss.backward()
         
         # Gradient clipping with norm logging
@@ -1633,6 +2802,7 @@ def run_overfit_debug_stage1(
         optimizer.step()
         
         # Compute accuracy
+        probs = torch.sigmoid(logits.detach())
         preds = (probs >= 0.5).float()
         acc = (preds == labels).float().mean().item()
         
@@ -1880,14 +3050,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     stage1_max_train_samples = ablation_cfg.get("stage1_max_train_samples") if ablation_enabled else None
     stage1_max_val_samples = ablation_cfg.get("stage1_max_val_samples") if ablation_enabled else None
 
-    # Helper to get stage1-specific config with fallback to global value when null
-    def get_with_fallback(stage_key: str, global_key: str, default: Any) -> Any:
-        """Get stage1-specific value, falling back to global if null/missing."""
-        val = cfg_run.get(stage_key)
-        if val is not None:
-            return val
-        return cfg_run.get(global_key, default)
-
     # =========================================================================
     # Log resolved hyperparameters to runs/<timestamp>/resolved_config.json
     # =========================================================================
@@ -1928,13 +3090,13 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "kmer": int(cfg_run.get("kmer", 3)),
         # Engineered features
         "stage1_use_engineered_features": bool(cfg_run.get("stage1_use_engineered_features", True)),
-        "engineered_dim": int(cfg_run.get("engineered_dim", 128)),
+        "engineered_dim": int(cfg_run.get("engineered_dim", 288)),
         "engineered_mlp_hidden": int(cfg_run.get("engineered_mlp_hidden", 256)),
         "engineered_mlp_output": int(cfg_run.get("engineered_mlp_output", 128)),
         # Augmentation (effective Stage 1 values with fallbacks)
         "reverse_complement_prob": float(cfg_run.get("stage1_reverse_complement_prob", 0.5)),
-        "stage1_use_mixup": bool(get_with_fallback("stage1_use_mixup", "use_mixup", True)),
-        "stage1_mixup_alpha": float(get_with_fallback("stage1_mixup_alpha", "mixup_alpha", 0.2)),
+        "stage1_use_mixup": bool(get_with_fallback(cfg_run, "stage1_use_mixup", "use_mixup", True)),
+        "stage1_mixup_alpha": float(get_with_fallback(cfg_run, "stage1_mixup_alpha", "mixup_alpha", 0.2)),
         # TCN
         "use_tcn": bool(cfg_run.get("use_tcn", True)),
         "tcn_hidden": int(cfg_run.get("tcn_hidden", 256)),
@@ -1950,16 +3112,16 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "warmup_ratio": float(cfg_run.get("warmup_ratio", 0.15)),
         "early_stopping_patience": int(cfg_run.get("early_stopping_patience", 35)),
         "layer_lr_decay": float(cfg_run.get("layer_lr_decay", 0.8)),
-        "stage1_drop_path_rate": float(get_with_fallback("stage1_drop_path_rate", "drop_path_rate", 0.1)),
+        "stage1_drop_path_rate": float(get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)),
         # Loss (effective Stage 1 values with fallbacks)
         "stage1_use_focal_loss": bool(cfg_run.get("stage1_use_focal_loss", True)),
         "stage1_focal_alpha": float(cfg_run.get("stage1_focal_alpha", 0.5)),
         "stage1_focal_gamma": float(cfg_run.get("stage1_focal_gamma", 2.0)),
-        "stage1_label_smoothing": float(get_with_fallback("stage1_label_smoothing", "label_smoothing", 0.05)),
+        "stage1_label_smoothing": float(get_with_fallback(cfg_run, "stage1_label_smoothing", "label_smoothing", 0.05)),
         # SWA (effective Stage 1 values with fallbacks)
-        "stage1_use_swa": bool(get_with_fallback("stage1_use_swa", "use_swa", True)),
-        "stage1_swa_start_epoch": int(get_with_fallback("stage1_swa_start_epoch", "swa_start_epoch", 60)),
-        "stage1_swa_lr": float(get_with_fallback("stage1_swa_lr", "swa_lr", 5e-5)),
+        "stage1_use_swa": bool(get_with_fallback(cfg_run, "stage1_use_swa", "use_swa", True)),
+        "stage1_swa_start_epoch": int(get_with_fallback(cfg_run, "stage1_swa_start_epoch", "swa_start_epoch", 60)),
+        "stage1_swa_lr": float(get_with_fallback(cfg_run, "stage1_swa_lr", "swa_lr", 5e-5)),
         # Model options
         "use_attention_pool": bool(cfg_run.get("use_attention_pool", True)),
         "post_cnn_transformer_layers": int(cfg_run.get("post_cnn_transformer_layers", 3)),
@@ -1968,6 +3130,13 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "stage1_load_mlm_weights": bool(cfg_run.get("stage1_load_mlm_weights", True)),
         "stage1_mlm_transfer_mode": str(cfg_run.get("stage1_mlm_transfer_mode", "embed_only")),
         "stage1_freeze_layers": int(cfg_run.get("stage1_freeze_layers", 0)),
+        # Multi-scale ensemble
+        "use_multi_scale": bool(cfg_run.get("use_multi_scale", False)),
+        "multi_scale_kmers": cfg_run.get("multi_scale_kmers", [3, 4, 5, 6]),
+        "ensemble_method": cfg_run.get("ensemble_method", "soft_voting"),
+        "ensemble_learn_weights": bool(cfg_run.get("ensemble_learn_weights", False)),
+        "ensemble_weights": cfg_run.get("ensemble_weights"),
+        "ensemble_individual_loss_weight": float(cfg_run.get("ensemble_individual_loss_weight", 0.2)),
         # Seed
         "seed": int(cfg_run.get("seed", 1337) or 1337),
         # AMP (Mixed Precision)
@@ -2005,6 +3174,23 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         scaler = torch.cuda.amp.GradScaler()
         LOGGER.info("Using GradScaler for CUDA fp16")
 
+    if bool(cfg_run.get("use_multi_scale", False)):
+        LOGGER.info("Multi-scale co-training enabled")
+        return train_multi_scale_ensemble(
+            cfg_run=cfg_run,
+            device=device,
+            amp_ctx=amp_ctx,
+            scaler=scaler,
+            run_dir=run_dir,
+            resolved_config_path=resolved_config_path,
+            resolved_config=resolved_config,
+            epochs=epochs,
+            ablation_max_steps=ablation_max_steps,
+            seed=seed,
+            config_id=config_id,
+            start_time=start_time,
+        )
+
     # Build dataloaders
     dataloaders = build_dataloaders(cfg_run)
     train_loader = dataloaders["stage1"]["train"]
@@ -2028,7 +3214,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     
     use_attention_pool = bool(cfg_run.get("use_attention_pool", True))
     use_engineered_features = bool(cfg_run.get("stage1_use_engineered_features", True))
-    engineered_dim = int(cfg_run.get("engineered_dim", 128))
+    engineered_dim = int(cfg_run.get("engineered_dim", 288))
     
     # TCN configuration
     use_tcn = bool(cfg_run.get("use_tcn", True))
@@ -2047,7 +3233,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     fusion_hidden = int(cfg_run.get("fusion_hidden", 256))
 
     # Compute stage1_drop_path_rate with fallback (needed before model creation)
-    stage1_drop_path_rate = get_with_fallback("stage1_drop_path_rate", "drop_path_rate", 0.1)
+    stage1_drop_path_rate = get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)
 
     model = GeneWhispererStage1(
         vocab_size=vocab_size,
@@ -2220,13 +3406,13 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # =========================================================================
     # Stage 1 effective hyperparameters (with stage1_ overrides and fallbacks)
     # =========================================================================
-    stage1_label_smoothing = get_with_fallback("stage1_label_smoothing", "label_smoothing", 0.05)
-    stage1_use_mixup = get_with_fallback("stage1_use_mixup", "use_mixup", True)
-    stage1_mixup_alpha = get_with_fallback("stage1_mixup_alpha", "mixup_alpha", 0.2)
-    stage1_use_swa = get_with_fallback("stage1_use_swa", "use_swa", True)
-    stage1_swa_start_epoch = get_with_fallback("stage1_swa_start_epoch", "swa_start_epoch", 60)
-    stage1_swa_lr = get_with_fallback("stage1_swa_lr", "swa_lr", 5e-5)
-    stage1_drop_path_rate = get_with_fallback("stage1_drop_path_rate", "drop_path_rate", 0.1)
+    stage1_label_smoothing = get_with_fallback(cfg_run, "stage1_label_smoothing", "label_smoothing", 0.05)
+    stage1_use_mixup = get_with_fallback(cfg_run, "stage1_use_mixup", "use_mixup", True)
+    stage1_mixup_alpha = get_with_fallback(cfg_run, "stage1_mixup_alpha", "mixup_alpha", 0.2)
+    stage1_use_swa = get_with_fallback(cfg_run, "stage1_use_swa", "use_swa", True)
+    stage1_swa_start_epoch = get_with_fallback(cfg_run, "stage1_swa_start_epoch", "swa_start_epoch", 60)
+    stage1_swa_lr = get_with_fallback(cfg_run, "stage1_swa_lr", "swa_lr", 5e-5)
+    stage1_drop_path_rate = get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)
     stage1_use_focal_loss = bool(cfg_run.get("stage1_use_focal_loss", True))
 
     # Log effective Stage 1 hyperparameters
@@ -2272,8 +3458,8 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # =========================================================================
     if bool(cfg_run.get("overfit_debug", False)):
         LOGGER.info("Running OVERFIT DEBUG mode")
-        # Use simple BCE for overfit test (no label smoothing or focal loss)
-        simple_criterion = nn.BCELoss()
+        # Use simple BCEWithLogitsLoss for overfit test (no label smoothing or focal loss)
+        simple_criterion = nn.BCEWithLogitsLoss()
         run_overfit_debug_stage1(
             model=model,
             train_loader=train_loader,

@@ -1,23 +1,208 @@
-Force every eval script to print “what am I evaluating?”
+End-to-End Training Smoke Test
 
-add these prints at startup in:
+# Save as: tests/test_integration.py
+"""
+End-to-end integration test to verify all optimizations work together.
+"""
+import torch
+import sys
+import tempfile
+import os
+sys.path.insert(0, '.')
 
-scripts/reality_check_best_threshold.py
+def test_full_training_step():
+    """Test a complete training step with all optimizations."""
+    from model import GeneWhispererStage1
+    from dataset import compute_tnc, compute_pseeiip, compute_cksnap, compute_pstnp
+    
+    print("Testing full training step with all optimizations...")
+    
+    # 1. Create model with new dimensions
+    model = GeneWhispererStage1(
+        vocab_size=4099,
+        kmer=6,
+        embedding_dim=256,
+        num_layers=2,  # Reduced for speed
+        num_heads=8,
+        ff_dim=512,
+        engineered_dim=288,
+        use_tcn=True,
+        tcn_hidden=128,
+        tcn_levels=3,
+        post_cnn_transformer_layers=2,
+        engineered_mlp_hidden=256,
+        engineered_mlp_output=128,
+        fusion_hidden=192,
+    )
+    
+    # 2. Create optimizer with new hyperparameters
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=0.00005,  # NEW lower LR
+        weight_decay=0.01,  # NEW lighter decay
+    )
+    
+    # 3. Create loss with new label smoothing
+    label_smoothing = 0.02  # NEW lower smoothing
+    criterion = torch.nn.BCEWithLogitsLoss()
+    
+    # 4. Create batch with new features
+    batch_size = 8
+    seq_len = 76
+    
+    # Compute all features for a test sequence
+    test_seq = "ATGGCTGCATGCATGCTAGCTAGCTGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG"
+    
+    # NEW: All 4 feature types
+    tnc = compute_tnc(test_seq)
+    pseeiip = compute_pseeiip(test_seq)
+    cksnap = compute_cksnap(test_seq)
+    pstnp = compute_pstnp(test_seq)
+    engineered = torch.cat([tnc, pseeiip, cksnap, pstnp])
+    
+    # Create batch
+    tokens = torch.randint(0, 4096, (batch_size, seq_len))
+    engineered_batch = engineered.unsqueeze(0).expand(batch_size, -1)
+    labels = torch.randint(0, 2, (batch_size, 1)).float()
+    
+    # Apply label smoothing
+    smoothed_labels = labels * (1 - label_smoothing) + 0.5 * label_smoothing
+    
+    # 5. Training step
+    model.train()
+    optimizer.zero_grad()
+    
+    logits = model(tokens, engineered_batch)
+    loss = criterion(logits, smoothed_labels)
+    
+    loss.backward()
+    
+    # Check gradients exist
+    grad_norm = 0
+    for p in model.parameters():
+        if p.grad is not None:
+            grad_norm += p.grad.norm().item() ** 2
+    grad_norm = grad_norm ** 0.5
+    
+    optimizer.step()
+    
+    print(f"  Loss: {loss.item():.4f}")
+    print(f"  Gradient norm: {grad_norm:.4f}")
+    print(f"  Engineered features dim: {engineered_batch.shape[1]}")
+    
+    assert loss.item() < 10, "Loss too high"
+    assert grad_norm > 0, "No gradients computed"
+    assert engineered_batch.shape[1] == 288, "Wrong feature dimension"
+    
+    print("\n✓ Full training step successful!")
+    return True
 
-scripts/calibrate_stage1_temperature.py
+def test_ensemble_inference():
+    """Test ensemble inference with soft voting."""
+    from model import GeneWhispererStage1, MultiScaleEnsemble
+    
+    print("\nTesting ensemble inference with soft voting...")
+    
+    # Create models for different k-mers
+    models = []
+    for k in [3, 4]:
+        model = GeneWhispererStage1(
+            vocab_size=4**k + 3,
+            kmer=k,
+            embedding_dim=64,
+            num_layers=1,
+            num_heads=2,
+            ff_dim=128,
+            engineered_dim=128,  # Use 128 for quick test
+            use_tcn=False,
+            post_cnn_transformer_layers=1,
+        )
+        models.append(model)
+    
+    # Create ensemble
+    ensemble = MultiScaleEnsemble(models)
+    
+    # Create batch
+    batch = {
+        3: (torch.randint(0, 64, (4, 79)), torch.randn(4, 128)),
+        4: (torch.randint(0, 256, (4, 78)), torch.randn(4, 128)),
+    }
+    
+    # Forward pass
+    ensemble.eval()
+    with torch.no_grad():
+        output = ensemble(batch)
+    
+    # Verify output is probabilities (soft voting)
+    assert output.min() >= 0, "Output below 0, not probabilities"
+    assert output.max() <= 1, "Output above 1, not probabilities"
+    
+    print(f"  Ensemble output shape: {output.shape}")
+    print(f"  Output range: [{output.min().item():.4f}, {output.max().item():.4f}]")
+    
+    print("\n✓ Ensemble inference successful!")
+    return True
 
-any validation block in train_stage1.py
+def test_memory_usage():
+    """Test that model fits in M4 MacBook memory."""
+    import gc
+    
+    print("\nTesting memory usage...")
+    
+    # Clear memory
+    gc.collect()
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    
+    # Create full-size model
+    model = GeneWhispererStage1(
+        vocab_size=4099,
+        kmer=6,
+        embedding_dim=256,
+        num_layers=8,
+        num_heads=8,
+        ff_dim=1024,
+        engineered_dim=288,
+        use_tcn=True,
+        tcn_hidden=256,
+        tcn_levels=5,
+        post_cnn_transformer_layers=4,
+        engineered_mlp_hidden=512,
+        engineered_mlp_output=256,
+        fusion_hidden=384,
+    )
+    
+    # Count parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    param_memory_mb = total_params * 4 / (1024 ** 2)  # float32
+    
+    print(f"  Total parameters: {total_params:,}")
+    print(f"  Parameter memory: {param_memory_mb:.1f} MB")
+    
+    # Estimate training memory (roughly 4x for gradients + optimizer states)
+    estimated_training_mb = param_memory_mb * 4
+    print(f"  Estimated training memory: {estimated_training_mb:.1f} MB")
+    
+    # M4 MacBook has at least 8GB unified memory
+    assert estimated_training_mb < 4000, "Model too large for M4 MacBook"
+    
+    print("\n✓ Memory usage acceptable for M4 MacBook")
+    return True
 
-Print:
+if __name__ == "__main__":
+    print("=" * 60)
+    print("INTEGRATION TEST: All Optimizations")
+    print("=" * 60)
+    
+    test_full_training_step()
+    test_ensemble_inference()
+    test_memory_usage()
+    
+    print("\n" + "=" * 60)
+    print("ALL INTEGRATION TESTS PASSED ✓")
+    print("Ready to train for 90%+ accuracy!")
+    print("=" * 60)
 
-checkpoint path actually loaded
-
-number of val samples
-
-label balance (% positives)
-
-prob min/mean/max
-
-logit min/mean/max (if available)
-
-If two runs disagree, those 5 lines will immediately explain why.
+Run Integration Test:
+cd training
+python tests/test_integration.py

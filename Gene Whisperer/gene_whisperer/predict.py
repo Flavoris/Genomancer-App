@@ -35,7 +35,7 @@ _TRAINING_DIR = _PROJECT_ROOT / "training"
 if str(_TRAINING_DIR) not in sys.path:
     sys.path.insert(0, str(_TRAINING_DIR))
 
-from dataset import KmerVocabulary, compute_pseeiip, compute_tnc
+from dataset import KmerVocabulary, compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc
 from model import GeneWhispererStage1, MultiScaleEnsemble
 
 LOGGER = logging.getLogger("gene_whisperer.predict")
@@ -54,15 +54,21 @@ def _compute_engineered_features(
     sequence: str,
     cfg: Optional[Dict] = None,
 ) -> torch.Tensor:
-    """Compute engineered features: TNC(64) + PseEIIP(64) = 128."""
+    """Compute engineered features: TNC(64) + PseEIIP(64) + CKSNAP(96) + PSTNP(64) = 288."""
     tnc = compute_tnc(sequence)
     pseeiip = compute_pseeiip(sequence)
+    cksnap = compute_cksnap(sequence)
+    pstnp = compute_pstnp(sequence)
     if cfg is not None:
         if not bool(cfg.get("stage1_feature_enable_tnc", True)):
             tnc = torch.zeros_like(tnc)
         if not bool(cfg.get("stage1_feature_enable_pseeiip", True)):
             pseeiip = torch.zeros_like(pseeiip)
-    return torch.cat([tnc, pseeiip], dim=0)
+        if not bool(cfg.get("stage1_feature_enable_cksnap", True)):
+            cksnap = torch.zeros_like(cksnap)
+        if not bool(cfg.get("stage1_feature_enable_pstnp", True)):
+            pstnp = torch.zeros_like(pstnp)
+    return torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
 
 
 def _load_vocab(vocab_path: Path) -> KmerVocabulary:
@@ -184,7 +190,7 @@ def _build_model(
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
         pad_token_id=vocab.pad_id,
-        engineered_dim=int(effective_cfg.get("engineered_dim", 128)),
+        engineered_dim=int(effective_cfg.get("engineered_dim", 288)),
         use_engineered_features=bool(effective_cfg.get("stage1_use_engineered_features", True)),
         use_attention_pool=bool(effective_cfg.get("use_attention_pool", True)),
         use_tcn=use_tcn,

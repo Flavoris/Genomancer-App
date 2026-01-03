@@ -297,7 +297,7 @@ def main() -> int:
             pretrained_ckpt=stage1_pre_ckpt,
             scratch_ckpt=stage1_scratch_ckpt,
             use_engineered=use_engineered_stage1,
-            engineered_dim=int(cfg_stage1_pre.get("engineered_dim", 128)),
+            engineered_dim=int(cfg_stage1_pre.get("engineered_dim", 288)),
         )
 
     cfg_stage2_pre = copy.deepcopy(cfg)
@@ -353,7 +353,7 @@ def main() -> int:
             pretrained_ckpt=stage2_pre_ckpt,
             scratch_ckpt=stage2_scratch_ckpt,
             use_engineered=use_engineered_stage2,
-            engineered_dim=int(cfg_stage2_pre.get("engineered_dim", 128)),
+            engineered_dim=int(cfg_stage2_pre.get("engineered_dim", 288)),
         )
 
     return 0

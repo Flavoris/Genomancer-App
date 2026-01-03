@@ -71,9 +71,11 @@ metrics_stage2: ["accuracy","mcc","roc_auc"]
   - `tokenize_kmers(seq, max_bp_len)`: uppercase, strip, pad/truncate bp to `max_bp_len`, create overlapping 3-mers, map to vocab indices, pad/truncate tokens to `max_tokens = max_bp_len-2`.
   - `compute_tnc(seq)`: 64-dim normalized tri-nucleotide frequency vector.
   - `compute_pseeiip(seq)`: 64-dim PseEIIP vector using published EIIP values; unknowns -> zero.
+  - `compute_cksnap(seq, max_gap=5)`: 96-dim k-spaced dinucleotide composition (16 pairs × 6 gaps).
+  - `compute_pstnp(seq)`: 64-dim position-weighted trinucleotide propensity (emphasize -10/-35 regions).
   - TSV/CSV loading: respect `delimiter` in config.
-  - `PromoterDatasetStage1`: yields (tokens_tensor[seq_len], engineered[128], label_float) for `is_promoter` 0/1.
-  - `PromoterDatasetStage2`: yields (tokens_tensor[seq_len], engineered[128], label_float) for `strength` using `stage2_strength_positive`/`stage2_strength_negative` mapping (e.g., 1=strong, 0=weak).
+  - `PromoterDatasetStage1`: yields (tokens_tensor[seq_len], engineered[288], label_float) for `is_promoter` 0/1.
+  - `PromoterDatasetStage2`: yields (tokens_tensor[seq_len], engineered[288], label_float) for `strength` using `stage2_strength_positive`/`stage2_strength_negative` mapping (e.g., 1=strong, 0=weak).
   - `build_dataloaders(cfg)`: DataLoaders for both stages; supports random split if val missing; uses class-weighted sampling when imbalance >20%.
 
 ## 6) Model
@@ -87,21 +89,21 @@ metrics_stage2: ["accuracy","mcc","roc_auc"]
     - 1D Conv (in_channels=48, out_channels=128, kernel_size=5, padding=2) + ReLU.
     - BiLSTM with 128 units per direction.
     - Global max pool.
-    - Dense 128 + ReLU -> Dropout 0.5 -> Dense 1 sigmoid.
+    - Dense 128 + ReLU -> Dropout 0.5 -> Dense 1 (logits).
   - Stage 2 head (`StrengthClassifier`):
     - Input: contextual embeddings.
     - 1D Conv (48 -> 96, kernel_size=5, padding=2) + ReLU.
     - Uni-directional LSTM 128 units.
     - Global average pool.
     - Concatenate with TNC + PseEIIP (64-dim each) to form a single feature vector.
-    - Dense 128 + ReLU -> Dropout 0.5 -> Dense 1 sigmoid.
+    - Dense 128 + ReLU -> Dropout 0.5 -> Dense 1 (logits).
   - `GeneWhispererStage1` and `GeneWhispererStage2` wrappers share the backbone; Stage 2 exposes `freeze_lower_layers()` to freeze bottom half of encoder layers before training.
 
 ## 7) Training Stage 1 (Promoter detection)
 - Add `Gene Whisperer/training/train_stage1.py`:
   - CLI: `python train_stage1.py --config config.yaml`.
   - Loads cfg, builds backbone+Stage1 head, dataloaders.
-  - Loss: BCEWithLogitsLoss (or sigmoid + BCELoss); metrics: accuracy, precision, recall, MCC.
+  - Loss: BCEWithLogitsLoss; metrics: accuracy, precision, recall, MCC.
   - Early stopping on val loss or MCC; save best to `../artifacts/checkpoints/stage1_best.pt`.
   - Save `../artifacts/stage1_report.json` with metrics, class distribution.
 

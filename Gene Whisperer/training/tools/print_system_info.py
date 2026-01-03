@@ -55,7 +55,7 @@ def build_stage1_model(cfg: dict) -> GeneWhispererStage1:
         ff_dim=int(cfg.get("transformer_ff_dim", 1024)),
         dropout=float(cfg.get("transformer_dropout", 0.15)),
         pad_token_id=int(cfg.get("pad_token_id", 66)),
-        engineered_dim=int(cfg.get("engineered_dim", 128)),
+        engineered_dim=int(cfg.get("engineered_dim", 288)),
         use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
         use_attention_pool=bool(cfg.get("use_attention_pool", True)),
         use_tcn=bool(cfg.get("use_tcn", True)),

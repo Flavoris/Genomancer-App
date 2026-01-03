@@ -103,7 +103,7 @@ mixed_label = λ * label_a + (1-λ) * label_b
 embedding_dim: 192        # was 160
 transformer_layers: 6     # was 4
 transformer_ff_dim: 384   # was 256
-engineered_dim: 128       # TNC + PseEIIP
+engineered_dim: 288       # TNC + PseEIIP + CKSNAP + PSTNP
 use_attention_pool: true  # NEW
 label_smoothing: 0.05     # NEW
 use_mixup: true           # NEW

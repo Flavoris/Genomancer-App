@@ -51,9 +51,11 @@ Create Gene Whisperer/training/dataset.py:
 - tokenize_kmers(seq,max_bp_len): uppercase/strip, pad/truncate bp to max_bp_len, make overlapping 3-mers, map to ids, pad/truncate to max_tokens=max_bp_len-2, return LongTensor.
 - compute_tnc(seq): 64-dim normalized tri-nucleotide frequency.
 - compute_pseeiip(seq): 64-dim PseEIIP features using published EIIP constants; unknowns -> zero.
+- compute_cksnap(seq, max_gap=5): 96-dim composition of k-spaced nucleotide pairs (16 pairs × 6 gaps).
+- compute_pstnp(seq): 64-dim position-weighted trinucleotide frequencies (emphasize -10/-35 regions).
 - TSV/CSV loading using cfg.delimiter.
-- PromoterDatasetStage1 returns (tokens, engineered[128], label_float) for columns sequence,is_promoter (0/1).
-- PromoterDatasetStage2 returns (tokens, engineered[128], label_float) for columns sequence,strength using cfg.stage2_strength_positive (1=strong) and cfg.stage2_strength_negative (0=weak).
+- PromoterDatasetStage1 returns (tokens, engineered[288], label_float) for columns sequence,is_promoter (0/1).
+- PromoterDatasetStage2 returns (tokens, engineered[288], label_float) for columns sequence,strength using cfg.stage2_strength_positive (1=strong) and cfg.stage2_strength_negative (0=weak).
 - build_dataloaders(cfg): returns train/val/test loaders for both stages; random split if val missing; use WeightedRandomSampler when imbalance >20%.
 Include minimal validation/logging and seeds.
 ```
@@ -62,8 +64,8 @@ Include minimal validation/logging and seeds.
 ```
 Create Gene Whisperer/training/model.py:
 - TransformerBackbone: embedding_dim=48, vocab=64, learned positional embeddings up to max_tokens, 4 encoder layers with LayerNorm -> MHA (heads=4, dropout=0.1) + residual -> LayerNorm -> FFN 48->64->48 + residual.
-- PromoterClassifier head: Conv1d(48->128,k=5,pad=2)+ReLU -> BiLSTM(128 per dir) -> global max pool -> Dense128+ReLU -> Dropout0.5 -> Dense1 sigmoid.
-- StrengthClassifier head: Conv1d(48->96,k=5,pad=2)+ReLU -> LSTM(128) -> global avg pool -> concat with TNC/PseEIIP (each 64-dim) -> Dense128+ReLU -> Dropout0.5 -> Dense1 sigmoid.
+- PromoterClassifier head: Conv1d(48->128,k=5,pad=2)+ReLU -> BiLSTM(128 per dir) -> global max pool -> Dense128+ReLU -> Dropout0.5 -> Dense1 (logits).
+- StrengthClassifier head: Conv1d(48->96,k=5,pad=2)+ReLU -> LSTM(128) -> global avg pool -> concat with TNC/PseEIIP (each 64-dim) -> Dense128+ReLU -> Dropout0.5 -> Dense1 (logits).
 - GeneWhispererStage1(backbone+head) and GeneWhispererStage2(backbone+head) share backbone; Stage2 exposes freeze_lower_layers() to freeze bottom half (layers 0-1).
 No custom ops.
 ```

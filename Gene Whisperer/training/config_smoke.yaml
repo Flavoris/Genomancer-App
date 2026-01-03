@@ -79,9 +79,9 @@ post_cnn_transformer_layers: 3  # Fewer layers since CNN/TCN already extracted f
 # =============================================================================
 # ENGINEERED FEATURES (Enhanced with separate MLP branch)
 # =============================================================================
-# TNC(64) + PseEIIP(64) = 128
+# TNC(64) + PseEIIP(64) + CKSNAP(96) + PSTNP(64) = 288
 stage1_use_engineered_features: true
-engineered_dim: 128
+engineered_dim: 288
 
 # Separate MLP branch for engineered features (increases their influence)
 engineered_mlp_hidden: 256    # Hidden dimension in engineered feature MLP

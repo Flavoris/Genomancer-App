@@ -86,7 +86,7 @@ stage1_checkpoint_name: null
 stage1_embed_plot_epoch: null
 stage1_embed_plot_method: pca
 stage1_embed_plot_samples: 512
-engineered_dim: 128
+engineered_dim: 288
 stage1_focal_alpha: 0.5
 stage1_focal_gamma: 2.0
 stage1_freeze_layers: 0

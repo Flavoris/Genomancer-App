@@ -375,7 +375,7 @@ def test_stage2_gradient_flow():
     output = model(tokens, engineered)
 
     # Compute loss
-    loss = nn.BCELoss()(output, targets)
+    loss = nn.BCEWithLogitsLoss()(output, targets)
 
     # Backward pass
     loss.backward()

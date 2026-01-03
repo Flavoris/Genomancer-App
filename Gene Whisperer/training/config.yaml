@@ -28,7 +28,7 @@ persistent_workers: false
 # =============================================================================
 # CACHING OPTIONS (Performance optimization)
 # =============================================================================
-# Precompute engineered features (TNC+PseEIIP) once in dataset init
+# Precompute engineered features (TNC+PseEIIP+CKSNAP+PSTNP) once in dataset init
 # Only effective for validation sets and Stage 2 (no augmentation)
 cache_engineered_features: false
 # Pre-tokenize sequences once in dataset init
@@ -55,7 +55,7 @@ embedding_dim: 256       # Match mlm_embedding_dim for weight transfer
 transformer_layers: 8    # Was 6,Reduced from 8 to prevent overfitting with TCN/testing 8
 transformer_heads: 8
 transformer_ff_dim: 1024  # Match mlm_transformer_ff_dim (4x embedding)
-transformer_dropout: 0.15  # Slightly higher for fine-tuning
+transformer_dropout: 0.12  # Slightly higher for fine-tuning
 
 # Position encoding (learned embeddings)
 
@@ -80,7 +80,7 @@ use_tcn: true  # Set to false to use original single CNN for comparison
 
 # TCN (Temporal Convolutional Network) settings
 tcn_hidden: 256       # Hidden dimension in TCN blocks
-tcn_levels: 4         # Number of dilated conv levels (dilation: 1,2,4,8)
+tcn_levels: 5         # Number of dilated conv levels (dilation: 1,2,4,8,16)
 tcn_kernel: 3         # Kernel size for dilated convolutions
 
 # Multi-scale CNN settings (parallel convolutions for different motif lengths)
@@ -95,25 +95,37 @@ lstm_hidden: 192      # Hidden size (output will be 2x for bidirectional)
 # =============================================================================
 # Lightweight transformer applied AFTER CNN/TCN for global contextualization
 # This follows the new architecture order: Embedding → CNN/TCN → Transformer → Pool
-post_cnn_transformer_layers: 3  # Fewer layers since CNN/TCN already extracted features
+post_cnn_transformer_layers: 4  # Fewer layers since CNN/TCN already extracted features
 
 # =============================================================================
 # ENGINEERED FEATURES (Enhanced with separate MLP branch)
 # =============================================================================
-# TNC(64) + PseEIIP(64) = 128
+# TNC(64) + PseEIIP(64) + CKSNAP(96) + PSTNP(64) = 288
 stage1_use_engineered_features: true
-engineered_dim: 128
+# Per-feature toggles (zeroed when disabled to keep engineered_dim stable)
+stage1_feature_enable_tnc: true
+stage1_feature_enable_pseeiip: true
+stage1_feature_enable_cksnap: true
+stage1_feature_enable_pstnp: true
+engineered_dim: 288
 
 # Separate MLP branch for engineered features (increases their influence)
-engineered_mlp_hidden: 256    # Hidden dimension in engineered feature MLP
-engineered_mlp_output: 128    # Output dimension before fusion
+engineered_mlp_hidden: 512    # Hidden dimension in engineered feature MLP
+engineered_mlp_output: 256    # Output dimension before fusion
+
+# Feature flags (engineered feature families)
+features:
+  use_tnc: true
+  use_pseeiip: true
+  use_cksnap: true
+  use_pstnp: true
 
 # =============================================================================
 # ATTENTION-BASED FUSION (Instead of simple concatenation)
 # =============================================================================
 # Gated cross-attention fusion between sequence and engineered features
 # This allows the model to learn optimal weighting between modalities
-fusion_hidden: 256            # Hidden dimension in fusion module
+fusion_hidden: 384            # Hidden dimension in fusion module
 
 # Reverse complement augmentation
 stage1_reverse_complement_prob: 0.0 # Was 0.5
@@ -126,16 +138,16 @@ optimizer: "adamw"
 optimizer_foreach: true  # Use foreach implementation for ~20-30% faster optimizer steps
 
 # Learning rate and schedule
-lr: 0.0001  # Slightly lower for stability (was 2e-4)
-weight_decay: 0.02  # Slightly stronger regularization
-warmup_ratio: 0.05  # 15% warmup for better stability (was 10%)
+lr: 0.00005  # Slightly lower for stability (was 2e-4)
+weight_decay: 0.01  # Slightly stronger regularization
+warmup_ratio: 0.10  # 10% warmup for better stability (was 10%)
 
 # Training duration
-epochs: 120  # More epochs with better early stopping
-early_stopping_patience: 35  # More patience for better convergence
+epochs: 150  # More epochs with better early stopping
+early_stopping_patience: 50  # More patience for better convergence
 
 # Gradient settings
-grad_accum_steps: 4  # Effective batch = 32 * 4 = 128
+grad_accum_steps: 8  # Effective batch = 32 * 8 = 256
 grad_clip_norm: 1.0
 
 # Parameter norm monitoring (adjusted for 8-layer model with ~14M params)
@@ -145,7 +157,7 @@ param_norm_cap: 300    # Hard cap - params scaled down if exceeded (was 200)
 
 # Layer-wise learning rate decay (lower LR for earlier layers)
 # This helps preserve pretrained features while fine-tuning upper layers
-layer_lr_decay: 0.8  # Each layer gets 0.8x the LR of the layer above
+layer_lr_decay: 0.85  # Each layer gets 0.85x the LR of the layer above
 
 # Stochastic depth (drop path) rate for regularization
 drop_path_rate: 0.1
@@ -157,20 +169,20 @@ drop_path_rate: 0.1
 stage1_use_focal_loss: false
 stage1_focal_alpha: 0.5
 stage1_focal_gamma: 2.0
-label_smoothing: 0.05  # Reduced from 0.1 - less smoothing for higher accuracy
+label_smoothing: 0.02  # Reduced from 0.1 - less smoothing for higher accuracy
 
 # =============================================================================
 # AUGMENTATION
 # =============================================================================
 use_mixup: true
-mixup_alpha: 0.2  # Reduced from 0.4 - less aggressive mixup for higher accuracy
+mixup_alpha: 0.1  # Reduced from 0.4 - less aggressive mixup for higher accuracy
 
 # =============================================================================
 # STOCHASTIC WEIGHT AVERAGING (SWA) for breaking plateaus
 # =============================================================================
 use_swa: true
-swa_start_epoch: 60  # Start SWA after 60 epochs (when base training plateaus)
-swa_lr: 0.00005  # Low constant LR for SWA phase
+swa_start_epoch: 80  # Start SWA after 80 epochs (when base training plateaus)
+swa_lr: 0.00003  # Low constant LR for SWA phase
 swa_anneal_epochs: 10  # Anneal to SWA LR over 10 epochs
 
 # =============================================================================
@@ -283,7 +295,9 @@ stage1_checkpoint_name: null  # Auto-generated: stage1_v2_k{kmer}.pt
 # Stage 2 will auto-select the matching Stage 1 checkpoint based on its k-mer
 # Override with --stage1_ckpt CLI arg if needed
 stage1_ckpt_by_k:
+  3: ../artifacts/checkpoints/stage1_k3.pt
   4: ../artifacts/checkpoints/stage1_k4.pt
+  5: ../artifacts/checkpoints/stage1_k5.pt
   6: ../artifacts/checkpoints/stage1_k6.pt
 
 # =============================================================================
@@ -305,6 +319,13 @@ metrics_stage2: ["accuracy", "mcc", "roc_auc"]
 # Enable to train multiple k-mer models and ensemble
 use_multi_scale: true
 multi_scale_kmers: [3, 4, 5, 6]
+ensemble_method: "soft_voting"
+ensemble_learn_weights: true
+ensemble_weights:
+  3: 0.20
+  4: 0.25
+  5: 0.25
+  6: 0.30
 
 # =============================================================================
 # TRANSFER SMOKETEST (Tiny transfer sanity run)

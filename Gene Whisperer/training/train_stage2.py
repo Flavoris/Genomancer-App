@@ -346,7 +346,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "max_bp_len": int(cfg_run.get("max_bp_len", 81)),
         "kmer": stage2_kmer,  # Resolved stage2_kmer (from --kmer, stage2_kmer, or kmer fallback)
         # Engineered features
-        "engineered_dim": int(cfg_run.get("engineered_dim", 128)),
+        "engineered_dim": int(cfg_run.get("engineered_dim", 288)),
         # Architecture toggles
         "use_attention_pool": bool(cfg_run.get("use_attention_pool", True)),
         "use_tcn": bool(cfg_run.get("use_tcn", True)),
@@ -433,7 +433,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     fusion_hidden = int(cfg_run.get("fusion_hidden", 256))
 
     stage2_use_engineered = bool(cfg_run.get("stage2_use_engineered_features", True))
-    engineered_dim = int(cfg_run.get("engineered_dim", 128))
+    engineered_dim = int(cfg_run.get("engineered_dim", 288))
 
     # Stage 2 head configuration
     stage2_head_type = str(cfg_run.get("stage2_head_type", "transformer"))
@@ -704,8 +704,8 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # =========================================================================
     if bool(cfg_run.get("overfit_debug", False)):
         LOGGER.info("Running OVERFIT DEBUG mode for Stage 2")
-        # Use simple BCE for overfit test (no label smoothing or focal loss)
-        simple_criterion = nn.BCELoss()
+        # Use simple BCEWithLogitsLoss for overfit test (no label smoothing or focal loss)
+        simple_criterion = nn.BCEWithLogitsLoss()
         stage1.run_overfit_debug_stage1(
             model=model,
             train_loader=train_loader,
