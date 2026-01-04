@@ -43,7 +43,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Navigate to Repository Root
 # -----------------------------------------------------------------------------
-echo "[1/7] Navigating to repository root..."
+echo "[1/8] Navigating to repository root..."
 
 # Get the git root directory
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
@@ -60,9 +60,27 @@ echo "  Repository root: $REPO_ROOT"
 echo ""
 
 # -----------------------------------------------------------------------------
+# Install Git LFS and Pull Large Files
+# -----------------------------------------------------------------------------
+echo "[2/8] Setting up Git LFS..."
+
+# Check if git-lfs is installed
+if ! command -v git-lfs &> /dev/null; then
+    echo "  Installing Git LFS..."
+    apt-get update -qq && apt-get install -qq -y git-lfs
+fi
+
+# Initialize LFS and pull actual file content
+git lfs install --skip-smudge 2>/dev/null || true
+echo "  Pulling LFS files (genome data, checkpoints)..."
+git lfs pull
+echo "  Git LFS setup complete."
+echo ""
+
+# -----------------------------------------------------------------------------
 # Install Requirements
 # -----------------------------------------------------------------------------
-echo "[2/7] Installing Python requirements..."
+echo "[3/8] Installing Python requirements..."
 
 REQUIREMENTS_PATH="$REPO_ROOT/Gene Whisperer/requirements.txt"
 
@@ -79,7 +97,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Create Required Directories
 # -----------------------------------------------------------------------------
-echo "[3/7] Creating required directories..."
+echo "[4/8] Creating required directories..."
 
 GW_DIR="$REPO_ROOT/Gene Whisperer"
 
@@ -103,7 +121,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Download Large Genome Files from Drive
 # -----------------------------------------------------------------------------
-echo "[4/7] Downloading large genome files from Google Drive..."
+echo "[5/8] Downloading large genome files from Google Drive..."
 
 GENOME_DOWNLOAD_SCRIPT="$REPO_ROOT/Gene Whisperer/scripts/colab_download_genomes.sh"
 
@@ -118,7 +136,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Verify Genome Files
 # -----------------------------------------------------------------------------
-echo "[5/7] Verifying genome files..."
+echo "[6/8] Verifying genome files..."
 echo ""
 
 DATA_DIR="$GW_DIR/data"
@@ -161,7 +179,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # GPU Status
 # -----------------------------------------------------------------------------
-echo "[6/7] GPU Status..."
+echo "[7/8] GPU Status..."
 
 if command -v nvidia-smi &> /dev/null; then
     nvidia-smi
@@ -173,7 +191,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Environment Info
 # -----------------------------------------------------------------------------
-echo "[7/7] Environment Information..."
+echo "[8/8] Environment Information..."
 
 echo "  Python version: $(python --version 2>&1)"
 
