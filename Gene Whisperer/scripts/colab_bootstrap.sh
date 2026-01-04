@@ -43,7 +43,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Navigate to Repository Root
 # -----------------------------------------------------------------------------
-echo "[1/5] Navigating to repository root..."
+echo "[1/7] Navigating to repository root..."
 
 # Get the git root directory
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
@@ -62,7 +62,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Install Requirements
 # -----------------------------------------------------------------------------
-echo "[2/5] Installing Python requirements..."
+echo "[2/7] Installing Python requirements..."
 
 REQUIREMENTS_PATH="$REPO_ROOT/Gene Whisperer/requirements.txt"
 
@@ -79,7 +79,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Create Required Directories
 # -----------------------------------------------------------------------------
-echo "[3/5] Creating required directories..."
+echo "[3/7] Creating required directories..."
 
 GW_DIR="$REPO_ROOT/Gene Whisperer"
 
@@ -101,9 +101,67 @@ done
 echo ""
 
 # -----------------------------------------------------------------------------
+# Download Large Genome Files from Drive
+# -----------------------------------------------------------------------------
+echo "[4/7] Downloading large genome files from Google Drive..."
+
+GENOME_DOWNLOAD_SCRIPT="$REPO_ROOT/Gene Whisperer/scripts/colab_download_genomes.sh"
+
+if [[ -f "$GENOME_DOWNLOAD_SCRIPT" ]]; then
+    bash "$GENOME_DOWNLOAD_SCRIPT"
+else
+    echo "  WARNING: Genome download script not found: $GENOME_DOWNLOAD_SCRIPT"
+    echo "  Large genome files (human_genome, japanese_rice_genome) may not be available."
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Verify Genome Files
+# -----------------------------------------------------------------------------
+echo "[5/7] Verifying genome files..."
+echo ""
+
+DATA_DIR="$GW_DIR/data"
+
+# Expected genome files for MLM pretraining
+declare -a EXPECTED_GENOMES=(
+    "GCF_000005845.2_ASM584v2_genomic.fna"
+    "B_subtilis_genome"
+    "S_cerevisiae_genome"
+    "human_genome"
+    "pseudomonas_genome"
+    "japanese_rice_genome"
+)
+
+echo "  Genome file status:"
+echo "  -------------------"
+MISSING_COUNT=0
+for genome in "${EXPECTED_GENOMES[@]}"; do
+    GENOME_PATH="$DATA_DIR/$genome"
+    if [[ -f "$GENOME_PATH" ]]; then
+        SIZE=$(ls -lh "$GENOME_PATH" 2>/dev/null | awk '{print $5}')
+        echo "  [OK]      $genome ($SIZE)"
+    else
+        echo "  [MISSING] $genome"
+        MISSING_COUNT=$((MISSING_COUNT + 1))
+    fi
+done
+echo ""
+
+if [[ $MISSING_COUNT -gt 0 ]]; then
+    echo "  WARNING: $MISSING_COUNT genome file(s) missing!"
+    echo "  MLM pretraining will only use available genomes."
+    echo "  To add missing genomes, upload them to Google Drive:"
+    echo "    /MyDrive/GeneWhispererData/"
+else
+    echo "  All expected genome files are present."
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
 # GPU Status
 # -----------------------------------------------------------------------------
-echo "[4/5] GPU Status..."
+echo "[6/7] GPU Status..."
 
 if command -v nvidia-smi &> /dev/null; then
     nvidia-smi
@@ -115,7 +173,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Environment Info
 # -----------------------------------------------------------------------------
-echo "[5/5] Environment Information..."
+echo "[7/7] Environment Information..."
 
 echo "  Python version: $(python --version 2>&1)"
 

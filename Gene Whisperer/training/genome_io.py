@@ -60,6 +60,29 @@ def read_fasta_records(path: Path, *, keep_header: bool = False) -> List[Tuple[s
     return records
 
 
+def find_acgt_segments(sequence: str, min_length: int) -> List[Tuple[int, int]]:
+    """Return (start, end) segments of A/C/G/T runs with length >= min_length."""
+    if min_length <= 0:
+        raise ValueError(f"min_length must be > 0, got {min_length}")
+    segments: List[Tuple[int, int]] = []
+    start: int | None = None
+
+    for idx, base in enumerate(sequence):
+        if base in ALLOWED_BASES:
+            if start is None:
+                start = idx
+        else:
+            if start is not None:
+                if idx - start >= min_length:
+                    segments.append((start, idx))
+                start = None
+
+    if start is not None and len(sequence) - start >= min_length:
+        segments.append((start, len(sequence)))
+
+    return segments
+
+
 def sanitize_unknown_bases(
     sequence: str,
     strategy: str = "random",

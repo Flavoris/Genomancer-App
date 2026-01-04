@@ -60,7 +60,7 @@ from numerics import (
     detect_nan_in_model,
 )
 from amp_utils import get_amp_context, log_amp_status
-from genome_io import read_fasta_records, sanitize_unknown_bases
+from genome_io import read_fasta_records, sanitize_unknown_bases, find_acgt_segments
 
 LOGGER = logging.getLogger("gene_whisperer.pretrain_mlm")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -227,6 +227,14 @@ def extract_windows(
     unknown_base_strategy: str,
 ) -> List[str]:
     windows: List[str] = []
+    if unknown_base_strategy == "skip":
+        segments = find_acgt_segments(sequence, min_length=window_size)
+        for segment_start, segment_end in segments:
+            max_start = segment_end - window_size + 1
+            for start in range(segment_start, max_start, stride):
+                window = sequence[start : start + window_size]
+                windows.append(window)
+        return windows
     sanitized = sanitize_unknown_bases(sequence, unknown_base_strategy)
     max_start = len(sanitized) - window_size + 1
     for start in range(0, max_start, stride):
@@ -256,9 +264,11 @@ def _normalize_unknown_base_strategy(raw_strategy: Any) -> str:
     if not isinstance(raw_strategy, str):
         raise ValueError("mlm_unknown_base_strategy must be a string")
     strategy = raw_strategy.strip().lower()
-    if strategy != "random":
-        raise ValueError(f"Unsupported mlm_unknown_base_strategy: {raw_strategy!r}")
-    return strategy
+    if strategy == "random":
+        return "random"
+    if strategy in {"skip", "strict", "acgt_only"}:
+        return "skip"
+    raise ValueError(f"Unsupported mlm_unknown_base_strategy: {raw_strategy!r}")
 
 
 def _apply_bp_limit(records: List[Tuple[str, str]], bp_limit: int) -> List[Tuple[str, str]]:
@@ -427,6 +437,9 @@ class PromoterMLMDataset(Dataset):
         return masked_tokens.squeeze(0), labels.squeeze(0)
 
 
+RecordEntry = Tuple[str, str, List[Tuple[int, int]] | None]
+
+
 class GenomeMLMIterableDataset(IterableDataset):
     """On-the-fly MLM sampling across multiple genomes."""
 
@@ -489,17 +502,24 @@ class GenomeMLMIterableDataset(IterableDataset):
         if self.steps_per_epoch is not None and batch_size:
             self._samples_per_epoch = self.steps_per_epoch * batch_size
 
-        records_by_species: Dict[str, List[Tuple[str, str]]] = {}
+        records_by_species: Dict[str, List[RecordEntry]] = {}
         species_order: List[str] = []
         skipped_short = 0
+        skipped_unknown = 0
         for species_name, record_id, sequence in corpus:
             if len(sequence) < self.window_bp:
                 skipped_short += 1
                 continue
+            segments = None
+            if self.unknown_base_strategy == "skip":
+                segments = find_acgt_segments(sequence, min_length=self.window_bp)
+                if not segments:
+                    skipped_unknown += 1
+                    continue
             if species_name not in records_by_species:
                 records_by_species[species_name] = []
                 species_order.append(species_name)
-            records_by_species[species_name].append((record_id, sequence))
+            records_by_species[species_name].append((record_id, sequence, segments))
 
         if not records_by_species:
             raise ValueError(
@@ -509,6 +529,12 @@ class GenomeMLMIterableDataset(IterableDataset):
 
         if skipped_short > 0:
             LOGGER.warning("Skipped %d records shorter than window_bp=%d", skipped_short, self.window_bp)
+        if skipped_unknown > 0:
+            LOGGER.warning(
+                "Skipped %d records with no ACGT-only windows (window_bp=%d)",
+                skipped_unknown,
+                self.window_bp,
+            )
 
         if species_weights is None:
             species_weights = {species: 1.0 for species in species_order}
@@ -532,15 +558,25 @@ class GenomeMLMIterableDataset(IterableDataset):
 
     def _sample_tokens(self) -> Tuple[torch.LongTensor, Dict[str, Any]]:
         species_name = random.choices(self._species_names, weights=self._species_weights, k=1)[0]
-        record_id, sequence = random.choice(self._records_by_species[species_name])
-        max_start = len(sequence) - self.window_bp
-        if max_start < 0:
-            raise RuntimeError(
-                f"Record shorter than window_bp after filtering (species={species_name}, record={record_id})"
-            )
-        start = random.randint(0, max_start)
-        window = sequence[start : start + self.window_bp]
-        window = sanitize_unknown_bases(window, self.unknown_base_strategy)
+        record_id, sequence, segments = random.choice(self._records_by_species[species_name])
+        if self.unknown_base_strategy == "skip":
+            if not segments:
+                raise RuntimeError(
+                    f"Record missing ACGT segments (species={species_name}, record={record_id})"
+                )
+            segment_start, segment_end = random.choice(segments)
+            max_start = segment_end - self.window_bp
+            start = random.randint(segment_start, max_start)
+            window = sequence[start : start + self.window_bp]
+        else:
+            max_start = len(sequence) - self.window_bp
+            if max_start < 0:
+                raise RuntimeError(
+                    f"Record shorter than window_bp after filtering (species={species_name}, record={record_id})"
+                )
+            start = random.randint(0, max_start)
+            window = sequence[start : start + self.window_bp]
+            window = sanitize_unknown_bases(window, self.unknown_base_strategy)
         rc_used = False
         if self.reverse_complement_prob > 0 and random.random() < self.reverse_complement_prob:
             window = reverse_complement(window)
@@ -2627,18 +2663,42 @@ def _load_or_build_vocab_for_streaming(
     weights = [species_weights[name] for name in species_order]
     sample_count = 10000
     windows: List[str] = []
-    for _ in range(sample_count):
+    segments_cache: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}
+    max_attempts = sample_count * 20
+    attempts = 0
+    while len(windows) < sample_count and attempts < max_attempts:
+        attempts += 1
         species_name = random.choices(species_order, weights=weights, k=1)[0]
         record_id, sequence = random.choice(records_by_species[species_name])
-        max_start = len(sequence) - window_bp
-        if max_start < 0:
-            continue
-        start = random.randint(0, max_start)
-        window = sequence[start : start + window_bp]
-        window = sanitize_unknown_bases(window, unknown_base_strategy)
+        if unknown_base_strategy == "skip":
+            key = (species_name, record_id)
+            segments = segments_cache.get(key)
+            if segments is None:
+                segments = find_acgt_segments(sequence, min_length=window_bp)
+                segments_cache[key] = segments
+            if not segments:
+                continue
+            segment_start, segment_end = random.choice(segments)
+            max_start = segment_end - window_bp
+            start = random.randint(segment_start, max_start)
+            window = sequence[start : start + window_bp]
+        else:
+            max_start = len(sequence) - window_bp
+            if max_start < 0:
+                continue
+            start = random.randint(0, max_start)
+            window = sequence[start : start + window_bp]
+            window = sanitize_unknown_bases(window, unknown_base_strategy)
         if reverse_complement_prob > 0 and random.random() < reverse_complement_prob:
             window = reverse_complement(window)
         windows.append(window)
+    if len(windows) < sample_count:
+        LOGGER.warning(
+            "Sampled %d/%d windows for vocab build (strategy=%s)",
+            len(windows),
+            sample_count,
+            unknown_base_strategy,
+        )
 
     if not windows:
         raise ValueError("Failed to sample windows for vocab building")

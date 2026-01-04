@@ -30,10 +30,10 @@ hardware: &hardware
 
 # == MODEL ARCHITECTURE ==
 model: &model
-  embedding_dim: 256
-  transformer_layers: 8
-  transformer_heads: 8
-  transformer_ff_dim: 1024
+  embedding_dim: 384
+  transformer_layers: 12
+  transformer_heads: 12
+  transformer_ff_dim: 1536
   transformer_dropout: 0.12
   use_glu_ffn: true
   glu_activation: "gelu"
@@ -42,13 +42,13 @@ model: &model
   relative_position_max_distance: 128
   use_attention_pool: true
   use_tcn: true
-  tcn_hidden: 256
+  tcn_hidden: 384
   tcn_levels: 5
   tcn_kernel: 3
   multiscale_channels: 64  # Per-kernel channels
   multiscale_kernels: [3, 5, 7, 9, 15]
   lstm_hidden: 192
-  post_cnn_transformer_layers: 4
+  post_cnn_transformer_layers: 6
   kmer: 6
   stage2_kmer: 6
   vocab_size: 4099  # 4096 + 3 special tokens
@@ -63,8 +63,8 @@ features: &features
   use_pstnp: true
   engineered_dim: 288  # 64 + 64 + 96 + 64
   engineered_mlp_hidden: 512
-  engineered_mlp_output: 256
-  fusion_hidden: 384
+  engineered_mlp_output: 384
+  fusion_hidden: 512
   stage1_use_engineered_features: true
   stage1_feature_enable_tnc: true
   stage1_feature_enable_pseeiip: true
@@ -82,8 +82,8 @@ training: &training
   early_stopping_patience: 50
   grad_accum_steps: 8
   grad_clip_norm: 1.0
-  param_norm_warn: 250
-  param_norm_cap: 300
+  param_norm_warn: 400
+  param_norm_cap: 500
   layer_lr_decay: 0.85
   drop_path_rate: 0.1
 
@@ -139,9 +139,12 @@ mlm: &mlm
     - ../data/GCF_000005845.2_ASM584v2_genomic.fna
     - ../data/B_subtilis_genome
     - ../data/S_cerevisiae_genome
-  mlm_species_weights: [0.45, 0.35, 0.20]
+    - ../data/human_genome
+    - ../data/pseudomonas_genome
+    - ../data/japanese_rice_genome
+  mlm_species_weights: [0.45, 0.35, 0.20, 0.20, 0.20, 0.20]
   mlm_steps_per_epoch: 5000
-  mlm_unknown_base_strategy: "random"
+  mlm_unknown_base_strategy: "skip"
   mlm_window_size: 234
   mlm_stride: 20
   mlm_batch_size: 128
@@ -151,17 +154,17 @@ mlm: &mlm
   mlm_kmer: 6
   mlm_vocab_path: ../artifacts/vocabs/mlm_k6_vocab.json
   mlm_encoder_path: ../artifacts/mlm_encoder_k6.pt
-  mlm_embedding_dim: 256
-  mlm_transformer_layers: 8
-  mlm_transformer_heads: 8
-  mlm_transformer_ff_dim: 1024
+  mlm_embedding_dim: 384
+  mlm_transformer_layers: 12
+  mlm_transformer_heads: 12
+  mlm_transformer_ff_dim: 1536
   mlm_transformer_dropout: 0.1
   mlm_tie_weights: true
   mlm_use_output_norm: true
   mlm_use_layer_lr_decay: false
   mlm_layer_lr_decay: 0.9
   mlm_val_ratio: 0.1
-  mlm_val_exclude_patterns: ["mitochond"]
+  mlm_val_exclude_patterns: ["mitochond", "plastid", "chloroplast"]
   mlm_min_val_records_per_species: 1
   mlm_single_record_val_ratio: 0.1
   mlm_grad_accum_steps: 4
