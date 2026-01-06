@@ -198,8 +198,9 @@ def test_stage2_transformer_head():
     # Check finite values
     assert torch.isfinite(output).all(), "Output contains NaN or Inf values"
 
-    # Check probability range
-    assert (output >= 0).all() and (output <= 1).all(), "Output should be in [0, 1] range"
+    # Check probability range (model returns logits)
+    probs = torch.sigmoid(output)
+    assert (probs >= 0).all() and (probs <= 1).all(), "Sigmoid output should be in [0, 1] range"
 
     print(f"GeneWhispererStage2 (transformer): tokens {tokens.shape}, eng {engineered.shape} -> output {output.shape}")
 
@@ -246,8 +247,9 @@ def test_stage2_bilstm_head():
     # Check finite values
     assert torch.isfinite(output).all(), "Output contains NaN or Inf values"
 
-    # Check probability range
-    assert (output >= 0).all() and (output <= 1).all(), "Output should be in [0, 1] range"
+    # Check probability range (model returns logits)
+    probs = torch.sigmoid(output)
+    assert (probs >= 0).all() and (probs <= 1).all(), "Sigmoid output should be in [0, 1] range"
 
     print(f"GeneWhispererStage2 (bilstm): tokens {tokens.shape}, eng {engineered.shape} -> output {output.shape}")
 
@@ -297,8 +299,9 @@ def test_stage2_both_heads():
     # Check finite values
     assert torch.isfinite(output).all(), "Output contains NaN or Inf values"
 
-    # Check probability range
-    assert (output >= 0).all() and (output <= 1).all(), "Output should be in [0, 1] range"
+    # Check probability range (model returns logits)
+    probs = torch.sigmoid(output)
+    assert (probs >= 0).all() and (probs <= 1).all(), "Sigmoid output should be in [0, 1] range"
 
     print(f"GeneWhispererStage2 (both): tokens {tokens.shape}, eng {engineered.shape} -> output {output.shape}")
 

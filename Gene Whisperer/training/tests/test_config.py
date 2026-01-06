@@ -52,7 +52,10 @@ def test_config_hyperparameters() -> bool:
     cfg = load_config(CONFIG_PATH)
 
     checks = [
-        HyperparameterCheck("lr", 0.00005, 0.00003, 0.0001, "Learning rate"),
+        HyperparameterCheck("max_bp_len", 81, 64, 128, "Stage max_bp_len"),
+        HyperparameterCheck("lr", 0.0001, 0.00005, 0.0002, "Learning rate"),
+        HyperparameterCheck("stage1_lr", 0.0001, 0.00005, 0.0002, "Stage 1 learning rate"),
+        HyperparameterCheck("stage2_lr", 0.00005, 0.00002, 0.0001, "Stage 2 learning rate"),
         HyperparameterCheck("label_smoothing", 0.02, 0.0, 0.05, "Label smoothing"),
         HyperparameterCheck("mixup_alpha", 0.1, 0.05, 0.2, "Mixup alpha"),
         HyperparameterCheck("warmup_ratio", 0.10, 0.05, 0.15, "Warmup ratio"),
@@ -61,6 +64,14 @@ def test_config_hyperparameters() -> bool:
         HyperparameterCheck("epochs", 150, 100, 200, "Epochs"),
         HyperparameterCheck("early_stopping_patience", 50, 30, 70, "Early stopping patience"),
         HyperparameterCheck("engineered_dim", 288, 128, 320, "Engineered feature dimension"),
+        HyperparameterCheck("mlm_window_size", 234, 128, 256, "MLM window size"),
+        HyperparameterCheck(
+            "post_cnn_transformer_layers",
+            3,
+            3,
+            3,
+            "Post-CNN transformer layers",
+        ),
     ]
 
     failures: list[str] = []
@@ -109,6 +120,7 @@ def test_new_config_sections() -> bool:
     new_sections = [
         ("ensemble_method", "Ensemble method configuration"),
         ("features", "Feature flags"),
+        ("mlm_data", "MLM data configuration"),
     ]
 
     print("\nNew Config Sections:")
@@ -124,6 +136,20 @@ def test_new_config_sections() -> bool:
             print(f"WARN {desc}: NOT FOUND (optional)")
 
     return True
+
+
+def test_separate_training_phase_settings() -> None:
+    """Ensure stage/MLM settings are separated with backward-compatible root keys."""
+    cfg = load_config(CONFIG_PATH)
+
+    assert cfg.get("max_bp_len") == 81, f"max_bp_len should be 81, got {cfg.get('max_bp_len')}"
+    assert cfg.get("mlm_window_size") == 234, (
+        f"mlm_window_size should be 234, got {cfg.get('mlm_window_size')}"
+    )
+    assert cfg.get("lr") == 0.0001, f"lr should be 0.0001, got {cfg.get('lr')}"
+    assert cfg.get("mlm_lr") == 0.0002, f"mlm_lr should be 0.0002, got {cfg.get('mlm_lr')}"
+    assert cfg.get("stage1_lr") == 0.0001, "stage1_lr should be 0.0001"
+    assert cfg.get("stage2_lr") == 0.00005, "stage2_lr should be 0.00005"
 
 
 def test_mps_optimized_settings() -> bool:
@@ -173,6 +199,8 @@ if __name__ == "__main__":
     all_ok &= _run_check(test_config_hyperparameters)
     print()
     all_ok &= _run_check(test_new_config_sections)
+    print()
+    all_ok &= _run_check(test_separate_training_phase_settings)
     print()
     all_ok &= _run_check(test_mps_optimized_settings)
 

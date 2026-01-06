@@ -110,13 +110,16 @@ def test_mixup_batch_embeddings():
     # Forward pass through forward_from_embeds
     # -------------------------------------------------------------------------
     with torch.no_grad():
-        probs = model.forward_from_embeds(mixed_emb, padding_mask, mixed_engineered)
+        probs, logits = model.forward_from_embeds(
+            mixed_emb, padding_mask, mixed_engineered, return_logits=True
+        )
 
     # Check output shape: model outputs (B, 1) for binary classification
     assert probs.shape == (B, 1), f"probs.shape: expected ({B}, 1), got {probs.shape}"
     print(f"[OK] probs.shape == ({B}, 1)")
 
-    # Sanity check: probs should be valid probabilities
+    # Sanity check: logits are finite and probs are valid probabilities
+    assert torch.isfinite(logits).all(), "Logits contain NaN or Inf values"
     assert (probs >= 0.0).all() and (probs <= 1.0).all(), (
         f"probs out of [0, 1] range: {probs.squeeze().tolist()}"
     )

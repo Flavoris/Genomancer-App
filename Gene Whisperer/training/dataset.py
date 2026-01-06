@@ -269,34 +269,45 @@ def compute_eiip(sequence: str) -> torch.FloatTensor:
     return torch.from_numpy(accum.astype(np.float32))
 
 
-def compute_pseeiip(sequence: str, lag: int = 3) -> torch.FloatTensor:
+def compute_pseeiip(sequence: str) -> torch.FloatTensor:
     """
     Compute PseEIIP (Pseudo Electron-Ion Interaction Potential) features.
-    
-    Uses EIIP values per base and computes auto-correlation of EIIP signal
-    with specified lag. Returns a fixed 64-dim vector.
+
+    Following PROCABLES paper: Returns 64D vector of EIIP-weighted
+    trinucleotide frequencies. Each dimension corresponds to one of
+    64 trinucleotides (AAA=0, AAC=1, ..., TTT=63).
+
+    Args:
+        sequence: DNA sequence string
+    Returns:
+        64D tensor of EIIP-weighted trinucleotide frequencies
     """
     seq = _sanitize_sequence(sequence)
     L = len(seq)
-    if L == 0:
+    if L < 3:
         return torch.zeros(64, dtype=torch.float32)
 
-    # Basic EIIP sequence
-    eiip_seq = np.array([EIIP_VALUES.get(b, 0.0) for b in seq], dtype=np.float32)
+    features = np.zeros(64, dtype=np.float32)
+    total = 0
 
-    # PseEIIP: auto-correlation of EIIP signal with a lag
-    features = []
-    for d in range(1, lag + 1):
-        if L > d:
-            corr = (eiip_seq[:-d] * eiip_seq[d:]).mean()
-        else:
-            corr = 0.0
-        features.append(corr)
-    
-    # Pad to 64 dims
-    vec = np.zeros(64, dtype=np.float32)
-    vec[:len(features)] = features
-    return torch.from_numpy(vec)
+    for i in range(L - 2):
+        trinuc = seq[i:i+3]
+        if all(b in BASES_SET for b in trinuc):
+            # Trinucleotide index (AAA=0, AAC=1, ..., TTT=63)
+            idx = (BASE_TO_IDX[trinuc[0]] * 16 +
+                   BASE_TO_IDX[trinuc[1]] * 4 +
+                   BASE_TO_IDX[trinuc[2]])
+            # EIIP weight for this trinucleotide (average of 3 bases)
+            eiip_weight = (EIIP_VALUES[trinuc[0]] +
+                          EIIP_VALUES[trinuc[1]] +
+                          EIIP_VALUES[trinuc[2]]) / 3.0
+            features[idx] += eiip_weight
+            total += 1
+
+    if total > 0:
+        features /= total
+
+    return torch.from_numpy(features)
 
 
 def compute_cksnap(sequence: str, max_gap: int = 5) -> torch.FloatTensor:
@@ -1040,6 +1051,15 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
 
 
 if __name__ == "__main__":
+    # Test PseEIIP fix
+    test_seq = "TTGACAATTTTTCTTGATAATGTAACTCACTTAATCTTGATAAATGCTATAATGTGTCGAAAAAAAAAAAAAAAAAAAA"  # 81bp
+    pseeiip = compute_pseeiip(test_seq)
+    non_zero = (pseeiip != 0).sum().item()
+    print(f"PseEIIP test: {non_zero} non-zero elements (should be 25-40, NOT 3)")
+    assert non_zero > 20, f"FAILED: PseEIIP still broken, only {non_zero} non-zero elements"
+    assert pseeiip.shape[0] == 64, f"FAILED: Wrong shape {pseeiip.shape}"
+    print("✓ PseEIIP fix validated successfully!")
+
     try:
         import yaml  # type: ignore
     except ImportError as exc:

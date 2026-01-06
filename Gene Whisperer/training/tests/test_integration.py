@@ -43,7 +43,7 @@ def test_full_training_step():
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=0.00005,  # NEW lower LR
+        lr=0.0001,  # Match updated stage training LR
         weight_decay=0.01,  # NEW lighter decay
     )
 

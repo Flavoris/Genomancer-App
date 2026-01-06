@@ -5,9 +5,9 @@
 # == RANDOM SEED ==
 seed: 1337
 
-# == DATA SETTINGS ==
+# == DATA SETTINGS (Stage 1/2 Training) ==
 data: &data
-  max_bp_len: 234
+  max_bp_len: 81  # Changed from 234 - matches benchmark dataset
   batch_size: 32
   delimiter: "\t"
   train_val_split: 0.9
@@ -20,6 +20,12 @@ data: &data
   stage2_strength_negative: 0
   cache_engineered_features: false
   cache_tokens: false
+
+# == MLM-SPECIFIC DATA SETTINGS ==
+mlm_data: &mlm_data
+  mlm_max_bp_len: 234  # MLM can use longer sequences for pretraining
+  mlm_batch_size: 128
+  mlm_window_size: 234  # Should match mlm_max_bp_len
 
 # == DATALOADER AND HARDWARE ==
 hardware: &hardware
@@ -48,7 +54,7 @@ model: &model
   multiscale_channels: 64  # Per-kernel channels
   multiscale_kernels: [3, 5, 7, 9, 15]
   lstm_hidden: 192
-  post_cnn_transformer_layers: 6
+  post_cnn_transformer_layers: 3  # Reduced from 6 to keep CNN/TCN features prominent
   kmer: 6
   stage2_kmer: 6
   vocab_size: 4099  # 4096 + 3 special tokens
@@ -71,11 +77,13 @@ features: &features
   stage1_feature_enable_cksnap: true
   stage1_feature_enable_pstnp: true
 
-# == TRAINING SETTINGS ==
+# == TRAINING SETTINGS (Stage 1/2) ==
 training: &training
   optimizer: "adamw"
   optimizer_foreach: true
-  lr: 0.00005
+  lr: 0.0001  # Increased from 0.00005 - better for fine-tuning
+  stage1_lr: 0.0001  # Explicit stage 1 learning rate
+  stage2_lr: 0.00005  # Stage 2 can use lower LR for fine-tuning
   weight_decay: 0.01
   warmup_ratio: 0.10
   epochs: 150
@@ -98,7 +106,7 @@ loss: &loss
 augmentation: &augmentation
   use_mixup: true
   mixup_alpha: 0.1
-  stage1_reverse_complement_prob: 0.0
+  stage1_reverse_complement_prob: 0.5  # DNA is double-stranded
 
 # == STOCHASTIC WEIGHT AVERAGING ==
 swa: &swa
@@ -145,10 +153,11 @@ mlm: &mlm
   mlm_species_weights: [0.45, 0.35, 0.20, 0.20, 0.20, 0.20]
   mlm_steps_per_epoch: 5000
   mlm_unknown_base_strategy: "skip"
-  mlm_window_size: 234
+  mlm_window_size: 234  # MLM window size (can be different from stage max_bp_len)
   mlm_stride: 20
   mlm_batch_size: 128
   mlm_epochs: 200
+  # MLM-specific learning rate (separate from stage training)
   mlm_lr: 0.0002
   mlm_weight_decay: 0.01
   mlm_kmer: 6
@@ -271,6 +280,7 @@ distill:
 
 # == MERGED ROOT KEYS (BACKWARD COMPATIBILITY) ==
 <<: *data
+<<: *mlm_data
 <<: *hardware
 <<: *model
 <<: *features

@@ -2216,7 +2216,8 @@ def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], KmerVocabulary]:
     fasta_path = _resolve_cfg_path(cfg.get("mlm_fasta_path"), base_dir=script_dir)
     if not fasta_path.exists():
         raise FileNotFoundError(f"FASTA file not found at {fasta_path}")
-    window_size = int(cfg.get("mlm_window_size", 81))
+    # Use MLM-specific window size, fallback to max_bp_len for backward compatibility
+    window_size = int(cfg.get("mlm_window_size", cfg.get("max_bp_len", 234)))
     stride = int(cfg.get("mlm_stride", 20))
     k = int(cfg.get("mlm_kmer", 3))
     unknown_base_strategy = _normalize_unknown_base_strategy(cfg.get("mlm_unknown_base_strategy"))
@@ -2722,7 +2723,8 @@ def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
     exclude_patterns = cfg.get("mlm_val_exclude_patterns", ["mitochond"])
     min_val_records = int(cfg.get("mlm_min_val_records_per_species", 1))
     seed = int(cfg.get("seed", 1337) or 1337)
-    window_bp = int(cfg.get("mlm_window_size", 81))
+    # Use MLM-specific window size, fallback to max_bp_len for backward compatibility
+    window_bp = int(cfg.get("mlm_window_size", cfg.get("max_bp_len", 234)))
     train_corpus, val_corpus, species_names, split_counts = _split_mlm_corpus_by_record(
         fasta_paths,
         window_bp=window_bp,
@@ -3395,6 +3397,19 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     if overrides:
         cfg_run.update(overrides)
 
+    # Log MLM-specific configuration settings
+    # Use MLM-specific settings with fallbacks for backward compatibility
+    _max_bp_len = int(cfg_run.get("mlm_window_size", cfg_run.get("max_bp_len", 234)))
+    _lr = float(cfg_run.get("mlm_lr", cfg_run.get("lr", 2e-4)))
+    _batch_size = int(cfg_run.get("mlm_batch_size", cfg_run.get("batch_size", 128)))
+    LOGGER.info("=" * 60)
+    LOGGER.info("MLM PRETRAINING CONFIGURATION")
+    LOGGER.info("=" * 60)
+    LOGGER.info("Window size (max_bp_len): %d", _max_bp_len)
+    LOGGER.info("Learning rate: %.6f", _lr)
+    LOGGER.info("Batch size: %d", _batch_size)
+    LOGGER.info("=" * 60)
+
     script_dir = Path(__file__).resolve().parent
     config_path_value = cfg_run.get("_config_path") or cfg_run.get("config_path")
     config_id = str(config_path_value) if config_path_value else "<in-memory>"
@@ -3490,14 +3505,15 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         "transformer_ff_dim": int(cfg_run.get("mlm_transformer_ff_dim", cfg_run.get("transformer_ff_dim", 1024))),
         "transformer_dropout": float(cfg_run.get("mlm_transformer_dropout", cfg_run.get("transformer_dropout", 0.1))),
         # Optimizer
-        "lr": float(cfg_run.get("mlm_lr", 3e-4)),
+        # Use MLM-specific learning rate
+        "lr": float(cfg_run.get("mlm_lr", cfg_run.get("lr", 2e-4))),
         "weight_decay": float(cfg_run.get("mlm_weight_decay", 0.01)),
         # MLM-specific
         "mask_prob": mask_prob,
         "max_span_len": 3,  # Fixed in mask_tokens_span
         # Data
         "batch_size": int(cfg_run.get("mlm_batch_size", 128)),
-        "max_bp_len": int(cfg_run.get("mlm_window_size", 81)),
+        "max_bp_len": int(cfg_run.get("mlm_window_size", cfg_run.get("max_bp_len", 234))),
         "kmer": int(cfg_run.get("mlm_kmer", 3)),
         "streaming_enabled": use_streaming,
         "mlm_fasta_path": cfg_run.get("mlm_fasta_path"),
@@ -3590,7 +3606,8 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             raise ValueError(f"mlm_steps_per_epoch must be > 0, got {steps_per_epoch}")
 
         fasta_paths = _resolve_mlm_fasta_paths(cfg_run, base_dir=script_dir)
-        window_bp = int(cfg_run.get("mlm_window_size", 81))
+        # Use MLM-specific window size, fallback to max_bp_len for backward compatibility
+        window_bp = int(cfg_run.get("mlm_window_size", cfg_run.get("max_bp_len", 234)))
         single_record_val_ratio = float(cfg_run.get("mlm_single_record_val_ratio", val_ratio))
         exclude_patterns = cfg_run.get("mlm_val_exclude_patterns", ["mitochond"])
         min_val_records = int(cfg_run.get("mlm_min_val_records_per_species", 1))
@@ -3717,7 +3734,8 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 total_bp = sum(len(seq) for _, seq in records)
                 LOGGER.info("Ablation enabled: using first %d bp from FASTA", total_bp)
 
-        window_size = int(cfg_run.get("mlm_window_size", 81))
+        # Use MLM-specific window size, fallback to max_bp_len for backward compatibility
+        window_size = int(cfg_run.get("mlm_window_size", cfg_run.get("max_bp_len", 234)))
         stride = int(cfg_run.get("mlm_stride", 20))
         k = int(cfg_run.get("mlm_kmer", 3))
         include_reverse_complements = reverse_complement_prob > 0
@@ -4155,7 +4173,8 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             "params": total_params,
         }
 
-    lr = float(cfg_run.get("mlm_lr", 3e-4))
+    # Use MLM-specific learning rate
+    lr = float(cfg_run.get("mlm_lr", cfg_run.get("lr", 2e-4)))
     weight_decay = float(cfg_run.get("mlm_weight_decay", 0.01))
     lr_decay = float(cfg_run.get("mlm_layer_lr_decay", 0.9))
     use_layer_lr_decay = bool(cfg_run.get("mlm_use_layer_lr_decay", True))
@@ -4996,14 +5015,15 @@ def main() -> None:
         "transformer_ff_dim": int(cfg.get("mlm_transformer_ff_dim", cfg.get("transformer_ff_dim", 1024))),
         "transformer_dropout": float(cfg.get("mlm_transformer_dropout", cfg.get("transformer_dropout", 0.1))),
         # Optimizer
-        "lr": float(cfg.get("mlm_lr", 3e-4)),
+        # Use MLM-specific learning rate
+        "lr": float(cfg.get("mlm_lr", cfg.get("lr", 2e-4))),
         "weight_decay": float(cfg.get("mlm_weight_decay", 0.01)),
         # MLM-specific
         "mask_prob": 0.15,  # Fixed in code
         "max_span_len": 3,   # Fixed in mask_tokens_span
         # Data
         "batch_size": int(cfg.get("mlm_batch_size", 128)),
-        "max_bp_len": int(cfg.get("mlm_window_size", 81)),
+        "max_bp_len": int(cfg.get("mlm_window_size", cfg.get("max_bp_len", 234))),
         "kmer": int(cfg.get("mlm_kmer", 3)),
         "include_reverse_complements": bool(cfg.get("include_reverse_complements", cfg.get("mlm_include_reverse_complements", False))),
         # Training
@@ -5354,7 +5374,8 @@ def main() -> None:
         return
     
     # Learning rate and optimizer settings
-    lr = float(cfg.get("mlm_lr", 3e-4))  # Base LR 3e-4 for stable MLM pretraining
+    # Use MLM-specific learning rate
+    lr = float(cfg.get("mlm_lr", cfg.get("lr", 2e-4)))  # Base LR 3e-4 for stable MLM pretraining
     weight_decay = float(cfg.get("mlm_weight_decay", 0.01))
     lr_decay = float(cfg.get("mlm_layer_lr_decay", 0.9))  # Layer-wise LR decay
     use_layer_lr_decay = bool(cfg.get("mlm_use_layer_lr_decay", True))

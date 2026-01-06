@@ -1,65 +1,38 @@
-Complete Updated Config
+Final Smoke Test Before Full Retraining
 
-Create a complete updated config.yaml that includes all optimizations:
-1. Soft voting ensemble (from previous prompts)
-2. Expanded features (CKSNAP + PSTNP = 288 dims)
-3. Optimized hyperparameters
-4. DNABERT-style contiguous masking
-5. Architecture enhancements (RelativePositionBias + GLU FFN)
+Before running full retraining on Google Colab, I want to run a quick smoke test to verify everything works end-to-end.
 
-Please create the full config with clear section comments:
-```yaml
-# Gene Whisperer Configuration v4.0
-# Includes all optimizations for 90%+ accuracy target
-
-# =============================================================================
-# MODEL ARCHITECTURE
-# =============================================================================
-model:
-  embedding_dim: 256
-  num_layers: 8
-  num_heads: 8
-  ff_dim: 1024
-  dropout: 0.12
-  
-  # Multi-scale CNN
-  use_multi_scale_cnn: true
-  cnn_channels: 256
-  cnn_kernel_sizes: [3, 5, 7, 9, 15]
-  
-  # TCN (Temporal Convolutional Network)
-  use_tcn: true
-  tcn_hidden: 256
-  tcn_levels: 5  # Increased from 4
-  tcn_kernel_size: 3
-  
-  # Post-CNN Transformer
-  post_cnn_transformer_layers: 4  # Increased from 3
-  
-  # NEW: Architecture Enhancements
-  use_relative_position_bias: true
-  relative_position_num_buckets: 32
-  relative_position_max_distance: 128
-  use_glu_ffn: true
-  glu_activation: "gelu"
-
-# =============================================================================
-# ENGINEERED FEATURES
-# =============================================================================
-features:
-  use_tnc: true           # Trinucleotide Composition (64 dims)
-  use_pseeiip: true       # Pseudo Electron-Ion Potential (64 dims)
-  use_cksnap: true        # K-Spaced Nucleotide Pairs (96 dims)
-  use_pstnp: true         # Position-Specific Trinucleotide (64 dims)
-  
-  engineered_dim: 288     # Total: 64 + 64 + 96 + 64
-  engineered_mlp_hidden: 512
-  engineered_mlp_output: 256
-  
-  # Fusion
-  fusion_hidden: 384
-
-# ... continue with all sections
+**Run this command:**
+```bash
+python train_stage1.py --config config.yaml
 ```
 
-Include all MLM pretraining, training, ensemble, and hardware-specific settings.
+**Check the logs for these key indicators:**
+
+1. **Correct max_bp_len:**
+   - Should see: "Max BP length: 81" (not 234)
+
+2. **Correct learning rate:**
+   - Should see: "Learning rate: 0.0001" or similar for stage 1
+
+3. **Engineered features dimension:**
+   - Should see: "engineered_dim=288" or similar
+
+4. **Reverse complement enabled:**
+   - Should see augmentation logs showing reverse complement is active
+
+5. **Post-CNN transformer layers:**
+   - Model summary should show 3 layers (not 6)
+
+**If training starts successfully and first few batches run without errors, the fixes are working.**
+
+**Optional: Run a quick ablation (few epochs) to verify accuracy is improving:**
+```yaml
+# Temporarily add to config.yaml for quick test:
+ablation:
+  enabled: true
+  stage1_epochs: 5
+  stage1_max_steps: 100
+```
+
+Then check if validation accuracy is already showing improvement over your previous 84-85% baseline.

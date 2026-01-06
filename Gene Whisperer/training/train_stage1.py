@@ -56,6 +56,7 @@ from dataset import (
 from model import GeneWhispererStage1, DNAEncoder, MultiScaleEnsemble
 from numerics import cap_model_param_norm_
 from seed_utils import set_global_seed
+from stage1_settings import log_stage1_training_configuration, resolve_stage1_lr
 
 LOGGER = logging.getLogger("gene_whisperer.stage1")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -1337,9 +1338,20 @@ def train_multi_scale_ensemble(
     if stage1_use_swa:
         LOGGER.warning("SWA disabled in multi-scale mode")
 
+    max_bp_len = int(cfg_run.get("max_bp_len", 81))
+    lr = resolve_stage1_lr(cfg_run)
+
     script_dir = Path(__file__).resolve().parent
     train_loader, val_loader, vocabs = _build_multiscale_dataloaders(
         cfg_run, kmers, device, script_dir
+    )
+
+    batch_size = train_loader.batch_size or int(cfg_run.get("batch_size", 64))
+    log_stage1_training_configuration(
+        max_bp_len=max_bp_len,
+        lr=lr,
+        batch_size=batch_size,
+        logger=LOGGER,
     )
 
     models: Dict[int, GeneWhispererStage1] = {}
@@ -1375,7 +1387,6 @@ def train_multi_scale_ensemble(
         learnable_weights=bool(cfg_run.get("ensemble_learn_weights", False)),
     ).to(device)
 
-    lr = float(cfg_run.get("lr", 2e-4))
     weight_decay = float(cfg_run.get("weight_decay", 0.02))
     optimizer_foreach = bool(cfg_run.get("optimizer_foreach", True))
     optimizer = torch.optim.AdamW(
@@ -1869,6 +1880,9 @@ def mixup_batch_embeddings(
         mask_a = tokens.eq(pad_id)
         mask_b = tokens[index].eq(pad_id)
         padding_mask = mask_a | mask_b
+        if padding_mask.any():
+            # Keep fully-padded positions zeroed after mixing.
+            mixed_embeds = mixed_embeds.masked_fill(padding_mask.unsqueeze(-1), 0.0)
     else:
         padding_mask = None
 
@@ -3050,6 +3064,9 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     stage1_max_train_samples = ablation_cfg.get("stage1_max_train_samples") if ablation_enabled else None
     stage1_max_val_samples = ablation_cfg.get("stage1_max_val_samples") if ablation_enabled else None
 
+    max_bp_len = int(cfg_run.get("max_bp_len", 81))
+    lr = resolve_stage1_lr(cfg_run)
+
     # =========================================================================
     # Log resolved hyperparameters to runs/<timestamp>/resolved_config.json
     # =========================================================================
@@ -3082,11 +3099,11 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "transformer_ff_dim": int(cfg_run.get("transformer_ff_dim", 1024)),
         "transformer_dropout": float(cfg_run.get("transformer_dropout", 0.15)),
         # Optimizer
-        "lr": float(cfg_run.get("lr", 2e-4)),
+        "lr": lr,
         "weight_decay": float(cfg_run.get("weight_decay", 0.02)),
         # Data
         "batch_size": int(cfg_run.get("batch_size", 32)),
-        "max_bp_len": int(cfg_run.get("max_bp_len", 81)),
+        "max_bp_len": max_bp_len,
         "kmer": int(cfg_run.get("kmer", 3)),
         # Engineered features
         "stage1_use_engineered_features": bool(cfg_run.get("stage1_use_engineered_features", True)),
@@ -3195,6 +3212,14 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     dataloaders = build_dataloaders(cfg_run)
     train_loader = dataloaders["stage1"]["train"]
     val_loader = dataloaders["stage1"]["val"]
+
+    batch_size = train_loader.batch_size or int(cfg_run.get("batch_size", 64))
+    log_stage1_training_configuration(
+        max_bp_len=max_bp_len,
+        lr=lr,
+        batch_size=batch_size,
+        logger=LOGGER,
+    )
     
     # Model configuration (enhanced defaults)
     embedding_dim = int(cfg_run.get("embedding_dim", 192))
@@ -3263,7 +3288,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         # Stochastic depth rate (effective Stage 1 value)
         drop_path_rate=stage1_drop_path_rate,
         # Positional embedding max length
-        max_seq_len=int(cfg_run.get("max_bp_len", 81)) - kmer + 1,
+        max_seq_len=max_bp_len - kmer + 1,
     ).to(device)
     
     # Log architecture configuration
@@ -3362,7 +3387,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         json.dump(resolved_config, f, indent=2)
 
     # Optimizer with layer-wise learning rate decay
-    lr = float(cfg_run.get("lr", 2e-4))
     weight_decay = float(cfg_run.get("weight_decay", 0.02))
     layer_lr_decay = float(cfg_run.get("layer_lr_decay", 0.8))
     optimizer_foreach = bool(cfg_run.get("optimizer_foreach", True))
