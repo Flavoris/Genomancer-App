@@ -25,6 +25,7 @@ Thumbs.db
 # Training artifacts (large files)
 *.pt
 !Gene Whisperer/artifacts/**/*.pt
+Gene Whisperer/artifacts/checkpoints/
 
 # Logs
 *.log
