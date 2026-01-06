@@ -61,6 +61,7 @@ from numerics import (
 )
 from amp_utils import get_amp_context, log_amp_status
 from genome_io import read_fasta_records, sanitize_unknown_bases, find_acgt_segments
+from checkpoint_utils import prune_step_checkpoints
 
 LOGGER = logging.getLogger("gene_whisperer.pretrain_mlm")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -3481,7 +3482,31 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("Checkpoints directory: %s", checkpoints_dir)
 
     # Checkpoint save frequency
-    save_every_steps = int(cfg_run.get("save_every_steps", 500))
+    save_every_steps_raw = cfg_run.get("save_every_steps", 500)
+    try:
+        save_every_steps = int(save_every_steps_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"save_every_steps must be an int, got {save_every_steps_raw!r}") from exc
+    if save_every_steps < 0:
+        raise ValueError(f"save_every_steps must be >= 0, got {save_every_steps}")
+
+    checkpoint_keep_last_raw = cfg_run.get("mlm_checkpoint_keep_last", 2)
+    if checkpoint_keep_last_raw is None:
+        checkpoint_keep_last = 2
+    else:
+        try:
+            checkpoint_keep_last = int(checkpoint_keep_last_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"mlm_checkpoint_keep_last must be an int, got {checkpoint_keep_last_raw!r}"
+            ) from exc
+    if checkpoint_keep_last < 1:
+        LOGGER.warning(
+            "mlm_checkpoint_keep_last=%s is invalid; defaulting to 1",
+            checkpoint_keep_last_raw,
+        )
+        checkpoint_keep_last = 1
+
     resume_path_value = cfg_run.get("resume_path")
 
     length_curriculum_config = LengthCurriculumConfig.from_config(cfg_run)
@@ -3534,6 +3559,8 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         "final_lr_ratio": float(cfg_run.get("mlm_final_lr_ratio", 0.1)),
         "lr_log_interval": int(cfg_run.get("mlm_lr_log_interval", 50)),
         "patience": int(cfg_run.get("mlm_patience", 30)),
+        "save_every_steps": save_every_steps,
+        "checkpoint_keep_last": checkpoint_keep_last,
         "val_ratio": float(cfg_run.get("mlm_val_ratio", 0.1)),
         # Model options
         "tie_weights": bool(cfg_run.get("mlm_tie_weights", True)),
@@ -4385,6 +4412,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         return checkpoint
 
     # Resume from checkpoint if specified
+    resume_ckpt_path: Optional[Path] = None
     start_epoch = 1
     if resume_path_value is not None:
         resume_ckpt_path = Path(resume_path_value).expanduser()
@@ -4687,6 +4715,18 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                         best_val_acc=best_val_acc,
                         patience_counter=patience_counter,
                     )
+                    removed = prune_step_checkpoints(
+                        checkpoints_dir,
+                        checkpoint_keep_last,
+                        keep_paths=[resume_ckpt_path] if resume_ckpt_path else None,
+                        logger=LOGGER,
+                    )
+                    if removed:
+                        LOGGER.info(
+                            "Pruned %d old training checkpoints (keep_last=%d)",
+                            len(removed),
+                            checkpoint_keep_last,
+                        )
 
                 # Enhanced step logging with tokens/sec, elapsed time, ETA
                 if global_step % lr_log_interval == 0 or global_step == 1:
@@ -4888,6 +4928,18 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     final_named_path = checkpoints_dir / "checkpoint_final.pt"
     shutil.copy(final_ckpt_path, final_named_path)
     LOGGER.info("Saved final checkpoint: %s", final_named_path)
+    removed = prune_step_checkpoints(
+        checkpoints_dir,
+        checkpoint_keep_last,
+        keep_paths=[resume_ckpt_path] if resume_ckpt_path else None,
+        logger=LOGGER,
+    )
+    if removed:
+        LOGGER.info(
+            "Pruned %d old training checkpoints (keep_last=%d)",
+            len(removed),
+            checkpoint_keep_last,
+        )
 
     # Copy encoder to output_dir as well (if output_dir is different from encoder_path's parent)
     output_encoder_path = output_dir / f"mlm_encoder_k{vocab.k}.pt"
@@ -4953,8 +5005,10 @@ def main() -> None:
     parser.add_argument("--resume_path", type=str, default=None,
                         help="Path to a checkpoint to resume training from. "
                              "Restores model, optimizer, scheduler, scaler, epoch, and global_step.")
-    parser.add_argument("--save_every_steps", type=int, default=500,
+    parser.add_argument("--save_every_steps", type=int, default=None,
                         help="Save a checkpoint every N optimizer steps (default: 500).")
+    parser.add_argument("--checkpoint_keep_last", type=int, default=None,
+                        help="Keep only the most recent N training checkpoints (default: 2).")
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -4989,7 +5043,10 @@ def main() -> None:
         overrides["output_dir"] = args.output_dir
     if args.resume_path is not None:
         overrides["resume_path"] = args.resume_path
-    overrides["save_every_steps"] = args.save_every_steps
+    if args.save_every_steps is not None:
+        overrides["save_every_steps"] = args.save_every_steps
+    if args.checkpoint_keep_last is not None:
+        overrides["mlm_checkpoint_keep_last"] = args.checkpoint_keep_last
 
     _ = run_mlm_pretrain(cfg, overrides=overrides)
     return

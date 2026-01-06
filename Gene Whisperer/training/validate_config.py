@@ -139,6 +139,7 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     "mlm_grad_accum_steps": int,
     "mlm_warmup_ratio": float,
     "mlm_patience": int,
+    "mlm_checkpoint_keep_last": int,
     
     # Checkpoints
     "stage1_checkpoint_name": (str, type(None)),  # Can be null

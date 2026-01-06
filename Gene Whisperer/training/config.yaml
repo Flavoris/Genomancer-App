@@ -181,6 +181,7 @@ mlm: &mlm
   mlm_final_lr_ratio: 0.1
   mlm_lr_log_interval: 50
   mlm_patience: 30
+  mlm_checkpoint_keep_last: 2
   mlm_mask_prob: 0.15
   mlm_masking:
     # Contiguous span masking (DNABERT-style)

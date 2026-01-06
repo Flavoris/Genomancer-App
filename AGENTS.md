@@ -21,3 +21,5 @@ Split code up into separate files with meaningful names, avoid having large file
 Fix any test or type errors until the whole suite is green.
 
 Add or update tests for the code you change, even if nobody asked.
+
+Remember what I have told you about this project.
