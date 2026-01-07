@@ -22,6 +22,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Media
+*.mp4
+
 # Training artifacts (large files)
 *.pt
 !Gene Whisperer/artifacts/**/*.pt

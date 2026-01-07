@@ -60,21 +60,34 @@ echo "  Repository root: $REPO_ROOT"
 echo ""
 
 # -----------------------------------------------------------------------------
-# Install Git LFS and Pull Large Files
+# Install Git LFS and Pull Large Files (Optional)
 # -----------------------------------------------------------------------------
 echo "[2/8] Setting up Git LFS..."
 
-# Check if git-lfs is installed
-if ! command -v git-lfs &> /dev/null; then
-    echo "  Installing Git LFS..."
-    apt-get update -qq && apt-get install -qq -y git-lfs
-fi
+SKIP_LFS_PULL="${SKIP_LFS_PULL:-0}"
 
-# Initialize LFS and pull actual file content
-git lfs install --skip-smudge 2>/dev/null || true
-echo "  Pulling LFS files (genome data, checkpoints)..."
-git lfs pull
-echo "  Git LFS setup complete."
+if [[ "$SKIP_LFS_PULL" == "1" ]]; then
+    echo "  SKIP_LFS_PULL=1 -> skipping Git LFS setup."
+else
+    if grep -q "filter=lfs" "$REPO_ROOT/.gitattributes" 2>/dev/null; then
+        # Check if git-lfs is installed
+        if ! command -v git-lfs &> /dev/null; then
+            echo "  Installing Git LFS..."
+            apt-get update -qq && apt-get install -qq -y git-lfs
+        fi
+
+        # Initialize LFS and pull actual file content
+        git lfs install --skip-smudge 2>/dev/null || true
+        echo "  Pulling LFS files (genome data, checkpoints)..."
+        if ! git lfs pull; then
+            echo "  WARNING: Git LFS pull failed; continuing without LFS files."
+            echo "  If you need weights, copy them from Drive into Gene Whisperer/artifacts."
+        fi
+        echo "  Git LFS setup complete."
+    else
+        echo "  No LFS filters configured; skipping Git LFS pull."
+    fi
+fi
 echo ""
 
 # -----------------------------------------------------------------------------

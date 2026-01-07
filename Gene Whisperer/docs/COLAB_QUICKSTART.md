@@ -19,6 +19,9 @@ drive.mount('/content/drive')
 # Run bootstrap (installs requirements, checks GPU)
 %cd /content/Genomancer
 !bash "Gene Whisperer/scripts/colab_bootstrap.sh"
+
+# If you store weights on Drive and want to skip Git LFS downloads:
+# !SKIP_LFS_PULL=1 bash "Gene Whisperer/scripts/colab_bootstrap.sh"
 ```
 
 ---
@@ -132,3 +135,13 @@ To continue from a checkpoint manually:
 3. Checkpoints from interrupted runs are automatically saved to Drive
 
 When `--resume` support is added, scripts will automatically resume from the latest checkpoint found in `<drive_dir>/<run_name>/checkpoints/`.
+
+### Git LFS Quota Errors
+
+If you see LFS errors or checkout failures, rerun bootstrap with:
+
+```python
+!SKIP_LFS_PULL=1 bash "Gene Whisperer/scripts/colab_bootstrap.sh"
+```
+
+Then copy your Drive checkpoints into `Gene Whisperer/artifacts/` or `Gene Whisperer/artifacts/checkpoints/` as needed.
