@@ -21,3 +21,11 @@ def test_bootstrap_supports_skip_lfs_pull() -> None:
     content = script_path.read_text(encoding="utf-8")
     assert "SKIP_LFS_PULL" in content
     assert "git lfs pull" in content
+
+
+def test_bootstrap_repairs_reference_genomes() -> None:
+    """Ensure the bootstrap script can repair small reference genomes."""
+    script_path = _repo_root() / "Gene Whisperer" / "scripts" / "colab_bootstrap.sh"
+    content = script_path.read_text(encoding="utf-8")
+    assert "ensure_reference_genomes.py" in content
+    assert "SKIP_REFERENCE_GENOME_FIX" in content

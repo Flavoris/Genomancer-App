@@ -145,3 +145,12 @@ If you see LFS errors or checkout failures, rerun bootstrap with:
 ```
 
 Then copy your Drive checkpoints into `Gene Whisperer/artifacts/` or `Gene Whisperer/artifacts/checkpoints/` as needed.
+
+### Small Reference Genome Files
+
+If `B_subtilis_genome` or `S_cerevisiae_genome` show up as ~100-byte files, they were checked out as placeholders.
+The bootstrap script now repairs these by re-downloading clean FASTA files. To skip that step, run:
+
+```python
+!SKIP_REFERENCE_GENOME_FIX=1 bash "Gene Whisperer/scripts/colab_bootstrap.sh"
+```

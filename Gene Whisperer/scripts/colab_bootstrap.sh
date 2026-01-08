@@ -147,12 +147,24 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
-# Verify Genome Files
+# Ensure and Verify Genome Files
 # -----------------------------------------------------------------------------
-echo "[6/8] Verifying genome files..."
+echo "[6/8] Ensuring genome files are valid..."
 echo ""
 
 DATA_DIR="$GW_DIR/data"
+
+REFERENCE_GENOME_SCRIPT="$REPO_ROOT/Gene Whisperer/scripts/ensure_reference_genomes.py"
+if [[ -f "$REFERENCE_GENOME_SCRIPT" ]]; then
+    if [[ "${SKIP_REFERENCE_GENOME_FIX:-0}" == "1" ]]; then
+        echo "  SKIP_REFERENCE_GENOME_FIX=1 -> skipping reference genome repair."
+    else
+        python "$REFERENCE_GENOME_SCRIPT" --data-dir "$DATA_DIR"
+    fi
+else
+    echo "  WARNING: Reference genome repair script not found: $REFERENCE_GENOME_SCRIPT"
+fi
+echo ""
 
 # Expected genome files for MLM pretraining
 declare -a EXPECTED_GENOMES=(
