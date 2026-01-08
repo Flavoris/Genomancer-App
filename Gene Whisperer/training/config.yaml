@@ -23,9 +23,9 @@ data: &data
 
 # == MLM-SPECIFIC DATA SETTINGS ==
 mlm_data: &mlm_data
-  mlm_max_bp_len: 81  # Aligned with stage max_bp_len for msBERT settings
+  mlm_max_bp_len: 234  # Aligned with stage max_bp_len for msBERT settings
   mlm_batch_size: 128
-  mlm_window_size: 81  # Should match mlm_max_bp_len
+  mlm_window_size: 234  # Should match mlm_max_bp_len
 
 # == DATALOADER AND HARDWARE ==
 hardware: &hardware
