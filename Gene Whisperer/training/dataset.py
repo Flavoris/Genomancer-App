@@ -1,12 +1,12 @@
 """Dataset utilities for Gene Whisperer promoter models."""
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import math
 import os
 import random
-from itertools import product
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -33,9 +33,9 @@ torch.manual_seed(RANDOM_SEED)
 
 BASES: Tuple[str, ...] = ("A", "C", "G", "T")
 BASES_SET: set = {"A", "C", "G", "T"}  # For fast membership checks
-TRI_KMER_VOCAB: List[str] = ["".join(kmer) for kmer in product(BASES, repeat=3)]
+TRI_KMER_VOCAB: List[str] = ["".join(kmer) for kmer in itertools.product(BASES, repeat=3)]
 TRI_KMER_TO_IDX: Dict[str, int] = {kmer: idx for idx, kmer in enumerate(TRI_KMER_VOCAB)}
-DI_KMER_VOCAB: List[str] = ["".join(kmer) for kmer in product(BASES, repeat=2)]
+DI_KMER_VOCAB: List[str] = ["".join(kmer) for kmer in itertools.product(BASES, repeat=2)]
 DI_KMER_TO_IDX: Dict[str, int] = {kmer: idx for idx, kmer in enumerate(DI_KMER_VOCAB)}
 BASE_TO_IDX: Dict[str, int] = {base: idx for idx, base in enumerate(BASES)}
 PSTNP_CORE_WEIGHT = 2.0
@@ -273,39 +273,38 @@ def compute_pseeiip(sequence: str) -> torch.FloatTensor:
     """
     Compute PseEIIP (Pseudo Electron-Ion Interaction Potential) features.
 
-    Following PROCABLES paper: Returns 64D vector of EIIP-weighted
-    trinucleotide frequencies. Each dimension corresponds to one of
-    64 trinucleotides (AAA=0, AAC=1, ..., TTT=63).
+    Following PROCABLES paper:
+    V[i] = EIIP_trinuc[i] * frequency[i]
 
-    Args:
-        sequence: DNA sequence string
-    Returns:
-        64D tensor of EIIP-weighted trinucleotide frequencies
+    Where EIIP_trinuc is the SUM of three nucleotide EIIP values.
     """
     seq = _sanitize_sequence(sequence)
     L = len(seq)
+
     if L < 3:
         return torch.zeros(64, dtype=torch.float32)
 
-    features = np.zeros(64, dtype=np.float32)
-    total = 0
-
+    # Count trinucleotides.
+    counts = np.zeros(64, dtype=np.float32)
     for i in range(L - 2):
-        trinuc = seq[i:i+3]
+        trinuc = seq[i : i + 3]
         if all(b in BASES_SET for b in trinuc):
             # Trinucleotide index (AAA=0, AAC=1, ..., TTT=63)
-            idx = (BASE_TO_IDX[trinuc[0]] * 16 +
-                   BASE_TO_IDX[trinuc[1]] * 4 +
-                   BASE_TO_IDX[trinuc[2]])
-            # EIIP weight for this trinucleotide (average of 3 bases)
-            eiip_weight = (EIIP_VALUES[trinuc[0]] +
-                          EIIP_VALUES[trinuc[1]] +
-                          EIIP_VALUES[trinuc[2]]) / 3.0
-            features[idx] += eiip_weight
-            total += 1
+            idx = (
+                BASE_TO_IDX[trinuc[0]] * 16
+                + BASE_TO_IDX[trinuc[1]] * 4
+                + BASE_TO_IDX[trinuc[2]]
+            )
+            counts[idx] += 1.0
 
-    if total > 0:
-        features /= total
+    # Compute frequencies.
+    total = L - 2
+    frequencies = counts / total if total > 0 else counts
+
+    features = np.zeros(64, dtype=np.float32)
+    for i, trinuc in enumerate(TRI_KMER_VOCAB):
+        eiip_sum = EIIP_VALUES[trinuc[0]] + EIIP_VALUES[trinuc[1]] + EIIP_VALUES[trinuc[2]]
+        features[i] = eiip_sum * frequencies[i]
 
     return torch.from_numpy(features)
 

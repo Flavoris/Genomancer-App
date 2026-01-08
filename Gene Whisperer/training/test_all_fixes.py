@@ -24,9 +24,9 @@ def test_config():
 
     tests = [
         ('max_bp_len', 81, cfg.get('max_bp_len')),
-        ('mlm_window_size', 234, cfg.get('mlm_window_size')),
-        ('stage1_lr', 0.0001, cfg.get('stage1_lr')),
-        ('stage2_lr', 0.00005, cfg.get('stage2_lr')),
+        ('mlm_window_size', 81, cfg.get('mlm_window_size')),
+        ('stage1_lr', 0.00002, cfg.get('stage1_lr')),
+        ('stage2_lr', 0.00001, cfg.get('stage2_lr')),
         ('mlm_lr', 0.0002, cfg.get('mlm_lr')),
         ('stage1_reverse_complement_prob', 0.5, cfg.get('stage1_reverse_complement_prob')),
         ('post_cnn_transformer_layers', 3, cfg.get('post_cnn_transformer_layers')),

@@ -47,24 +47,24 @@ def is_value_in_range(actual: Any, min_val: float | int, max_val: float | int) -
     return min_val <= float(actual) <= max_val
 
 
-def test_config_hyperparameters() -> bool:
+def test_config_hyperparameters() -> None:
     """Verify critical hyperparameters are updated."""
     cfg = load_config(CONFIG_PATH)
 
     checks = [
         HyperparameterCheck("max_bp_len", 81, 64, 128, "Stage max_bp_len"),
-        HyperparameterCheck("lr", 0.0001, 0.00005, 0.0002, "Learning rate"),
-        HyperparameterCheck("stage1_lr", 0.0001, 0.00005, 0.0002, "Stage 1 learning rate"),
-        HyperparameterCheck("stage2_lr", 0.00005, 0.00002, 0.0001, "Stage 2 learning rate"),
-        HyperparameterCheck("label_smoothing", 0.02, 0.0, 0.05, "Label smoothing"),
+        HyperparameterCheck("lr", 0.00002, 0.00001, 0.00005, "Learning rate"),
+        HyperparameterCheck("stage1_lr", 0.00002, 0.00001, 0.00005, "Stage 1 learning rate"),
+        HyperparameterCheck("stage2_lr", 0.00001, 0.000005, 0.00002, "Stage 2 learning rate"),
+        HyperparameterCheck("label_smoothing", 0.0, 0.0, 0.01, "Label smoothing"),
         HyperparameterCheck("mixup_alpha", 0.1, 0.05, 0.2, "Mixup alpha"),
         HyperparameterCheck("warmup_ratio", 0.10, 0.05, 0.15, "Warmup ratio"),
         HyperparameterCheck("weight_decay", 0.01, 0.005, 0.02, "Weight decay"),
-        HyperparameterCheck("grad_accum_steps", 8, 4, 16, "Gradient accumulation"),
+        HyperparameterCheck("grad_accum_steps", 4, 2, 8, "Gradient accumulation"),
         HyperparameterCheck("epochs", 150, 100, 200, "Epochs"),
-        HyperparameterCheck("early_stopping_patience", 50, 30, 70, "Early stopping patience"),
+        HyperparameterCheck("early_stopping_patience", 15, 10, 25, "Early stopping patience"),
         HyperparameterCheck("engineered_dim", 288, 128, 320, "Engineered feature dimension"),
-        HyperparameterCheck("mlm_window_size", 234, 128, 256, "MLM window size"),
+        HyperparameterCheck("mlm_window_size", 81, 64, 128, "MLM window size"),
         HyperparameterCheck(
             "post_cnn_transformer_layers",
             3,
@@ -110,10 +110,9 @@ def test_config_hyperparameters() -> bool:
         print("\nFAIL SOME CONFIG VALUES OUT OF RANGE")
 
     assert all_passed, "Hyperparameter checks failed: " + ", ".join(failures)
-    return all_passed
 
 
-def test_new_config_sections() -> bool:
+def test_new_config_sections() -> None:
     """Verify new config sections are present."""
     cfg = load_config(CONFIG_PATH)
 
@@ -135,7 +134,6 @@ def test_new_config_sections() -> bool:
         else:
             print(f"WARN {desc}: NOT FOUND (optional)")
 
-    return True
 
 
 def test_separate_training_phase_settings() -> None:
@@ -143,16 +141,16 @@ def test_separate_training_phase_settings() -> None:
     cfg = load_config(CONFIG_PATH)
 
     assert cfg.get("max_bp_len") == 81, f"max_bp_len should be 81, got {cfg.get('max_bp_len')}"
-    assert cfg.get("mlm_window_size") == 234, (
-        f"mlm_window_size should be 234, got {cfg.get('mlm_window_size')}"
+    assert cfg.get("mlm_window_size") == 81, (
+        f"mlm_window_size should be 81, got {cfg.get('mlm_window_size')}"
     )
-    assert cfg.get("lr") == 0.0001, f"lr should be 0.0001, got {cfg.get('lr')}"
+    assert cfg.get("lr") == 0.00002, f"lr should be 0.00002, got {cfg.get('lr')}"
     assert cfg.get("mlm_lr") == 0.0002, f"mlm_lr should be 0.0002, got {cfg.get('mlm_lr')}"
-    assert cfg.get("stage1_lr") == 0.0001, "stage1_lr should be 0.0001"
-    assert cfg.get("stage2_lr") == 0.00005, "stage2_lr should be 0.00005"
+    assert cfg.get("stage1_lr") == 0.00002, "stage1_lr should be 0.00002"
+    assert cfg.get("stage2_lr") == 0.00001, "stage2_lr should be 0.00001"
 
 
-def test_mps_optimized_settings() -> bool:
+def test_mps_optimized_settings() -> None:
     """Verify MPS-optimized settings for M4 MacBook."""
     cfg = load_config(CONFIG_PATH)
 
@@ -177,7 +175,6 @@ def test_mps_optimized_settings() -> bool:
             failures.append(f"{key}: {actual} != {expected}")
 
     assert not failures, "MPS config checks failed: " + ", ".join(failures)
-    return True
 
 
 def _run_check(check_fn) -> bool:

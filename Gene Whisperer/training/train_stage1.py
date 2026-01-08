@@ -464,6 +464,47 @@ class LabelSmoothingBCE(nn.Module):
         return loss
 
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for binary classification.
+    
+    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+    
+    This down-weights easy examples and focuses on hard ones.
+    """
+    
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0, reduction: str = "mean"):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+    
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            logits: (B, 1) raw logits (before sigmoid)
+            targets: (B, 1) binary targets
+        """
+        probs = torch.sigmoid(logits)
+        
+        # Compute focal weights
+        p_t = probs * targets + (1 - probs) * (1 - targets)
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        focal_weight = alpha_t * (1 - p_t) ** self.gamma
+        
+        # Binary cross-entropy
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        
+        # Apply focal weight
+        focal_loss = focal_weight * bce
+        
+        if self.reduction == "mean":
+            return focal_loss.mean()
+        elif self.reduction == "sum":
+            return focal_loss.sum()
+        return focal_loss
+
+
 class FocalLossWithSmoothing(nn.Module):
     """
     Focal loss with optional label smoothing.
@@ -1414,13 +1455,18 @@ def train_multi_scale_ensemble(
     focal_gamma = float(cfg_run.get("stage1_focal_gamma", 2.0))
 
     if stage1_use_focal_loss:
-        criterion = FocalLossWithSmoothing(
+        criterion = FocalLoss(
             alpha=focal_alpha,
             gamma=focal_gamma,
-            smoothing=stage1_label_smoothing,
+        )
+        LOGGER.info(
+            "Using Focal Loss (alpha=%.2f, gamma=%.2f)",
+            criterion.alpha,
+            criterion.gamma,
         )
     else:
         criterion = LabelSmoothingBCE(smoothing=stage1_label_smoothing)
+        LOGGER.info("Using BCE with smoothing=%.2f", stage1_label_smoothing)
 
     grad_accum_steps = int(cfg_run.get("grad_accum_steps", 2))
     grad_clip_norm = float(cfg_run.get("grad_clip_norm", 1.0))
@@ -1752,6 +1798,123 @@ def get_layer_wise_lr_groups(
     # Filter out empty groups
     param_groups = [g for g in param_groups if len(g["params"]) > 0]
     
+    return param_groups
+
+
+def get_parameter_groups_with_llrd(
+    model: nn.Module,
+    base_lr: float,
+    weight_decay: float,
+    layer_decay: float = 0.9,
+) -> List[Dict]:
+    """
+    Create parameter groups with layer-wise learning rate decay.
+
+    Lower layers get smaller learning rates:
+    - Embedding: lr * decay^num_layers
+    - Layer 0: lr * decay^(num_layers-1)
+    - ...
+    - Top layers: lr
+    """
+    layer_prefix = None
+    num_layers = 0
+
+    # Prefer post-CNN transformer layers in Stage 1 (they are the trained transformer stack).
+    if hasattr(model, "post_cnn_transformer") and hasattr(model.post_cnn_transformer, "layers"):
+        layer_prefix = "post_cnn_transformer.layers"
+        num_layers = len(model.post_cnn_transformer.layers)
+    elif hasattr(model, "_full_encoder") and hasattr(model._full_encoder, "layers"):
+        layer_prefix = "_full_encoder.layers"
+        num_layers = len(model._full_encoder.layers)
+    elif hasattr(model, "encoder") and hasattr(model.encoder, "layers"):
+        layer_prefix = "encoder.layers"
+        num_layers = len(model.encoder.layers)
+
+    if layer_prefix is None:
+        return [{
+            "params": model.parameters(),
+            "lr": base_lr,
+            "weight_decay": weight_decay,
+            "name": "all",
+        }]
+
+    no_decay = ("bias", "LayerNorm.weight", "layer_norm", "bn", "norm")
+
+    def is_no_decay(param_name: str) -> bool:
+        return any(token in param_name for token in no_decay)
+
+    def add_param_groups(
+        group_name: str,
+        named_params: List[Tuple[str, nn.Parameter]],
+        lr: float,
+    ) -> None:
+        if not named_params:
+            return
+        decay_params = []
+        no_decay_params = []
+        for param_name, param in named_params:
+            if is_no_decay(param_name):
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+        if decay_params:
+            param_groups.append({
+                "params": decay_params,
+                "lr": lr,
+                "weight_decay": weight_decay,
+                "name": group_name,
+            })
+        if no_decay_params:
+            param_groups.append({
+                "params": no_decay_params,
+                "lr": lr,
+                "weight_decay": 0.0,
+                "name": f"{group_name}_no_decay",
+            })
+
+    param_groups: List[Dict] = []
+    named_params = [
+        (name, param) for name, param in model.named_parameters() if param.requires_grad
+    ]
+    assigned_param_ids: set[int] = set()
+
+    embedding_params: List[Tuple[str, nn.Parameter]] = []
+    layer_params = {idx: [] for idx in range(num_layers)}
+    layer_prefix_token = f"{layer_prefix}."
+
+    for name, param in named_params:
+        if "embedding" in name and "pos" not in name:
+            embedding_params.append((name, param))
+            assigned_param_ids.add(id(param))
+            continue
+        if "pos_embedding" in name or "embed_norm" in name:
+            embedding_params.append((name, param))
+            assigned_param_ids.add(id(param))
+            continue
+        if name.startswith(layer_prefix_token):
+            remainder = name[len(layer_prefix_token):]
+            layer_index = remainder.split(".", 1)[0]
+            if layer_index.isdigit():
+                layer_num = int(layer_index)
+                if layer_num in layer_params:
+                    layer_params[layer_num].append((name, param))
+                    assigned_param_ids.add(id(param))
+                    continue
+
+    embedding_lr = base_lr * (layer_decay ** num_layers)
+    add_param_groups("embedding", embedding_params, embedding_lr)
+
+    for layer_idx in range(num_layers):
+        layer_lr = base_lr * (layer_decay ** (num_layers - layer_idx - 1))
+        add_param_groups(f"layer_{layer_idx}", layer_params[layer_idx], layer_lr)
+
+    top_params = [
+        (name, param)
+        for name, param in named_params
+        if id(param) not in assigned_param_ids
+    ]
+    add_param_groups("top", top_params, base_lr)
+
     return param_groups
 
 
@@ -3393,17 +3556,17 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     LOGGER.info("Optimizer: AdamW foreach=%s", optimizer_foreach)
 
-    # Use LLRD if we loaded pretrained weights
-    if should_load_mlm and mlm_checkpoint:
-        LOGGER.info("Using layer-wise LR decay (factor=%.2f) for pretrained model", layer_lr_decay)
-        param_groups = get_layer_wise_lr_groups(
-            model,
+    if layer_lr_decay < 1.0:
+        param_groups = get_parameter_groups_with_llrd(
+            model=model,
             base_lr=lr,
-            lr_decay=layer_lr_decay,
             weight_decay=weight_decay,
+            layer_decay=layer_lr_decay,
         )
         optimizer = torch.optim.AdamW(param_groups, betas=(0.9, 0.999), foreach=optimizer_foreach)
-        LOGGER.info("Created %d parameter groups with LLRD", len(param_groups))
+        LOGGER.info("Using layer-wise LR decay (decay=%.2f)", layer_lr_decay)
+        for group in param_groups:
+            LOGGER.info("  %s: lr=%.2e", group.get("name", "unnamed"), group["lr"])
     else:
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -3467,12 +3630,15 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     focal_gamma = float(cfg_run.get("stage1_focal_gamma", 2.0))
 
     if stage1_use_focal_loss:
-        criterion = FocalLossWithSmoothing(
+        criterion = FocalLoss(
             alpha=focal_alpha,
             gamma=focal_gamma,
-            smoothing=stage1_label_smoothing,
         )
-        LOGGER.info("Using focal loss with smoothing=%.2f", stage1_label_smoothing)
+        LOGGER.info(
+            "Using Focal Loss (alpha=%.2f, gamma=%.2f)",
+            criterion.alpha,
+            criterion.gamma,
+        )
     else:
         criterion = LabelSmoothingBCE(smoothing=stage1_label_smoothing)
         LOGGER.info("Using BCE with smoothing=%.2f", stage1_label_smoothing)

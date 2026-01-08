@@ -8,7 +8,7 @@ seed: 1337
 # == DATA SETTINGS (Stage 1/2 Training) ==
 data: &data
   max_bp_len: 81  # Changed from 234 - matches benchmark dataset
-  batch_size: 32
+  batch_size: 16
   delimiter: "\t"
   train_val_split: 0.9
   stage1_train: ../data/stage1_train.tsv
@@ -23,9 +23,9 @@ data: &data
 
 # == MLM-SPECIFIC DATA SETTINGS ==
 mlm_data: &mlm_data
-  mlm_max_bp_len: 234  # MLM can use longer sequences for pretraining
+  mlm_max_bp_len: 81  # Aligned with stage max_bp_len for msBERT settings
   mlm_batch_size: 128
-  mlm_window_size: 234  # Should match mlm_max_bp_len
+  mlm_window_size: 81  # Should match mlm_max_bp_len
 
 # == DATALOADER AND HARDWARE ==
 hardware: &hardware
@@ -81,14 +81,14 @@ features: &features
 training: &training
   optimizer: "adamw"
   optimizer_foreach: true
-  lr: 0.0001  # Increased from 0.00005 - better for fine-tuning
-  stage1_lr: 0.0001  # Explicit stage 1 learning rate
-  stage2_lr: 0.00005  # Stage 2 can use lower LR for fine-tuning
+  lr: 0.00002  # msBERT-aligned learning rate
+  stage1_lr: 0.00002  # Explicit stage 1 learning rate
+  stage2_lr: 0.00001  # Stage 2 can use lower LR for fine-tuning
   weight_decay: 0.01
   warmup_ratio: 0.10
-  epochs: 150
-  early_stopping_patience: 50
-  grad_accum_steps: 8
+  epochs: 100
+  early_stopping_patience: 15
+  grad_accum_steps: 4
   grad_clip_norm: 1.0
   param_norm_warn: 400
   param_norm_cap: 500
@@ -97,10 +97,10 @@ training: &training
 
 # == LOSS AND REGULARIZATION ==
 loss: &loss
-  stage1_use_focal_loss: false
-  stage1_focal_alpha: 0.5
+  stage1_use_focal_loss: true
+  stage1_focal_alpha: 0.25
   stage1_focal_gamma: 2.0
-  label_smoothing: 0.02
+  label_smoothing: 0.0
 
 # == AUGMENTATION ==
 augmentation: &augmentation
@@ -153,7 +153,7 @@ mlm: &mlm
   mlm_species_weights: [0.45, 0.35, 0.20, 0.20, 0.20, 0.20]
   mlm_steps_per_epoch: 5000
   mlm_unknown_base_strategy: "skip"
-  mlm_window_size: 234  # MLM window size (can be different from stage max_bp_len)
+  mlm_window_size: 81  # MLM window size aligned with max_bp_len
   mlm_stride: 20
   mlm_batch_size: 128
   mlm_epochs: 200

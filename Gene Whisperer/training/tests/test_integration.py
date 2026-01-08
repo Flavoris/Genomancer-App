@@ -43,11 +43,11 @@ def test_full_training_step():
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=0.0001,  # Match updated stage training LR
+        lr=0.00002,  # Match updated stage training LR
         weight_decay=0.01,  # NEW lighter decay
     )
 
-    label_smoothing = 0.02  # NEW lower smoothing
+    label_smoothing = 0.0  # Disable when using focal loss
     criterion = torch.nn.BCEWithLogitsLoss()
 
     batch_size = 8
