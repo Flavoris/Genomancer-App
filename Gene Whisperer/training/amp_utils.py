@@ -18,6 +18,7 @@ Usage:
     loss = criterion(outputs.float(), targets)
 """
 
+import inspect
 import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -26,6 +27,33 @@ from typing import Any, ContextManager, Dict, Optional
 import torch
 
 LOGGER = logging.getLogger("gene_whisperer.amp_utils")
+
+try:
+    from torch.amp import GradScaler as AmpGradScaler
+    _GRAD_SCALER_SOURCE = "torch.amp"
+except Exception:  # pragma: no cover - fallback for older torch
+    from torch.cuda.amp import GradScaler as AmpGradScaler
+    _GRAD_SCALER_SOURCE = "torch.cuda.amp"
+
+GradScalerType = AmpGradScaler
+
+
+def _resolve_grad_scaler_device_kwarg() -> Optional[str]:
+    """Detect the supported device kwarg for torch.amp.GradScaler across versions."""
+    if _GRAD_SCALER_SOURCE != "torch.amp":
+        return None
+    try:
+        params = inspect.signature(AmpGradScaler).parameters
+    except (TypeError, ValueError):
+        return None
+    if "device" in params:
+        return "device"
+    if "device_type" in params:
+        return "device_type"
+    return None
+
+
+_GRAD_SCALER_DEVICE_KWARG = _resolve_grad_scaler_device_kwarg()
 
 
 @dataclass
@@ -208,3 +236,20 @@ def log_amp_status(
         amp_ctx.device_type,
         amp_ctx.force_fp32_loss,
     )
+
+
+def create_grad_scaler(device_type: str) -> Optional[AmpGradScaler]:
+    """
+    Create a CUDA GradScaler using the non-deprecated torch.amp API when available.
+
+    Args:
+        device_type: Torch device type ("cuda", "mps", "cpu", ...)
+
+    Returns:
+        A GradScaler for CUDA training, or None when scaling is not applicable.
+    """
+    if device_type != "cuda":
+        return None
+    if _GRAD_SCALER_DEVICE_KWARG:
+        return AmpGradScaler(**{_GRAD_SCALER_DEVICE_KWARG: device_type})
+    return AmpGradScaler()

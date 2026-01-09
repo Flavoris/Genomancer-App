@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 from torch.optim.swa_utils import AveragedModel, SWALR
 
-from amp_utils import get_amp_context, log_amp_status
+from amp_utils import get_amp_context, log_amp_status, create_grad_scaler
 from dataset import build_dataloaders
 from model import GeneWhispererStage1, GeneWhispererStage2
 
@@ -392,7 +392,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # GradScaler for CUDA fp16 (not needed for MPS bfloat16)
     scaler = None
     if amp_ctx.enabled and device.type == "cuda" and amp_ctx.dtype == torch.float16:
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = create_grad_scaler(device.type)
         LOGGER.info("Using GradScaler for CUDA fp16")
 
     dataloaders = build_dataloaders(cfg_run)

@@ -264,7 +264,7 @@ smoketest: &smoketest
 # == MIXED PRECISION (AMP) ==
 amp: &amp
   amp_enabled: true
-  amp_dtype: "bfloat16"
+  amp_dtype: "float16"
   amp_force_fp32_loss: true
 
 # == MULTI-KMER MLM PRETRAINING ==

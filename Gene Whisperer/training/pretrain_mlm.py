@@ -59,7 +59,7 @@ from numerics import (
     cap_model_param_norm_,
     detect_nan_in_model,
 )
-from amp_utils import get_amp_context, log_amp_status
+from amp_utils import get_amp_context, log_amp_status, create_grad_scaler
 from genome_io import read_fasta_records, sanitize_unknown_bases, find_acgt_segments
 from checkpoint_utils import prune_step_checkpoints
 from early_stopping import PretrainingEarlyStopping
@@ -4333,7 +4333,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     # GradScaler only for CUDA with float16
     if amp_ctx.enabled and device.type == "cuda" and amp_ctx.dtype == torch.float16:
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = create_grad_scaler(device.type)
         LOGGER.info("Using GradScaler for CUDA fp16")
 
     if debug_batch:
@@ -5636,7 +5636,7 @@ def main(cfg: dict | None = None) -> dict:
 
     # GradScaler only for CUDA with float16
     if amp_ctx.enabled and device.type == "cuda" and amp_ctx.dtype == torch.float16:
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = create_grad_scaler(device.type)
         LOGGER.info("Using GradScaler for CUDA fp16")
 
     # Training state

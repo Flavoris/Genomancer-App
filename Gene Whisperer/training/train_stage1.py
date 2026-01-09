@@ -40,7 +40,13 @@ from torch.profiler import profile, ProfilerActivity, schedule, tensorboard_trac
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm.auto import tqdm
 
-from amp_utils import get_amp_context, log_amp_status, AMPContext
+from amp_utils import (
+    get_amp_context,
+    log_amp_status,
+    create_grad_scaler,
+    AMPContext,
+    GradScalerType,
+)
 from dataset import (
     KmerVocabulary,
     build_dataloaders,
@@ -1198,7 +1204,7 @@ def run_multiscale_epoch(
     max_optimizer_steps: Optional[int] = None,
     grad_clip_norm: float = 1.0,
     amp_ctx: Optional[AMPContext] = None,
-    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    scaler: Optional[GradScalerType] = None,
     param_norm_warn: float = 150.0,
     param_norm_cap: float = 200.0,
     individual_loss_weight: float = 0.2,
@@ -1392,7 +1398,7 @@ def train_multi_scale_ensemble(
     cfg_run: dict,
     device: torch.device,
     amp_ctx: AMPContext,
-    scaler: Optional[torch.cuda.amp.GradScaler],
+    scaler: Optional[GradScalerType],
     run_dir: Path,
     resolved_config_path: Path,
     resolved_config: Dict[str, Any],
@@ -2280,7 +2286,7 @@ def run_epoch(
     use_mixup: bool = False,
     mixup_alpha: float = 0.2,
     amp_ctx: Optional[AMPContext] = None,
-    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    scaler: Optional[GradScalerType] = None,
     param_norm_warn: float = 150.0,
     param_norm_cap: float = 200.0,
     eval_checkpoint_path: Optional[Path] = None,
@@ -2547,7 +2553,7 @@ def run_distillation_epoch(
     max_optimizer_steps: Optional[int] = None,
     grad_clip_norm: float = 1.0,
     amp_ctx: Optional[AMPContext] = None,
-    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    scaler: Optional[GradScalerType] = None,
     param_norm_warn: float = 150.0,
     param_norm_cap: float = 200.0,
 ) -> Dict[str, float]:
@@ -3395,7 +3401,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # GradScaler for CUDA fp16 (not needed for MPS bfloat16)
     scaler = None
     if amp_ctx.enabled and device.type == "cuda" and amp_ctx.dtype == torch.float16:
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = create_grad_scaler(device.type)
         LOGGER.info("Using GradScaler for CUDA fp16")
 
     if bool(cfg_run.get("use_multi_scale", False)):
