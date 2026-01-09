@@ -201,12 +201,36 @@ mlm: &mlm
 
 # == CHECKPOINTS ==
 checkpoints: &checkpoints
+  # MLM encoder checkpoints per k-mer
+  mlm_encoder_ckpt_by_k:
+    3: ../artifacts/mlm_encoder_k3.pt
+    4: ../artifacts/mlm_encoder_k4.pt
+    5: ../artifacts/mlm_encoder_k5.pt
+    6: ../artifacts/mlm_encoder_k6.pt
+
+  # Metadata files per k-mer
+  mlm_metadata_by_k:
+    3: ../artifacts/mlm_encoder_k3_metadata.json
+    4: ../artifacts/mlm_encoder_k4_metadata.json
+    5: ../artifacts/mlm_encoder_k5_metadata.json
+    6: ../artifacts/mlm_encoder_k6_metadata.json
+
+  # Stage 1 checkpoints (unchanged)
   stage1_checkpoint_name: null
   stage1_ckpt_by_k:
     3: ../artifacts/checkpoints/stage1_k3.pt
     4: ../artifacts/checkpoints/stage1_k4.pt
     5: ../artifacts/checkpoints/stage1_k5.pt
     6: ../artifacts/checkpoints/stage1_k6.pt
+
+# == VOCAB PATHS ==
+vocab_paths: &vocab_paths
+  vocab_cache_dir: ../artifacts/vocabs
+  mlm_vocab_by_k:
+    3: ../artifacts/vocabs/mlm_k3_vocab.json
+    4: ../artifacts/vocabs/mlm_k4_vocab.json
+    5: ../artifacts/vocabs/mlm_k5_vocab.json
+    6: ../artifacts/vocabs/mlm_k6_vocab.json
 
 # == VISUALIZATION ==
 visualization: &visualization
@@ -242,6 +266,57 @@ amp: &amp
   amp_enabled: true
   amp_dtype: "bfloat16"
   amp_force_fp32_loss: true
+
+# == MULTI-KMER MLM PRETRAINING ==
+multi_kmer_pretrain: &multi_kmer_pretrain
+  # Enable multi-kmer pretraining
+  multi_kmer_pretrain_enabled: true
+
+  # K-mer sizes to pretrain (in order)
+  pretrain_kmers: [3, 4, 5, 6]
+
+  # Whether to train sequentially or in parallel (sequential recommended)
+  pretrain_mode: "sequential"  # "sequential" or "parallel"
+
+  # Per-kmer configuration overrides (optional)
+  # Smaller k-mers may need fewer epochs since vocab is smaller
+  kmer_pretrain_overrides:
+    3:
+      mlm_epochs: 100
+      mlm_lr: 0.0003  # Can use higher LR for smaller vocab
+      vocab_size: 67   # 4^3 + 3 special tokens
+    4:
+      mlm_epochs: 120
+      mlm_lr: 0.00025
+      vocab_size: 259  # 4^4 + 3 special tokens
+    5:
+      mlm_epochs: 150
+      mlm_lr: 0.0002
+      vocab_size: 1027 # 4^5 + 3 special tokens
+    6:
+      mlm_epochs: 200
+      mlm_lr: 0.0002
+      vocab_size: 4099 # 4^6 + 3 special tokens
+
+# == EARLY STOPPING FOR PRETRAINING ==
+pretrain_early_stopping: &pretrain_early_stopping
+  # Enable early stopping during pretraining
+  mlm_early_stopping_enabled: true
+
+  # Metric to monitor (validation loss)
+  mlm_early_stopping_metric: "val_loss"
+
+  # Patience: epochs to wait for improvement
+  mlm_early_stopping_patience: 20
+
+  # Minimum delta: minimum change to qualify as improvement
+  mlm_early_stopping_min_delta: 0.001
+
+  # Minimum epochs before early stopping can trigger
+  mlm_early_stopping_min_epochs: 30
+
+  # Restore best weights when stopping
+  mlm_early_stopping_restore_best: true
 
 # == ABLATION / SCORING ==
 ablation:
@@ -297,3 +372,6 @@ distill:
 <<: *ensemble
 <<: *smoketest
 <<: *amp
+<<: *multi_kmer_pretrain
+<<: *pretrain_early_stopping
+<<: *vocab_paths

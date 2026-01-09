@@ -26,7 +26,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -1029,6 +1029,63 @@ def _build_stage1_model_for_kmer(
     return model
 
 
+def _resolve_checkpoint_path(raw_path: Union[str, Path], script_dir: Path) -> Path:
+    """Resolve a checkpoint path relative to the script directory."""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = script_dir / path
+    return path.resolve()
+
+
+def get_mlm_checkpoint_for_kmer(
+    cfg: dict,
+    kmer: int,
+    script_dir: Optional[Path] = None,
+) -> Optional[Path]:
+    """
+    Get the correct MLM checkpoint path for a given k-mer.
+
+    Checks for k-mer specific checkpoint first, then falls back to defaults.
+    """
+    script_dir = script_dir or Path(__file__).resolve().parent
+
+    mlm_ckpt_by_k = cfg.get("mlm_encoder_ckpt_by_k")
+    if not isinstance(mlm_ckpt_by_k, dict):
+        checkpoints_cfg = cfg.get("checkpoints")
+        if isinstance(checkpoints_cfg, dict):
+            mlm_ckpt_by_k = checkpoints_cfg.get("mlm_encoder_ckpt_by_k")
+    if not isinstance(mlm_ckpt_by_k, dict):
+        mlm_ckpt_by_k = {}
+
+    candidate = mlm_ckpt_by_k.get(kmer) or mlm_ckpt_by_k.get(str(kmer))
+    if candidate:
+        ckpt_path = _resolve_checkpoint_path(str(candidate), script_dir)
+        if ckpt_path.exists():
+            LOGGER.info("Using k=%d specific MLM checkpoint: %s", kmer, ckpt_path)
+            return ckpt_path
+        LOGGER.warning("K=%d checkpoint not found: %s", kmer, ckpt_path)
+
+    default_path = _resolve_checkpoint_path(f"../artifacts/mlm_encoder_k{kmer}.pt", script_dir)
+    if default_path.exists():
+        LOGGER.info("Using default MLM checkpoint: %s", default_path)
+        return default_path
+
+    generic_path = cfg.get("mlm_encoder_path") or cfg.get("mlm_encoder_checkpoint")
+    if generic_path:
+        resolved_path = _resolve_checkpoint_path(str(generic_path), script_dir)
+        if resolved_path.exists():
+            LOGGER.warning(
+                "K=%d checkpoint not found, using generic: %s",
+                kmer,
+                resolved_path,
+            )
+            return resolved_path
+        LOGGER.warning("Generic MLM checkpoint not found: %s", resolved_path)
+
+    LOGGER.warning("No MLM checkpoint found for k=%d", kmer)
+    return None
+
+
 def _maybe_load_mlm_weights(
     model: GeneWhispererStage1,
     cfg_run: dict,
@@ -1036,7 +1093,7 @@ def _maybe_load_mlm_weights(
     kmer: int,
     script_dir: Path,
 ) -> bool:
-    load_mlm_weights = bool(cfg_run.get("stage1_load_mlm_weights", False))
+    load_mlm_weights = bool(cfg_run.get("stage1_load_mlm_weights", True))
     transfer_mode = str(cfg_run.get("stage1_mlm_transfer_mode", "embed_only"))
     if transfer_mode not in {"none", "embed_only", "embed_plus_adapter"}:
         raise ValueError(f"Invalid stage1_mlm_transfer_mode: {transfer_mode}")
@@ -1044,25 +1101,8 @@ def _maybe_load_mlm_weights(
     if not load_mlm_weights or transfer_mode == "none":
         return False
 
-    mlm_kmer = int(cfg_run.get("mlm_kmer", kmer))
-    if kmer != mlm_kmer:
-        LOGGER.info(
-            "Skipping MLM load for k=%d (mlm_kmer=%d)",
-            kmer,
-            mlm_kmer,
-        )
-        return False
-
-    mlm_checkpoint = cfg_run.get("mlm_encoder_path") or cfg_run.get("mlm_encoder_checkpoint")
-    if not mlm_checkpoint:
-        LOGGER.warning("stage1_load_mlm_weights=true but no MLM checkpoint configured")
-        return False
-
-    checkpoint_path = Path(mlm_checkpoint)
-    if not checkpoint_path.is_absolute():
-        checkpoint_path = (script_dir / checkpoint_path).resolve()
-    if not checkpoint_path.exists():
-        LOGGER.warning("MLM checkpoint not found at %s", checkpoint_path)
+    checkpoint_path = get_mlm_checkpoint_for_kmer(cfg_run, kmer, script_dir=script_dir)
+    if checkpoint_path is None:
         return False
 
     LOGGER.info(
@@ -1071,7 +1111,11 @@ def _maybe_load_mlm_weights(
         checkpoint_path,
         transfer_mode,
     )
-    model.load_pretrained_weights(checkpoint_path, strict=False, transfer_mode=transfer_mode)
+    model.load_pretrained_weights(
+        checkpoint_path=checkpoint_path,
+        strict=False,
+        transfer_mode=transfer_mode,
+    )
 
     freeze_layers = int(cfg_run.get("stage1_freeze_layers", 0))
     if freeze_layers > 0:
@@ -3469,42 +3513,29 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("=" * 60)
     
     # Load pretrained MLM weights if available
-    load_mlm_weights = bool(cfg_run.get("stage1_load_mlm_weights", False))
+    load_mlm_weights = bool(cfg_run.get("stage1_load_mlm_weights", True))
     transfer_mode = str(cfg_run.get("stage1_mlm_transfer_mode", "embed_only"))
     if transfer_mode not in {"none", "embed_only", "embed_plus_adapter"}:
         raise ValueError(f"Invalid stage1_mlm_transfer_mode: {transfer_mode}")
-
-    # Safety guard: ensure Stage 1 kmer matches mlm_kmer when loading MLM weights
-    if load_mlm_weights and transfer_mode != "none":
-        mlm_kmer = int(cfg_run.get("mlm_kmer", 3))
-        if kmer != mlm_kmer:
-            raise ValueError(
-                f"K-mer mismatch: Stage 1 kmer={kmer} but mlm_kmer={mlm_kmer}. "
-                f"When stage1_load_mlm_weights=true, these must match to ensure "
-                f"proper weight transfer. Either set kmer={mlm_kmer} or disable "
-                f"stage1_load_mlm_weights."
-            )
-    mlm_encoder_path = cfg_run.get("mlm_encoder_path")
-    mlm_encoder_checkpoint = cfg_run.get("mlm_encoder_checkpoint")
-    mlm_checkpoint = mlm_encoder_path or mlm_encoder_checkpoint
     should_load_mlm = load_mlm_weights and transfer_mode != "none"
     with torch.no_grad():
         emb_before = model.embedding.weight.detach().float().clone()
         emb_before_norm = emb_before.norm().item()
     load_attempted = False
-    if should_load_mlm and mlm_checkpoint:
-        checkpoint_path = Path(mlm_checkpoint)
-        if not checkpoint_path.is_absolute():
-            checkpoint_path = (script_dir / checkpoint_path).resolve()
-        if checkpoint_path.exists():
+    if should_load_mlm:
+        checkpoint_path = get_mlm_checkpoint_for_kmer(cfg_run, kmer, script_dir=script_dir)
+        if checkpoint_path is not None:
             LOGGER.info(
-                "Loading MLM encoder weights from %s (transfer_mode=%s)",
+                "Loading MLM encoder weights for k=%d from %s (transfer_mode=%s)",
+                kmer,
                 checkpoint_path,
                 transfer_mode,
             )
             load_attempted = True
             model.load_pretrained_weights(
-                checkpoint_path, strict=False, transfer_mode=transfer_mode
+                checkpoint_path=checkpoint_path,
+                strict=False,
+                transfer_mode=transfer_mode,
             )
             if transfer_mode == "embed_plus_adapter":
                 LOGGER.info(
@@ -3513,13 +3544,13 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 )
             else:
                 LOGGER.info("Pretrained weights loaded: embedding only")
-            
+
             freeze_layers = int(cfg_run.get("stage1_freeze_layers", 0))
             if freeze_layers > 0:
                 LOGGER.info("Freezing bottom %d encoder layers", freeze_layers)
                 model.encoder.freeze_bottom_layers(freeze_layers)
         else:
-            LOGGER.warning("MLM checkpoint not found at %s, training from scratch", checkpoint_path)
+            LOGGER.warning("No MLM weights loaded - training from scratch")
     elif load_mlm_weights and transfer_mode == "none":
         LOGGER.info("stage1_mlm_transfer_mode=none; skipping MLM weight load")
     with torch.no_grad():

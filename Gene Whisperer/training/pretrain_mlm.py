@@ -62,11 +62,42 @@ from numerics import (
 from amp_utils import get_amp_context, log_amp_status
 from genome_io import read_fasta_records, sanitize_unknown_bases, find_acgt_segments
 from checkpoint_utils import prune_step_checkpoints
+from early_stopping import PretrainingEarlyStopping
 
 LOGGER = logging.getLogger("gene_whisperer.pretrain_mlm")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
 REV_COMP_MAP = str.maketrans("ACGT", "TGCA")
+
+
+def get_kmer_pretrain_config(cfg: dict, kmer: int) -> dict:
+    """
+    Get configuration for specific k-mer pretraining.
+
+    Applies k-mer specific overrides from config.
+    """
+    kmer_cfg = dict(cfg)
+    kmer_cfg["kmer"] = kmer
+    kmer_cfg["mlm_kmer"] = kmer
+
+    # Apply k-mer specific overrides
+    overrides = cfg.get("kmer_pretrain_overrides", {}).get(kmer, {})
+    for key, value in overrides.items():
+        kmer_cfg[key] = value
+        LOGGER.info("K=%d override: %s=%s", kmer, key, value)
+
+    # Set vocab size
+    kmer_cfg["vocab_size"] = (4 ** kmer) + 3
+
+    # Set paths
+    vocab_dir = Path(cfg.get("vocab_cache_dir", "../artifacts/vocabs"))
+    kmer_cfg["mlm_vocab_path"] = str(vocab_dir / f"mlm_k{kmer}_vocab.json")
+
+    artifacts_dir = Path("../artifacts")
+    kmer_cfg["mlm_encoder_path"] = str(artifacts_dir / f"mlm_encoder_k{kmer}.pt")
+    kmer_cfg["mlm_metadata_path"] = str(artifacts_dir / f"mlm_encoder_k{kmer}_metadata.json")
+
+    return kmer_cfg
 
 
 def reverse_complement(sequence: str) -> str:
@@ -4233,6 +4264,27 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         )
     LOGGER.info("=" * 60)
 
+    # Early stopping setup
+    early_stopping_enabled = bool(cfg_run.get("mlm_early_stopping_enabled", True))
+    if early_stopping_enabled:
+        early_stopper = PretrainingEarlyStopping(
+            patience=int(cfg_run.get("mlm_early_stopping_patience", 20)),
+            min_delta=float(cfg_run.get("mlm_early_stopping_min_delta", 0.001)),
+            min_epochs=int(cfg_run.get("mlm_early_stopping_min_epochs", 30)),
+            kmer=int(vocab.k),
+            restore_best=bool(cfg_run.get("mlm_early_stopping_restore_best", True)),
+            verbose=True,
+        )
+        LOGGER.info(
+            "Early stopping enabled (patience=%d, min_delta=%.6f, min_epochs=%d)",
+            early_stopper.patience,
+            early_stopper.min_delta,
+            early_stopper.min_epochs,
+        )
+    else:
+        early_stopper = None
+        LOGGER.info("Early stopping disabled")
+
     if use_streaming and steps_per_epoch is not None:
         batches_per_epoch = steps_per_epoch
     else:
@@ -4338,8 +4390,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     encoder_path.parent.mkdir(parents=True, exist_ok=True)
     encoder_metadata_path = encoder_path.with_suffix(".metadata.json")
 
-    def _save_encoder_checkpoint(best_loss: float) -> None:
-        torch.save(model.encoder.state_dict(), encoder_path)
+    def _write_encoder_metadata(best_loss: float) -> None:
         metadata = {
             "config_snapshot": resolved_config,
             "vocab_path": str(vocab_path) if vocab_path is not None else None,
@@ -4348,9 +4399,19 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             "num_layers": transformer_layers,
             "heads": transformer_heads,
             "best_val_loss": float(best_loss),
+            "early_stopping": {
+                "enabled": early_stopping_enabled,
+                "triggered": early_stopper.should_stop if early_stopper else False,
+                "best_epoch": early_stopper.best_epoch if early_stopper else None,
+                "patience": early_stopper.patience if early_stopper else None,
+            },
         }
         with encoder_metadata_path.open("w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
+
+    def _save_encoder_checkpoint(best_loss: float) -> None:
+        torch.save(model.encoder.state_dict(), encoder_path)
+        _write_encoder_metadata(best_loss)
 
     def _save_training_checkpoint(
         step: int,
@@ -4888,23 +4949,58 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 topk_stats["true_in_topk_pct"],
             )
 
-        if val_loss_masked_only < best_val_loss:
-            best_val_loss = val_loss_masked_only
-            best_val_acc = val_acc
-            patience_counter = 0
-            _save_encoder_checkpoint(best_val_loss)
-            LOGGER.info(
-                "★ New best! Val Loss (masked-only): %.4f, PPL: %.2f, Acc: %.1f%% - Saved to %s",
-                val_loss_masked_only,
-                val_ppl,
-                val_acc * 100,
-                encoder_path,
+        if early_stopper is not None:
+            checkpoint_dir = encoder_path.parent
+            should_stop = early_stopper(
+                val_loss=val_loss_masked_only,
+                model=encoder,
+                epoch=epoch,
+                checkpoint_dir=checkpoint_dir,
+                val_perplexity=val_ppl,
             )
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                LOGGER.info("Early stopping at epoch %d (patience %d)", epoch, patience)
+
+            if early_stopper.best_epoch == epoch:
+                best_val_loss = val_loss_masked_only
+                best_val_acc = val_acc
+                patience_counter = 0
+                _save_encoder_checkpoint(best_val_loss)
+                LOGGER.info(
+                    "★ New best! Val Loss (masked-only): %.4f, PPL: %.2f, Acc: %.1f%% - Saved to %s",
+                    val_loss_masked_only,
+                    val_ppl,
+                    val_acc * 100,
+                    encoder_path,
+                )
+            else:
+                patience_counter = early_stopper.epochs_without_improvement
+
+            if should_stop:
+                LOGGER.info("Early stopping triggered at epoch %d", epoch)
+                if early_stopper.best_score is not None:
+                    LOGGER.info(
+                        "Best validation loss: %.6f at epoch %d",
+                        early_stopper.best_score,
+                        early_stopper.best_epoch,
+                    )
                 break
+        else:
+            if val_loss_masked_only < best_val_loss:
+                best_val_loss = val_loss_masked_only
+                best_val_acc = val_acc
+                patience_counter = 0
+                _save_encoder_checkpoint(best_val_loss)
+                LOGGER.info(
+                    "★ New best! Val Loss (masked-only): %.4f, PPL: %.2f, Acc: %.1f%% - Saved to %s",
+                    val_loss_masked_only,
+                    val_ppl,
+                    val_acc * 100,
+                    encoder_path,
+                )
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    LOGGER.info("Early stopping at epoch %d (patience %d)", epoch, patience)
+                    break
 
         if reached_max_steps:
             LOGGER.info(
@@ -4947,6 +5043,14 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         shutil.copy(encoder_path, output_encoder_path)
         LOGGER.info("Copied encoder to output_dir: %s", output_encoder_path)
 
+    _write_encoder_metadata(best_val_loss)
+
+    if early_stopper is not None and early_stopper.restore_best:
+        LOGGER.info("Restoring best model weights...")
+        restored = early_stopper.restore_best_weights(encoder)
+        if restored:
+            LOGGER.info("Restored weights from epoch %d", early_stopper.best_epoch)
+
     best_ppl = math.exp(min(best_val_loss, 100)) if math.isfinite(best_val_loss) else float("nan")
     LOGGER.info("=" * 60)
     LOGGER.info("PRETRAINING COMPLETE")
@@ -4969,9 +5073,16 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     }
 
 
-def main() -> None:
+def main(cfg: dict | None = None) -> dict:
+    if cfg is not None:
+        return run_mlm_pretrain(cfg)
+
     parser = argparse.ArgumentParser(description="Pretrain DNA MLM on E. coli genome")
     parser.add_argument("--config", default="config.yaml", help="Path to YAML config")
+    parser.add_argument("--kmer", type=int, default=None, help="Single k-mer to pretrain")
+    parser.add_argument("--kmers", type=int, nargs="+", default=None, help="Multiple k-mers")
+    parser.add_argument("--all-kmers", action="store_true", help="Pretrain all k-mers (3,4,5,6)")
+    parser.add_argument("--resume", action="store_true", help="Resume from checkpoints")
     parser.add_argument("--debug", action="store_true", help="Run debug mode: analyze one batch and exit")
     parser.add_argument("--overfit_debug", action="store_true", 
                         help="Train on 32 samples for 200 steps to verify model can learn")
@@ -5015,10 +5126,19 @@ def main() -> None:
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = (script_dir / config_path).resolve()
+
+    if args.all_kmers or args.kmers:
+        kmers = args.kmers if args.kmers else [3, 4, 5, 6]
+        return pretrain_all_kmers(str(config_path), kmers=kmers, resume=args.resume)
+
     with config_path.open("r", encoding="utf-8") as handle:
         cfg = yaml.safe_load(handle) or {}
 
-    overrides: Dict[str, Any] = {"_config_path": str(config_path)}
+    cfg["_config_path"] = str(config_path)
+    kmer = args.kmer if args.kmer is not None else int(cfg.get("mlm_kmer", 6))
+    kmer_cfg = get_kmer_pretrain_config(cfg, kmer)
+
+    overrides: Dict[str, Any] = {}
     if args.seed is not None:
         overrides["seed"] = args.seed
     if args.debug:
@@ -5048,8 +5168,7 @@ def main() -> None:
     if args.checkpoint_keep_last is not None:
         overrides["mlm_checkpoint_keep_last"] = args.checkpoint_keep_last
 
-    _ = run_mlm_pretrain(cfg, overrides=overrides)
-    return
+    return run_mlm_pretrain(kmer_cfg, overrides=overrides)
 
     # =========================================================================
     # Log resolved hyperparameters to runs/<timestamp>/resolved_config.json
@@ -5804,6 +5923,82 @@ def main() -> None:
     LOGGER.info("Target: Loss < 1.0 (PPL < 2.72)")
     LOGGER.info("Saved pretrained encoder to %s", encoder_path)
     LOGGER.info("=" * 60)
+
+
+def pretrain_all_kmers(
+    config_path: str = "config.yaml",
+    kmers: list | None = None,
+    resume: bool = False,
+) -> dict:
+    """
+    Pretrain MLM models for multiple k-mer sizes.
+
+    Args:
+        config_path: Path to config.yaml
+        kmers: List of k-mer sizes (default: [3, 4, 5, 6])
+        resume: Whether to resume from existing checkpoints
+    """
+    config_file = Path(config_path)
+    if not config_file.is_absolute():
+        config_file = (Path(__file__).resolve().parent / config_file).resolve()
+    with config_file.open("r", encoding="utf-8") as f:
+        base_cfg = yaml.safe_load(f) or {}
+    base_cfg["_config_path"] = str(config_file)
+
+    if kmers is None:
+        kmers = base_cfg.get("pretrain_kmers", [3, 4, 5, 6])
+
+    LOGGER.info("=" * 70)
+    LOGGER.info("MULTI-KMER MLM PRETRAINING")
+    LOGGER.info("=" * 70)
+    LOGGER.info("K-mers to pretrain: %s", kmers)
+
+    results: dict = {}
+
+    for kmer in kmers:
+        LOGGER.info("\n%s", "=" * 60)
+        LOGGER.info("PRETRAINING K=%d", kmer)
+        LOGGER.info("%s\n", "=" * 60)
+
+        # Get k-mer specific config
+        kmer_cfg = get_kmer_pretrain_config(base_cfg, kmer)
+
+        # Check if we should skip (checkpoint exists and not resuming)
+        checkpoint_path = Path(kmer_cfg["mlm_encoder_path"])
+        if not checkpoint_path.is_absolute():
+            checkpoint_path = (Path(__file__).resolve().parent / checkpoint_path).resolve()
+        if checkpoint_path.exists() and not resume:
+            LOGGER.info("Checkpoint exists for k=%d, skipping (use --resume to continue)", kmer)
+            results[kmer] = {"skipped": True, "checkpoint": str(checkpoint_path)}
+            continue
+
+        try:
+            # Run pretraining (call your existing main function with kmer_cfg)
+            result = main(kmer_cfg)
+            results[kmer] = result
+            LOGGER.info("✓ K=%d complete: val_loss=%s", kmer, result.get("best_val_loss", "N/A"))
+        except Exception as exc:
+            LOGGER.error("✗ K=%d failed: %s", kmer, exc)
+            results[kmer] = {"error": str(exc)}
+
+    # Save summary
+    summary = {
+        "kmers": kmers,
+        "results": results,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    summary_path = (Path(__file__).resolve().parent / "../artifacts/multi_kmer_pretrain_summary.json").resolve()
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    with summary_path.open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, default=str)
+
+    LOGGER.info("\n%s", "=" * 70)
+    LOGGER.info("PRETRAINING COMPLETE")
+    LOGGER.info("%s", "=" * 70)
+    LOGGER.info("Summary saved to %s", summary_path)
+
+    return results
 
 
 if __name__ == "__main__":

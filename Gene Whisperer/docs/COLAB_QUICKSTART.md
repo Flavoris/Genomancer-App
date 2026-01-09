@@ -34,6 +34,18 @@ drive.mount('/content/drive')
 !bash "Gene Whisperer/scripts/colab_run_mlm.sh" --run_name my_first_run
 ```
 
+This script uses config-driven auto mode. If `multi_kmer_pretrain_enabled: true`
+in `Gene Whisperer/training/config.yaml`, it will run multi-kmer sequential
+pretraining by default. To force a specific mode:
+
+```python
+# Force single-kmer pretraining
+!bash "Gene Whisperer/scripts/colab_run_mlm.sh" --single_kmer --run_name my_single_run
+
+# Force multi-kmer pretraining with selected k-mers
+!bash "Gene Whisperer/scripts/colab_run_mlm.sh" --multi_kmer --kmers 3 4 --run_name my_multi_run
+```
+
 ### Option B: Stage 1 Training (Promoter vs Non-Promoter)
 
 ```python
@@ -103,6 +115,17 @@ Stage-specific arguments:
 |--------|----------|-------------|
 | `colab_run_stage1.sh` | `--stage1_ckpt` | MLM encoder checkpoint for initialization |
 | `colab_run_stage2.sh` | `--stage1_ckpt` | Stage 1 checkpoint for initialization |
+
+MLM-specific arguments:
+
+| Script | Argument | Description |
+|--------|----------|-------------|
+| `colab_run_mlm.sh` | `--multi_kmer` | Force multi-kmer sequential pretraining |
+| `colab_run_mlm.sh` | `--single_kmer` | Force single-kmer pretraining |
+| `colab_run_mlm.sh` | `--kmers` | Select specific k-mers for multi-kmer mode |
+| `colab_run_mlm.sh` | `--resume` | Resume from checkpoints (single) or skip existing (multi) |
+| `colab_run_mlm.sh` | `--force` | Retrain all k-mers even if checkpoints exist |
+| `colab_run_mlm.sh` | `--skip_vocab_build` | Skip building missing vocabularies |
 
 ---
 
