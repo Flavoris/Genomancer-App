@@ -22,10 +22,12 @@ data: &data
   cache_tokens: false
 
 # == MLM-SPECIFIC DATA SETTINGS ==
+# NOTE: These values are overridden by the mlm section below.
+# Kept for backward compatibility but mlm section values take precedence.
 mlm_data: &mlm_data
-  mlm_max_bp_len: 234  # Aligned with stage max_bp_len for msBERT settings
+  mlm_max_bp_len: 234  # Longer sequences for general-purpose pretraining (DNABERT style)
   mlm_batch_size: 128
-  mlm_window_size: 234  # Should match mlm_max_bp_len
+  mlm_window_size: 234  # DNABERT: pretrain on longer sequences, fine-tune on task-specific lengths
 
 # == DATALOADER AND HARDWARE - OPTIMIZED FOR GOOGLE COLAB ==
 hardware: &hardware
@@ -153,7 +155,7 @@ mlm: &mlm
   mlm_species_weights: [0.45, 0.35, 0.20, 0.20, 0.20, 0.20]
   mlm_steps_per_epoch: 5000
   mlm_unknown_base_strategy: "skip"
-  mlm_window_size: 81  # MLM window size aligned with max_bp_len
+  mlm_window_size: 234  # DNABERT style: pretrain on longer sequences (10-510bp), fine-tune on task-specific
   mlm_stride: 20
   mlm_batch_size: 128
   mlm_epochs: 200
@@ -195,7 +197,7 @@ mlm: &mlm
     exclude_special_from_labels: true
   mlm_length_curriculum_enabled: true
   mlm_length_curriculum_start_tokens: 32
-  mlm_length_curriculum_end_tokens: 79
+  mlm_length_curriculum_end_tokens: 229  # 234 - k + 1 for k=6 (matches mlm_window_size)
   mlm_length_curriculum_start_pct: 0.0
   mlm_length_curriculum_end_pct: 0.3
 
