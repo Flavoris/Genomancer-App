@@ -178,7 +178,7 @@ mlm: &mlm
   mlm_val_exclude_patterns: ["mitochond", "plastid", "chloroplast"]
   mlm_min_val_records_per_species: 1
   mlm_single_record_val_ratio: 0.1
-  mlm_grad_accum_steps: 4
+  mlm_grad_accum_steps: 16  # Effective batch = 128 * 16 = 2048 (DNABERT uses 2000)
   mlm_warmup_ratio: 0.06
   mlm_final_lr_ratio: 0.1
   mlm_lr_log_interval: 50
