@@ -4264,7 +4264,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         )
     LOGGER.info("=" * 60)
 
-    # Early stopping setup
+    # Early stopping setup with intelligent convergence detection
     early_stopping_enabled = bool(cfg_run.get("mlm_early_stopping_enabled", True))
     if early_stopping_enabled:
         early_stopper = PretrainingEarlyStopping(
@@ -4274,12 +4274,23 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             kmer=int(vocab.k),
             restore_best=bool(cfg_run.get("mlm_early_stopping_restore_best", True)),
             verbose=True,
+            # New convergence detection parameters
+            accuracy_stagnation_window=int(cfg_run.get("mlm_accuracy_stagnation_window", 5)),
+            accuracy_stagnation_threshold=float(cfg_run.get("mlm_accuracy_stagnation_threshold", 0.01)),
+            rate_of_change_window=int(cfg_run.get("mlm_rate_of_change_window", 10)),
+            rate_of_change_min_improvement=float(cfg_run.get("mlm_rate_of_change_min_improvement", 0.005)),
+            target_accuracy=cfg_run.get("mlm_target_accuracy"),  # None means use k-mer defaults
+            target_loss=float(cfg_run.get("mlm_target_loss", 0.5)),
+            use_kmer_defaults=bool(cfg_run.get("mlm_use_kmer_defaults", True)),
         )
         LOGGER.info(
-            "Early stopping enabled (patience=%d, min_delta=%.6f, min_epochs=%d)",
+            "Early stopping enabled (patience=%d, min_delta=%.6f, min_epochs=%d, "
+            "target_acc=%.1f%%, target_loss=%.4f)",
             early_stopper.patience,
             early_stopper.min_delta,
             early_stopper.min_epochs,
+            (early_stopper.target_accuracy or 0) * 100,
+            early_stopper.target_loss,
         )
     else:
         early_stopper = None
@@ -4957,6 +4968,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 epoch=epoch,
                 checkpoint_dir=checkpoint_dir,
                 val_perplexity=val_ppl,
+                val_accuracy=val_acc,  # Pass accuracy for smart convergence detection
             )
 
             if early_stopper.best_epoch == epoch:
@@ -4975,7 +4987,8 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 patience_counter = early_stopper.epochs_without_improvement
 
             if should_stop:
-                LOGGER.info("Early stopping triggered at epoch %d", epoch)
+                stop_reason = getattr(early_stopper, 'stop_reason', 'patience_exceeded')
+                LOGGER.info("Early stopping triggered at epoch %d (reason: %s)", epoch, stop_reason)
                 if early_stopper.best_score is not None:
                     LOGGER.info(
                         "Best validation loss: %.6f at epoch %d",

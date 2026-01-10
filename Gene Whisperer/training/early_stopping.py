@@ -1,13 +1,17 @@
 """
 Early Stopping for MLM Pretraining
 
-Monitors validation loss and stops training when no improvement is seen
-for a specified number of epochs (patience).
+Monitors validation loss and accuracy with intelligent convergence detection:
+- Rate-of-change detection (stops when improvement rate drops)
+- Accuracy stagnation detection
+- "Good enough" thresholds for early exit
+- K-mer aware configuration (smaller k-mers need less training)
 """
 
 from __future__ import annotations
 
 import logging
+from collections import deque
 from pathlib import Path
 from typing import Optional, Literal
 import torch
@@ -215,13 +219,24 @@ class EarlyStopping:
 
 class PretrainingEarlyStopping(EarlyStopping):
     """
-    Early stopping specifically for MLM pretraining.
+    Early stopping specifically for MLM pretraining with intelligent convergence detection.
 
-    Adds additional checks relevant to pretraining:
-    - Monitors both validation loss and perplexity
+    Features beyond basic EarlyStopping:
+    - Monitors both validation loss AND accuracy
+    - Rate-of-change detection (stops when improvement rate drops below threshold)
+    - Accuracy stagnation detection over a sliding window
+    - "Good enough" thresholds for early exit when performance is satisfactory
+    - K-mer aware configuration (smaller k-mers converge faster)
     - Saves MLM-specific metadata with checkpoints
-    - Supports k-mer specific configuration
     """
+
+    # Default k-mer specific settings (smaller k-mers need less training)
+    KMER_DEFAULTS = {
+        3: {"min_epochs": 5, "patience": 8, "target_accuracy": 0.85},
+        4: {"min_epochs": 8, "patience": 10, "target_accuracy": 0.82},
+        5: {"min_epochs": 10, "patience": 12, "target_accuracy": 0.80},
+        6: {"min_epochs": 12, "patience": 15, "target_accuracy": 0.78},
+    }
 
     def __init__(
         self,
@@ -229,8 +244,42 @@ class PretrainingEarlyStopping(EarlyStopping):
         min_delta: float = 0.001,
         min_epochs: int = 30,
         kmer: int = 6,
+        # New convergence detection parameters
+        accuracy_stagnation_window: int = 5,
+        accuracy_stagnation_threshold: float = 0.01,
+        rate_of_change_window: int = 10,
+        rate_of_change_min_improvement: float = 0.005,
+        target_accuracy: Optional[float] = None,
+        target_loss: float = 0.5,
+        use_kmer_defaults: bool = True,
         **kwargs,
     ):
+        """
+        Args:
+            patience: Epochs to wait for improvement before stopping
+            min_delta: Minimum change in loss to qualify as improvement
+            min_epochs: Minimum epochs before stopping can trigger
+            kmer: K-mer size (used for k-mer aware defaults)
+            accuracy_stagnation_window: Epochs to check for accuracy stagnation
+            accuracy_stagnation_threshold: Min accuracy improvement over window
+            rate_of_change_window: Epochs to calculate improvement rate
+            rate_of_change_min_improvement: Min improvement rate per epoch
+            target_accuracy: Stop if accuracy exceeds this (good enough)
+            target_loss: Stop if loss drops below this (good enough)
+            use_kmer_defaults: Whether to use k-mer specific defaults
+        """
+        # Apply k-mer specific defaults if enabled
+        if use_kmer_defaults and kmer in self.KMER_DEFAULTS:
+            defaults = self.KMER_DEFAULTS[kmer]
+            min_epochs = defaults["min_epochs"]
+            patience = defaults["patience"]
+            if target_accuracy is None:
+                target_accuracy = defaults["target_accuracy"]
+            LOGGER.info(
+                f"Using k={kmer} defaults: min_epochs={min_epochs}, "
+                f"patience={patience}, target_accuracy={target_accuracy}"
+            )
+
         super().__init__(
             patience=patience,
             min_delta=min_delta,
@@ -239,7 +288,24 @@ class PretrainingEarlyStopping(EarlyStopping):
             **kwargs,
         )
         self.kmer = kmer
+
+        # Convergence detection settings
+        self.accuracy_stagnation_window = accuracy_stagnation_window
+        self.accuracy_stagnation_threshold = accuracy_stagnation_threshold
+        self.rate_of_change_window = rate_of_change_window
+        self.rate_of_change_min_improvement = rate_of_change_min_improvement
+        self.target_accuracy = target_accuracy
+        self.target_loss = target_loss
+
+        # History tracking for convergence detection
+        self.accuracy_history: deque = deque(maxlen=max(
+            accuracy_stagnation_window, rate_of_change_window
+        ) + 1)
+        self.loss_history: deque = deque(maxlen=rate_of_change_window + 1)
         self.perplexity_history: list[float] = []
+
+        # Stop reasons for logging
+        self.stop_reason: Optional[str] = None
 
     def __call__(
         self,
@@ -248,9 +314,10 @@ class PretrainingEarlyStopping(EarlyStopping):
         epoch: int,
         checkpoint_dir: Optional[Path] = None,
         val_perplexity: Optional[float] = None,
+        val_accuracy: Optional[float] = None,
     ) -> bool:
         """
-        Check if pretraining should stop.
+        Check if pretraining should stop with intelligent convergence detection.
 
         Args:
             val_loss: Validation loss
@@ -258,12 +325,134 @@ class PretrainingEarlyStopping(EarlyStopping):
             epoch: Current epoch
             checkpoint_dir: Directory for checkpoints
             val_perplexity: Optional validation perplexity
+            val_accuracy: Validation accuracy (required for smart stopping)
         """
-        # Track perplexity if provided
+        # Track metrics history
         if val_perplexity is not None:
             self.perplexity_history.append(val_perplexity)
 
-        return super().__call__(val_loss, model, epoch, checkpoint_dir)
+        if val_accuracy is not None:
+            self.accuracy_history.append(val_accuracy)
+
+        self.loss_history.append(val_loss)
+
+        # Run base early stopping check (loss-based)
+        base_should_stop = super().__call__(val_loss, model, epoch, checkpoint_dir)
+
+        if base_should_stop:
+            self.stop_reason = "patience_exceeded"
+            return True
+
+        # Skip additional checks until min_epochs passed
+        if epoch < self.min_epochs:
+            return False
+
+        # Check "good enough" thresholds
+        if self._check_good_enough(val_loss, val_accuracy, epoch):
+            self.should_stop = True
+            return True
+
+        # Check accuracy stagnation
+        if val_accuracy is not None and self._check_accuracy_stagnation(epoch):
+            self.should_stop = True
+            return True
+
+        # Check rate of change (diminishing returns)
+        if self._check_diminishing_returns(epoch):
+            self.should_stop = True
+            return True
+
+        return False
+
+    def _check_good_enough(
+        self, val_loss: float, val_accuracy: Optional[float], epoch: int
+    ) -> bool:
+        """Check if we've reached 'good enough' performance to stop early."""
+        # Check accuracy threshold
+        if val_accuracy is not None and self.target_accuracy is not None:
+            if val_accuracy >= self.target_accuracy:
+                self.stop_reason = f"target_accuracy_reached ({val_accuracy:.1%} >= {self.target_accuracy:.1%})"
+                LOGGER.info(
+                    f"Epoch {epoch}: Target accuracy reached! "
+                    f"{val_accuracy:.1%} >= {self.target_accuracy:.1%} - stopping early"
+                )
+                return True
+
+        # Check loss threshold
+        if val_loss <= self.target_loss:
+            self.stop_reason = f"target_loss_reached ({val_loss:.4f} <= {self.target_loss:.4f})"
+            LOGGER.info(
+                f"Epoch {epoch}: Target loss reached! "
+                f"{val_loss:.4f} <= {self.target_loss:.4f} - stopping early"
+            )
+            return True
+
+        return False
+
+    def _check_accuracy_stagnation(self, epoch: int) -> bool:
+        """Check if accuracy has stagnated over the window."""
+        if len(self.accuracy_history) < self.accuracy_stagnation_window:
+            return False
+
+        # Get accuracy values from window
+        recent_accuracies = list(self.accuracy_history)[-self.accuracy_stagnation_window:]
+        oldest = recent_accuracies[0]
+        newest = recent_accuracies[-1]
+        improvement = newest - oldest
+
+        # Also check max improvement in window
+        min_in_window = min(recent_accuracies)
+        max_in_window = max(recent_accuracies)
+        range_in_window = max_in_window - min_in_window
+
+        if improvement < self.accuracy_stagnation_threshold and \
+           range_in_window < self.accuracy_stagnation_threshold * 2:
+            self.stop_reason = (
+                f"accuracy_stagnation (improvement={improvement:.4f} < "
+                f"{self.accuracy_stagnation_threshold:.4f} over {self.accuracy_stagnation_window} epochs)"
+            )
+            LOGGER.info(
+                f"Epoch {epoch}: Accuracy stagnation detected! "
+                f"Improvement over last {self.accuracy_stagnation_window} epochs: "
+                f"{improvement:.4f} (threshold: {self.accuracy_stagnation_threshold:.4f})"
+            )
+            return True
+
+        return False
+
+    def _check_diminishing_returns(self, epoch: int) -> bool:
+        """Check if improvement rate has dropped below threshold (diminishing returns)."""
+        if len(self.loss_history) < self.rate_of_change_window:
+            return False
+
+        # Calculate average improvement rate over window
+        recent_losses = list(self.loss_history)[-self.rate_of_change_window:]
+        first_half = recent_losses[:len(recent_losses)//2]
+        second_half = recent_losses[len(recent_losses)//2:]
+
+        avg_first = sum(first_half) / len(first_half)
+        avg_second = sum(second_half) / len(second_half)
+
+        # For loss, improvement is positive when avg_first > avg_second
+        improvement_rate = (avg_first - avg_second) / (self.rate_of_change_window / 2)
+
+        # Also check if we're oscillating (no net progress)
+        net_improvement = recent_losses[0] - recent_losses[-1]
+
+        if improvement_rate < self.rate_of_change_min_improvement and \
+           net_improvement < self.rate_of_change_min_improvement * self.rate_of_change_window:
+            self.stop_reason = (
+                f"diminishing_returns (rate={improvement_rate:.6f}/epoch < "
+                f"{self.rate_of_change_min_improvement:.6f})"
+            )
+            LOGGER.info(
+                f"Epoch {epoch}: Diminishing returns detected! "
+                f"Improvement rate: {improvement_rate:.6f}/epoch "
+                f"(threshold: {self.rate_of_change_min_improvement:.6f})"
+            )
+            return True
+
+        return False
 
     def _save_checkpoint(
         self,
@@ -278,14 +467,16 @@ class PretrainingEarlyStopping(EarlyStopping):
 
         checkpoint_path = checkpoint_dir / f"mlm_encoder_k{self.kmer}_best.pt"
 
-        # Get perplexity if available
+        # Get latest perplexity and accuracy if available
         perplexity = self.perplexity_history[-1] if self.perplexity_history else None
+        accuracy = self.accuracy_history[-1] if self.accuracy_history else None
 
         torch.save({
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "best_val_loss": score,
             "best_perplexity": perplexity,
+            "best_accuracy": accuracy,
             "kmer": self.kmer,
         }, checkpoint_path)
 
@@ -293,7 +484,21 @@ class PretrainingEarlyStopping(EarlyStopping):
 
         if self.verbose:
             perplexity_str = f"{perplexity:.2f}" if perplexity is not None else "N/A"
+            accuracy_str = f"{accuracy:.1%}" if accuracy is not None else "N/A"
             LOGGER.info(
                 f"Saved k={self.kmer} MLM checkpoint (epoch {epoch}, "
-                f"val_loss={score:.6f}, perplexity={perplexity_str})"
+                f"val_loss={score:.6f}, perplexity={perplexity_str}, accuracy={accuracy_str})"
             )
+
+    def get_summary(self) -> dict:
+        """Get summary of early stopping state including convergence info."""
+        base_summary = super().get_summary()
+        base_summary.update({
+            "kmer": self.kmer,
+            "stop_reason": self.stop_reason,
+            "final_accuracy": self.accuracy_history[-1] if self.accuracy_history else None,
+            "accuracy_history_len": len(self.accuracy_history),
+            "target_accuracy": self.target_accuracy,
+            "target_loss": self.target_loss,
+        })
+        return base_summary

@@ -299,6 +299,7 @@ multi_kmer_pretrain: &multi_kmer_pretrain
       vocab_size: 4099 # 4^6 + 3 special tokens
 
 # == EARLY STOPPING FOR PRETRAINING ==
+# Now with intelligent convergence detection to prevent wasted compute
 pretrain_early_stopping: &pretrain_early_stopping
   # Enable early stopping during pretraining
   mlm_early_stopping_enabled: true
@@ -306,17 +307,42 @@ pretrain_early_stopping: &pretrain_early_stopping
   # Metric to monitor (validation loss)
   mlm_early_stopping_metric: "val_loss"
 
-  # Patience: epochs to wait for improvement
-  mlm_early_stopping_patience: 20
+  # Use k-mer specific defaults (recommended - smaller k-mers converge faster)
+  # When true, these settings override patience/min_epochs based on k-mer size:
+  #   k=3: min_epochs=5, patience=8, target_accuracy=85%
+  #   k=4: min_epochs=8, patience=10, target_accuracy=82%
+  #   k=5: min_epochs=10, patience=12, target_accuracy=80%
+  #   k=6: min_epochs=12, patience=15, target_accuracy=78%
+  mlm_use_kmer_defaults: true
+
+  # Patience: epochs to wait for improvement (overridden by k-mer defaults)
+  mlm_early_stopping_patience: 15
 
   # Minimum delta: minimum change to qualify as improvement
   mlm_early_stopping_min_delta: 0.001
 
-  # Minimum epochs before early stopping can trigger
-  mlm_early_stopping_min_epochs: 30
+  # Minimum epochs before early stopping can trigger (overridden by k-mer defaults)
+  mlm_early_stopping_min_epochs: 10
 
   # Restore best weights when stopping
   mlm_early_stopping_restore_best: true
+
+  # == INTELLIGENT CONVERGENCE DETECTION ==
+  # These settings detect when training is making minimal progress
+
+  # Accuracy stagnation: stop if accuracy improves less than threshold over window
+  mlm_accuracy_stagnation_window: 5      # Number of epochs to check
+  mlm_accuracy_stagnation_threshold: 0.01  # Min improvement required (1%)
+
+  # Rate of change: stop if improvement rate drops below minimum
+  mlm_rate_of_change_window: 10          # Number of epochs to calculate rate
+  mlm_rate_of_change_min_improvement: 0.005  # Min improvement per epoch
+
+  # "Good enough" thresholds: stop early if these targets are reached
+  # These prevent wasting compute when performance is already satisfactory
+  # Set to null to use k-mer specific defaults, or override with specific value
+  mlm_target_accuracy: null  # Uses k-mer defaults (85% for k=3, 78% for k=6)
+  mlm_target_loss: 0.5       # Stop if loss drops below this
 
 # == ABLATION / SCORING ==
 ablation:
