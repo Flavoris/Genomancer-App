@@ -474,6 +474,7 @@ class PretrainingEarlyStopping(EarlyStopping):
         torch.save({
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
+            "best_score": score,  # Required for base class restore_best_weights
             "best_val_loss": score,
             "best_perplexity": perplexity,
             "best_accuracy": accuracy,
