@@ -292,7 +292,8 @@ class PretrainingEarlyStopping(EarlyStopping):
         self.best_checkpoint_path = checkpoint_path
 
         if self.verbose:
+            perplexity_str = f"{perplexity:.2f}" if perplexity is not None else "N/A"
             LOGGER.info(
                 f"Saved k={self.kmer} MLM checkpoint (epoch {epoch}, "
-                f"val_loss={score:.6f}, perplexity={perplexity:.2f if perplexity else 'N/A'})"
+                f"val_loss={score:.6f}, perplexity={perplexity_str})"
             )
