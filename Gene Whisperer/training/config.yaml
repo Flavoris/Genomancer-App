@@ -245,18 +245,6 @@ metrics: &metrics
   metrics_stage1: ["accuracy", "precision", "recall", "f1", "mcc", "specificity"]
   metrics_stage2: ["accuracy", "mcc", "roc_auc"]
 
-# == MULTI-SCALE ENSEMBLE ==
-ensemble: &ensemble
-  use_multi_scale: true
-  multi_scale_kmers: [3, 4, 5, 6]
-  ensemble_method: "soft_voting"
-  ensemble_learn_weights: true
-  ensemble_weights:
-    3: 0.20
-    4: 0.25
-    5: 0.25
-    6: 0.30
-
 # == TRANSFER SMOKETEST ==
 smoketest: &smoketest
   smoketest_steps_pretrain: 300
@@ -397,7 +385,6 @@ distill:
 <<: *checkpoints
 <<: *visualization
 <<: *metrics
-<<: *ensemble
 <<: *smoketest
 <<: *amp
 <<: *multi_kmer_pretrain

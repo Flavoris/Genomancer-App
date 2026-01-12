@@ -75,10 +75,12 @@ def sequential_train(
         print("-" * 60)
 
         # Create overrides for this k-mer
+        # Disable multi-scale since sequential training handles k-mers independently
         overrides = {
             "_config_path": str(config_path),
             "kmer": kmer,
             "stage1_checkpoint_name": f"stage1_k{kmer}_sequential.pt",
+            "use_multi_scale": False,
         }
 
         # Check for k-mer specific MLM vocab
