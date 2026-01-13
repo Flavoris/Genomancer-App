@@ -21,6 +21,85 @@ import torch.nn.functional as F  # pyright: ignore[reportMissingImports]
 LOGGER = logging.getLogger(__name__)
 
 
+def _load_checkpoint_file(checkpoint_path: Path) -> dict:
+    """
+    Load a checkpoint file with robust error handling and format detection.
+
+    Supports:
+    - Standard PyTorch .pt/.pth files
+    - Safetensors format (.safetensors)
+    - Handles corrupted/incomplete files gracefully
+
+    Raises:
+        FileNotFoundError: If checkpoint file doesn't exist
+        ValueError: If file format is invalid or corrupted
+    """
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+
+    suffix = checkpoint_path.suffix.lower()
+
+    # Handle safetensors format
+    if suffix == ".safetensors":
+        try:
+            from safetensors.torch import load_file
+            return load_file(str(checkpoint_path))
+        except ImportError:
+            raise ImportError(
+                f"Checkpoint is in safetensors format ({checkpoint_path}), "
+                "but safetensors is not installed. Install with: pip install safetensors"
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to load safetensors checkpoint {checkpoint_path}: {e}")
+
+    # Validate file appears to be a valid PyTorch checkpoint
+    try:
+        with open(checkpoint_path, "rb") as f:
+            header = f.read(8)
+    except Exception as e:
+        raise ValueError(f"Cannot read checkpoint file {checkpoint_path}: {e}")
+
+    # PyTorch checkpoints use pickle which starts with specific bytes
+    # Common magic numbers: 0x80 (pickle protocol 2+), ZIP files start with PK
+    if len(header) < 2:
+        raise ValueError(
+            f"Checkpoint file is too small to be valid: {checkpoint_path} ({len(header)} bytes)"
+        )
+
+    # Check for obvious non-checkpoint files
+    if header[:4] == b"PK\x03\x04":
+        # ZIP file - could be a safetensors in disguise or compressed checkpoint
+        pass  # Let torch.load try
+    elif header[0:1] not in (b"\x80", b"P"):
+        # Not pickle protocol or ZIP, check if it might be text
+        try:
+            sample = header.decode("utf-8", errors="strict")
+            if sample.isprintable() or sample.startswith("{"):
+                raise ValueError(
+                    f"Checkpoint file appears to be a text/JSON file, not a PyTorch checkpoint: "
+                    f"{checkpoint_path}\nFirst bytes: {header[:50]!r}"
+                )
+        except UnicodeDecodeError:
+            pass  # Binary file, let torch.load try
+
+    # Attempt to load with torch
+    try:
+        return torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except Exception as e:
+        error_msg = str(e)
+        if "invalid load key" in error_msg:
+            raise ValueError(
+                f"Checkpoint file is corrupted or not a valid PyTorch checkpoint: "
+                f"{checkpoint_path}\n"
+                f"This can happen if:\n"
+                f"  1. The download was incomplete\n"
+                f"  2. The file is in a different format (e.g., safetensors)\n"
+                f"  3. The file was corrupted during transfer\n"
+                f"Original error: {e}"
+            )
+        raise ValueError(f"Failed to load checkpoint {checkpoint_path}: {e}")
+
+
 class AttentionPooling(nn.Module):
     """
     Learned attention-based pooling for sequence aggregation.
@@ -507,18 +586,25 @@ class DNAEncoder(nn.Module):
     def load_mlm_weights(self, checkpoint: Union[str, Path, dict], strict: bool = False) -> None:
         """Load pretrained MLM encoder weights with flexible matching."""
         if isinstance(checkpoint, (str, Path)):
-            state_dict = torch.load(checkpoint, map_location="cpu", weights_only=False)
+            checkpoint_path = Path(checkpoint)
+            state_dict = _load_checkpoint_file(checkpoint_path)
         else:
             state_dict = checkpoint
-        
+
+        # Handle nested checkpoint format (e.g., {"model_state_dict": ...})
+        if "model_state_dict" in state_dict:
+            state_dict = state_dict["model_state_dict"]
+        elif "state_dict" in state_dict:
+            state_dict = state_dict["state_dict"]
+
         # Try to load what we can
         model_dict = self.state_dict()
         pretrained_dict = {}
-        
+
         for k, v in state_dict.items():
             if k in model_dict and model_dict[k].shape == v.shape:
                 pretrained_dict[k] = v
-        
+
         model_dict.update(pretrained_dict)
         self.load_state_dict(model_dict)
         LOGGER.info("Loaded %d/%d weights from MLM checkpoint", len(pretrained_dict), len(state_dict))
@@ -1513,7 +1599,7 @@ class GeneWhispererStage1(nn.Module):
             checkpoint_path: Path to checkpoint file
             strict: If False (default), allows missing keys for new components
         """
-        state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        state_dict = _load_checkpoint_file(Path(checkpoint_path))
 
         # Handle nested state dict (e.g., from training checkpoints)
         if "model_state_dict" in state_dict:
@@ -2202,7 +2288,7 @@ class GeneWhispererStage2(nn.Module):
         if device is None:
             device = next(self.parameters()).device
 
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        checkpoint = _load_checkpoint_file(checkpoint_path)
 
         # Handle different checkpoint formats
         if isinstance(checkpoint, dict) and "model_state" in checkpoint:
