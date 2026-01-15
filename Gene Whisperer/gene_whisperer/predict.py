@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import statistics
 import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
@@ -212,8 +214,8 @@ def _load_checkpoint(
     model: GeneWhispererStage1,
     path: Path,
     device: torch.device,
-) -> None:
-    """Load model weights from checkpoint file."""
+) -> Optional[float]:
+    """Load model weights from checkpoint file and return best_threshold if present."""
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     state_dict = checkpoint.get("model_state", checkpoint)
 
@@ -223,9 +225,51 @@ def _load_checkpoint(
         LOGGER.warning("Strict loading failed, using non-strict loading")
         model.load_state_dict(state_dict, strict=False)
 
+    best_threshold = None
+    if isinstance(checkpoint, dict) and "best_threshold" in checkpoint:
+        best_threshold = float(checkpoint["best_threshold"])
+        model.best_threshold = best_threshold
+        LOGGER.info("Loaded best_threshold=%.4f from %s", best_threshold, path)
+    else:
+        model.best_threshold = None
+        LOGGER.debug("No best_threshold found in %s", path)
+
     model.to(device)
     model.eval()
     LOGGER.info("Loaded model from %s", path)
+    return best_threshold
+
+
+def _resolve_decision_threshold(
+    requested_threshold: Optional[float],
+    checkpoint_thresholds: List[float],
+) -> float:
+    """Select a decision threshold from user input or checkpoint metadata."""
+    if requested_threshold is not None:
+        return float(requested_threshold)
+
+    candidates: List[float] = []
+    for threshold in checkpoint_thresholds:
+        if threshold is None:
+            continue
+        try:
+            value = float(threshold)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value):
+            candidates.append(value)
+
+    if candidates:
+        chosen = float(statistics.median(candidates))
+        if len(candidates) > 1:
+            LOGGER.info("Using median best_threshold=%.4f from %d checkpoints", chosen, len(candidates))
+        else:
+            LOGGER.info("Using checkpoint best_threshold=%.4f", chosen)
+        return chosen
+
+    fallback = 0.5
+    LOGGER.info("No checkpoint threshold found; using default %.2f", fallback)
+    return fallback
 
 
 class Stage1Predictor:
@@ -235,7 +279,7 @@ class Stage1Predictor:
     Uses an ensemble of models with different k-mer sizes for robust prediction.
 
     Attributes:
-        threshold: Decision threshold for promoter classification (default 0.5)
+        threshold: Decision threshold for promoter classification
     """
 
     def __init__(
@@ -311,7 +355,7 @@ def load_stage1_ensemble(
     config_path: Union[str, Path],
     checkpoints_and_vocabs: Dict[int, Dict[str, str]],
     device: Optional[torch.device] = None,
-    threshold: float = 0.5,
+    threshold: Optional[float] = None,
 ) -> Stage1Predictor:
     """
     Load a Stage 1 ensemble predictor from config and checkpoints.
@@ -324,7 +368,7 @@ def load_stage1_ensemble(
                 6: {"checkpoint": "path/to/stage1_k6.pt", "vocab": "path/to/k6_vocab.json"},
             }
         device: Optional torch device (auto-selects if None)
-        threshold: Decision threshold for promoter classification
+        threshold: Decision threshold override. If None, uses checkpoint best_threshold.
 
     Returns:
         Stage1Predictor callable that takes a sequence and returns predictions
@@ -356,6 +400,7 @@ def load_stage1_ensemble(
 
     models: List[GeneWhispererStage1] = []
     vocabs: Dict[int, KmerVocabulary] = {}
+    checkpoint_thresholds: List[float] = []
 
     for k, paths in checkpoints_and_vocabs.items():
         k = int(k)
@@ -376,7 +421,9 @@ def load_stage1_ensemble(
         arch_overrides = _infer_architecture_from_checkpoint(checkpoint_path, device)
 
         model = _build_model(cfg, vocab, device, arch_overrides=arch_overrides)
-        _load_checkpoint(model, checkpoint_path, device)
+        loaded_threshold = _load_checkpoint(model, checkpoint_path, device)
+        if loaded_threshold is not None:
+            checkpoint_thresholds.append(loaded_threshold)
         models.append(model)
 
         LOGGER.info("Loaded k=%d model from %s", k, checkpoint_path)
@@ -389,12 +436,14 @@ def load_stage1_ensemble(
 
     LOGGER.info("Ensemble ready with %d models", len(models))
 
+    resolved_threshold = _resolve_decision_threshold(threshold, checkpoint_thresholds)
+
     return Stage1Predictor(
         ensemble=ensemble,
         vocabs=vocabs,
         cfg=cfg,
         device=device,
-        threshold=threshold,
+        threshold=resolved_threshold,
     )
 
 
@@ -423,8 +472,8 @@ def main() -> None:
     parser.add_argument(
         "--threshold",
         type=float,
-        default=0.5,
-        help="Promoter decision threshold (default: 0.5)",
+        default=None,
+        help="Promoter decision threshold override (default: checkpoint best_threshold or 0.5)",
     )
     parser.add_argument(
         "--kmer-configs",

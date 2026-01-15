@@ -103,7 +103,6 @@ def run_smoke_test() -> int:
         predictor = load_stage1_ensemble(
             config_path=config_path,
             checkpoints_and_vocabs=kmer_config,
-            threshold=0.5,
         )
 
         LOGGER.info("Running prediction...")
