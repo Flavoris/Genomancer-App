@@ -11,6 +11,8 @@ from typing import Any, Iterable
 import numpy as np
 import yaml
 
+from ablation_variants import STAGE2_VARIANTS
+
 
 def _parse_seeds(value: str) -> list[int]:
     parts: list[int] = []
@@ -215,12 +217,7 @@ def main() -> int:
 
     seeds: list[int] = args.seeds
 
-    ablations: list[tuple[str, dict[str, Any]]] = [
-        ("no_attention_pool", {"use_attention_pool": False}),
-        ("no_tcn", {"use_tcn": False}),
-        ("no_postcnn_transformer", {"post_cnn_transformer_layers": 0}),
-        ("no_engineered_features", {"stage2_use_engineered_features": False}),
-    ]
+    ablations = STAGE2_VARIANTS
 
     baseline_results = _run_variant(
         base_cfg=cfg,
@@ -365,6 +362,10 @@ def main() -> int:
             "no_tcn": {"use_tcn": False},
             "no_postcnn_transformer": {"post_cnn_transformer_layers": 0},
             "no_engineered_features": {"stage1_use_engineered_features": False},
+            "no_tnc": {"stage1_feature_enable_tnc": False},
+            "no_pseeiip": {"stage1_feature_enable_pseeiip": False},
+            "no_cksnap": {"stage1_feature_enable_cksnap": False},
+            "no_pstnp": {"stage1_feature_enable_pstnp": False},
         }
         overall_overrides: dict[str, Any] = {}
         for name in overall_candidates:

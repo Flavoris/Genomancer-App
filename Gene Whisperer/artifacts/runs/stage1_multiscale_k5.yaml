@@ -1,36 +1,40 @@
-seed: 1337
-max_bp_len: 234
-batch_size: 32
+max_bp_len: 81
+batch_size: 16
 delimiter: "\t"
 train_val_split: 0.9
-num_workers: 0
-persistent_workers: false
-cache_engineered_features: false
-cache_tokens: false
-stage1_train: ../data/stage1_train.tsv
-stage1_val: ../data/stage1_val.tsv
-stage2_train: ../data/stage2_train.tsv
-stage2_val: ../data/stage2_val.tsv
-stage2_test: ../data/stage2_val.tsv
+stage1_train: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/data/stage1_train.tsv
+stage1_val: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/data/stage1_val.tsv
+stage2_train: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/data/stage2_train.tsv
+stage2_val: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/data/stage2_val.tsv
+stage2_test: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/data/stage2_val.tsv
 stage2_strength_positive: 1
 stage2_strength_negative: 0
-embedding_dim: 256
-transformer_layers: 8
-transformer_heads: 8
-transformer_ff_dim: 1024
-transformer_dropout: 0.15
+cache_engineered_features: false
+cache_tokens: false
+mlm_max_bp_len: 234
+mlm_batch_size: 128
+mlm_window_size: 234
+num_workers: 8
+persistent_workers: true
+prefetch_factor: 2
+pin_memory: true
+embedding_dim: 384
+transformer_layers: 12
+transformer_heads: 12
+transformer_ff_dim: 1536
+transformer_dropout: 0.12
+use_glu_ffn: true
+glu_activation: gelu
+use_relative_position_bias: true
+relative_position_num_buckets: 32
+relative_position_max_distance: 128
 use_attention_pool: true
-kmer: 5
-stage2_kmer: 6
-vocab_size: 4099
-pad_token_id: 4098
-vocab_cache_dir: ../artifacts/vocabs
 use_tcn: true
-tcn_hidden: 256
-tcn_levels: 4
+tcn_hidden: 384
+tcn_levels: 5
 tcn_kernel: 3
 multiscale_channels: 64
-multiscale_kernels:
+multiscale_kernels: &id001
 - 3
 - 5
 - 7
@@ -38,34 +42,49 @@ multiscale_kernels:
 - 15
 lstm_hidden: 192
 post_cnn_transformer_layers: 3
+kmer: 5
+stage2_kmer: 6
+vocab_size: 4099
+pad_token_id: 4098
+vocab_cache_dir: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/vocabs
+use_tnc: true
+use_pseeiip: true
+use_cksnap: true
+use_pstnp: true
+engineered_dim: 288
+engineered_mlp_hidden: 512
+engineered_mlp_output: 384
+fusion_hidden: 512
 stage1_use_engineered_features: true
-engineered_dim: 128
-engineered_mlp_hidden: 256
-engineered_mlp_output: 128
-fusion_hidden: 256
-stage1_reverse_complement_prob: 0.0
+stage1_feature_enable_tnc: true
+stage1_feature_enable_pseeiip: true
+stage1_feature_enable_cksnap: true
+stage1_feature_enable_pstnp: false
 optimizer: adamw
 optimizer_foreach: true
-lr: 0.0001
-weight_decay: 0.02
-warmup_ratio: 0.05
-epochs: 120
-early_stopping_patience: 35
+lr: 2.0e-05
+stage1_lr: 2.0e-05
+stage2_lr: 1.0e-05
+weight_decay: 0.01
+warmup_ratio: 0.1
+epochs: 100
+early_stopping_patience: 15
 grad_accum_steps: 4
 grad_clip_norm: 1.0
-param_norm_warn: 250
-param_norm_cap: 300
-layer_lr_decay: 0.8
+param_norm_warn: 400
+param_norm_cap: 500
+layer_lr_decay: 0.85
 drop_path_rate: 0.1
 stage1_use_focal_loss: false
-stage1_focal_alpha: 0.5
+stage1_focal_alpha: 0.25
 stage1_focal_gamma: 2.0
-label_smoothing: 0.05
+label_smoothing: 0.0
 use_mixup: true
-mixup_alpha: 0.2
+mixup_alpha: 0.1
+stage1_reverse_complement_prob: 0.5
 use_swa: true
-swa_start_epoch: 60
-swa_lr: 5.0e-05
+swa_start_epoch: 80
+swa_lr: 3.0e-05
 swa_anneal_epochs: 10
 stage1_label_smoothing: 0.0
 stage1_use_mixup: null
@@ -87,84 +106,350 @@ stage1_mlm_transfer_mode: embed_plus_adapter
 stage2_mlm_transfer_mode: embed_plus_adapter
 stage1_freeze_layers: 0
 stage1_unfreeze_epoch: null
-mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k6.pt
+mlm_encoder_checkpoint: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/mlm_encoder_k6.pt
 include_reverse_complements: true
-mlm_fasta_path: ../data/GCF_000005845.2_ASM584v2_genomic.fna
-mlm_fasta_paths:
+mlm_fasta_path: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/data/GCF_000005845.2_ASM584v2_genomic.fna
+mlm_fasta_paths: &id002
 - ../data/GCF_000005845.2_ASM584v2_genomic.fna
 - ../data/B_subtilis_genome
 - ../data/S_cerevisiae_genome
-mlm_species_weights:
+- ../data/human_genome
+- ../data/pseudomonas_genome
+- ../data/japanese_rice_genome
+mlm_species_weights: &id003
 - 0.45
 - 0.35
 - 0.2
+- 0.2
+- 0.2
+- 0.2
 mlm_steps_per_epoch: 5000
-mlm_unknown_base_strategy: random
-mlm_window_size: 234
+mlm_unknown_base_strategy: skip
 mlm_stride: 20
-mlm_batch_size: 128
 mlm_epochs: 200
 mlm_lr: 0.0002
 mlm_weight_decay: 0.01
 mlm_kmer: 6
-mlm_vocab_path: ../artifacts/vocabs/mlm_k6_vocab.json
-mlm_encoder_path: ../artifacts/mlm_encoder_k6.pt
-mlm_embedding_dim: 256
-mlm_transformer_layers: 8
-mlm_transformer_heads: 8
-mlm_transformer_ff_dim: 1024
+mlm_vocab_path: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/vocabs/mlm_k6_vocab.json
+mlm_encoder_path: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/mlm_encoder_k6.pt
+mlm_embedding_dim: 384
+mlm_transformer_layers: 12
+mlm_transformer_heads: 12
+mlm_transformer_ff_dim: 1536
 mlm_transformer_dropout: 0.1
 mlm_tie_weights: true
 mlm_use_output_norm: true
 mlm_use_layer_lr_decay: false
 mlm_layer_lr_decay: 0.9
 mlm_val_ratio: 0.1
-mlm_val_exclude_patterns:
+mlm_val_exclude_patterns: &id004
 - mitochond
+- plastid
+- chloroplast
 mlm_min_val_records_per_species: 1
 mlm_single_record_val_ratio: 0.1
-mlm_grad_accum_steps: 4
+mlm_grad_accum_steps: 16
 mlm_warmup_ratio: 0.06
 mlm_final_lr_ratio: 0.1
 mlm_lr_log_interval: 50
 mlm_patience: 30
+mlm_checkpoint_keep_last: 2
+mlm_mask_prob: 0.15
+mlm_masking: &id005
+  progressive: false
+  initial_mask_rate: 0.15
+  final_mask_rate: 0.2
+  transition_start_ratio: 0.8
+  max_span_len: 3
+  span_distribution: geometric
+  mean_span: 3.0
+  exclude_special_from_labels: true
 mlm_length_curriculum_enabled: true
 mlm_length_curriculum_start_tokens: 32
-mlm_length_curriculum_end_tokens: 79
+mlm_length_curriculum_end_tokens: 229
 mlm_length_curriculum_start_pct: 0.0
 mlm_length_curriculum_end_pct: 0.3
+mlm_encoder_ckpt_by_k: &id006
+  3: ../artifacts/mlm_encoder_k3.pt
+  4: ../artifacts/mlm_encoder_k4.pt
+  5: ../artifacts/mlm_encoder_k5.pt
+  6: ../artifacts/mlm_encoder_k6.pt
+mlm_metadata_by_k: &id007
+  3: ../artifacts/mlm_encoder_k3_metadata.json
+  4: ../artifacts/mlm_encoder_k4_metadata.json
+  5: ../artifacts/mlm_encoder_k5_metadata.json
+  6: ../artifacts/mlm_encoder_k6_metadata.json
 stage1_checkpoint_name: stage1_k5.pt
 stage1_ckpt_by_k:
-  3: ../artifacts/checkpoints/stage1_k3.pt
-  4: ../artifacts/checkpoints/stage1_k4.pt
-  5: ../artifacts/checkpoints/stage1_k5.pt
-  6: ../artifacts/checkpoints/stage1_k6.pt
+  '3': /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k3.pt
+  '4': /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k4.pt
+  '5': /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k5.pt
+  '6': /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k6.pt
 stage1_embed_plot_epoch: null
 stage1_embed_plot_method: pca
 stage1_embed_plot_samples: 512
-metrics_stage1:
+metrics_stage1: &id009
 - accuracy
 - precision
 - recall
 - f1
 - mcc
 - specificity
-metrics_stage2:
+metrics_stage2: &id010
 - accuracy
 - mcc
 - roc_auc
-use_multi_scale: true
-multi_scale_kmers:
-- 3
-- 4
-- 5
-- 6
 smoketest_steps_pretrain: 300
 smoketest_steps_stage1: 300
 smoketest_steps_stage2: 300
 amp_enabled: true
-amp_dtype: bfloat16
+amp_dtype: float16
 amp_force_fp32_loss: true
+multi_kmer_pretrain_enabled: true
+pretrain_kmers: &id011
+- 3
+- 4
+- 5
+- 6
+pretrain_mode: sequential
+kmer_pretrain_overrides: &id012
+  3:
+    mlm_epochs: 100
+    mlm_lr: 0.0003
+    vocab_size: 67
+  4:
+    mlm_epochs: 120
+    mlm_lr: 0.00025
+    vocab_size: 259
+  5:
+    mlm_epochs: 150
+    mlm_lr: 0.0002
+    vocab_size: 1027
+  6:
+    mlm_epochs: 200
+    mlm_lr: 0.0002
+    vocab_size: 4099
+mlm_early_stopping_enabled: true
+mlm_early_stopping_metric: val_loss
+mlm_use_kmer_defaults: true
+mlm_early_stopping_patience: 15
+mlm_early_stopping_min_delta: 0.001
+mlm_early_stopping_min_epochs: 10
+mlm_early_stopping_restore_best: true
+mlm_accuracy_stagnation_window: 5
+mlm_accuracy_stagnation_threshold: 0.01
+mlm_rate_of_change_window: 10
+mlm_rate_of_change_min_improvement: 0.005
+mlm_target_accuracy: null
+mlm_target_loss: 0.5
+mlm_vocab_by_k: &id008
+  3: ../artifacts/vocabs/mlm_k3_vocab.json
+  4: ../artifacts/vocabs/mlm_k4_vocab.json
+  5: ../artifacts/vocabs/mlm_k5_vocab.json
+  6: ../artifacts/vocabs/mlm_k6_vocab.json
+seed: 1337
+data:
+  max_bp_len: 81
+  batch_size: 16
+  delimiter: "\t"
+  train_val_split: 0.9
+  stage1_train: ../data/stage1_train.tsv
+  stage1_val: ../data/stage1_val.tsv
+  stage2_train: ../data/stage2_train.tsv
+  stage2_val: ../data/stage2_val.tsv
+  stage2_test: ../data/stage2_val.tsv
+  stage2_strength_positive: 1
+  stage2_strength_negative: 0
+  cache_engineered_features: false
+  cache_tokens: false
+mlm_data:
+  mlm_max_bp_len: 234
+  mlm_batch_size: 128
+  mlm_window_size: 234
+hardware:
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 2
+  pin_memory: true
+model:
+  embedding_dim: 384
+  transformer_layers: 12
+  transformer_heads: 12
+  transformer_ff_dim: 1536
+  transformer_dropout: 0.12
+  use_glu_ffn: true
+  glu_activation: gelu
+  use_relative_position_bias: true
+  relative_position_num_buckets: 32
+  relative_position_max_distance: 128
+  use_attention_pool: true
+  use_tcn: true
+  tcn_hidden: 384
+  tcn_levels: 5
+  tcn_kernel: 3
+  multiscale_channels: 64
+  multiscale_kernels: *id001
+  lstm_hidden: 192
+  post_cnn_transformer_layers: 3
+  kmer: 6
+  stage2_kmer: 6
+  vocab_size: 4099
+  pad_token_id: 4098
+  vocab_cache_dir: ../artifacts/vocabs
+features:
+  use_tnc: true
+  use_pseeiip: true
+  use_cksnap: true
+  use_pstnp: true
+  engineered_dim: 288
+  engineered_mlp_hidden: 512
+  engineered_mlp_output: 384
+  fusion_hidden: 512
+  stage1_use_engineered_features: true
+  stage1_feature_enable_tnc: true
+  stage1_feature_enable_pseeiip: true
+  stage1_feature_enable_cksnap: true
+  stage1_feature_enable_pstnp: true
+training:
+  optimizer: adamw
+  optimizer_foreach: true
+  lr: 2.0e-05
+  stage1_lr: 2.0e-05
+  stage2_lr: 1.0e-05
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  epochs: 100
+  early_stopping_patience: 15
+  grad_accum_steps: 4
+  grad_clip_norm: 1.0
+  param_norm_warn: 400
+  param_norm_cap: 500
+  layer_lr_decay: 0.85
+  drop_path_rate: 0.1
+loss:
+  stage1_use_focal_loss: false
+  stage1_focal_alpha: 0.25
+  stage1_focal_gamma: 2.0
+  label_smoothing: 0.0
+augmentation:
+  use_mixup: true
+  mixup_alpha: 0.1
+  stage1_reverse_complement_prob: 0.5
+swa:
+  use_swa: true
+  swa_start_epoch: 80
+  swa_lr: 3.0e-05
+  swa_anneal_epochs: 10
+stage_overrides:
+  stage1_label_smoothing: 0.0
+  stage1_use_mixup: null
+  stage1_mixup_alpha: null
+  stage1_use_swa: null
+  stage1_swa_start_epoch: null
+  stage1_swa_lr: null
+  stage1_drop_path_rate: null
+  stage2_label_smoothing: 0.0
+  stage2_use_mixup: false
+  stage2_mixup_alpha: 0.0
+  stage2_use_swa: false
+  stage2_swa_start_epoch: null
+  stage2_swa_lr: null
+  stage2_drop_path_rate: 0.0
+mlm:
+  stage1_load_mlm_weights: true
+  stage2_load_mlm_weights: false
+  stage1_mlm_transfer_mode: embed_plus_adapter
+  stage2_mlm_transfer_mode: embed_plus_adapter
+  stage1_freeze_layers: 0
+  stage1_unfreeze_epoch: null
+  mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k6.pt
+  include_reverse_complements: true
+  mlm_fasta_path: ../data/GCF_000005845.2_ASM584v2_genomic.fna
+  mlm_fasta_paths: *id002
+  mlm_species_weights: *id003
+  mlm_steps_per_epoch: 5000
+  mlm_unknown_base_strategy: skip
+  mlm_window_size: 234
+  mlm_stride: 20
+  mlm_batch_size: 128
+  mlm_epochs: 200
+  mlm_lr: 0.0002
+  mlm_weight_decay: 0.01
+  mlm_kmer: 6
+  mlm_vocab_path: ../artifacts/vocabs/mlm_k6_vocab.json
+  mlm_encoder_path: ../artifacts/mlm_encoder_k6.pt
+  mlm_embedding_dim: 384
+  mlm_transformer_layers: 12
+  mlm_transformer_heads: 12
+  mlm_transformer_ff_dim: 1536
+  mlm_transformer_dropout: 0.1
+  mlm_tie_weights: true
+  mlm_use_output_norm: true
+  mlm_use_layer_lr_decay: false
+  mlm_layer_lr_decay: 0.9
+  mlm_val_ratio: 0.1
+  mlm_val_exclude_patterns: *id004
+  mlm_min_val_records_per_species: 1
+  mlm_single_record_val_ratio: 0.1
+  mlm_grad_accum_steps: 16
+  mlm_warmup_ratio: 0.06
+  mlm_final_lr_ratio: 0.1
+  mlm_lr_log_interval: 50
+  mlm_patience: 30
+  mlm_checkpoint_keep_last: 2
+  mlm_mask_prob: 0.15
+  mlm_masking: *id005
+  mlm_length_curriculum_enabled: true
+  mlm_length_curriculum_start_tokens: 32
+  mlm_length_curriculum_end_tokens: 229
+  mlm_length_curriculum_start_pct: 0.0
+  mlm_length_curriculum_end_pct: 0.3
+checkpoints:
+  mlm_encoder_ckpt_by_k: *id006
+  mlm_metadata_by_k: *id007
+  stage1_checkpoint_name: null
+  stage1_ckpt_by_k:
+    3: ../artifacts/checkpoints/stage1_k3.pt
+    4: ../artifacts/checkpoints/stage1_k4.pt
+    5: ../artifacts/checkpoints/stage1_k5.pt
+    6: ../artifacts/checkpoints/stage1_k6.pt
+vocab_paths:
+  vocab_cache_dir: ../artifacts/vocabs
+  mlm_vocab_by_k: *id008
+visualization:
+  stage1_embed_plot_epoch: null
+  stage1_embed_plot_method: pca
+  stage1_embed_plot_samples: 512
+metrics:
+  metrics_stage1: *id009
+  metrics_stage2: *id010
+smoketest:
+  smoketest_steps_pretrain: 300
+  smoketest_steps_stage1: 300
+  smoketest_steps_stage2: 300
+amp:
+  amp_enabled: true
+  amp_dtype: float16
+  amp_force_fp32_loss: true
+multi_kmer_pretrain:
+  multi_kmer_pretrain_enabled: true
+  pretrain_kmers: *id011
+  pretrain_mode: sequential
+  kmer_pretrain_overrides: *id012
+pretrain_early_stopping:
+  mlm_early_stopping_enabled: true
+  mlm_early_stopping_metric: val_loss
+  mlm_use_kmer_defaults: true
+  mlm_early_stopping_patience: 15
+  mlm_early_stopping_min_delta: 0.001
+  mlm_early_stopping_min_epochs: 10
+  mlm_early_stopping_restore_best: true
+  mlm_accuracy_stagnation_window: 5
+  mlm_accuracy_stagnation_threshold: 0.01
+  mlm_rate_of_change_window: 10
+  mlm_rate_of_change_min_improvement: 0.005
+  mlm_target_accuracy: null
+  mlm_target_loss: 0.5
 ablation:
   enabled: false
   seeds:
@@ -198,3 +483,9 @@ distill:
   temperature: 2.0
   teacher_ckpt: ../artifacts/checkpoints/stage1_k6.pt
   teacher_kmer: 6
+use_multi_scale: true
+multi_scale_kmers:
+- 3
+- 4
+- 5
+- 6

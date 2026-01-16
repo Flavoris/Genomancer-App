@@ -1,0 +1,39 @@
+INFO - Loading Stage1 val set: /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/data/stage1_val.tsv
+INFO - Using device: mps
+INFO - Loaded best_threshold=0.5700 from checkpoint
+INFO - Loaded model from /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k3.pt
+INFO - Loaded best_threshold=0.4700 from checkpoint
+INFO - Loaded model from /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k4.pt
+INFO - Loaded best_threshold=0.3200 from checkpoint
+INFO - Loaded model from /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k5.pt
+INFO - Loaded best_threshold=0.5600 from checkpoint
+INFO - Loaded model from /Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/checkpoints/stage1_k6.pt
+INFO - Loaded 4 models: [3, 4, 5, 6]
+INFO - Using weighted ensemble (k3=0.2485, k4=0.2526, k5=0.2494, k6=0.2495)
+INFO - Precomputing engineered features...
+INFO - Precomputing tokens for k=3...
+INFO - Precomputing tokens for k=4...
+INFO - Precomputing tokens for k=5...
+INFO - Precomputing tokens for k=6...
+INFO - Running ensemble inference...
+
+======================================================================
+STAGE 1 MULTISCALE ENSEMBLE EVALUATION
+======================================================================
+Samples:    1353
+K-mers:     [3, 4, 5, 6]
+Mode:       weighted
+Weights:    k3=0.2485, k4=0.2526, k5=0.2494, k6=0.2495
+----------------------------------------------------------------------
+Per-k probability sanity:
+k=3: min=0.060628 mean=0.496813 max=0.960261 frac<0.5=0.5418 frac>=0.5=0.4582
+k=4: min=0.046919 mean=0.467909 max=0.957392 frac<0.5=0.5551 frac>=0.5=0.4449
+k=5: min=0.056416 mean=0.450703 max=0.951960 frac<0.5=0.5758 frac>=0.5=0.4242
+k=6: min=0.056985 mean=0.495726 max=0.958863 frac<0.5=0.5159 frac>=0.5=0.4841
+----------------------------------------------------------------------
+Accuracy@0.5: 0.8330 (83.30%)
+F1@0.5:       0.8240
+MCC@0.5:      0.6695
+Best thr:     0.48
+Best acc:     0.8337 (83.37%)
+======================================================================

@@ -12,6 +12,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from dataset import (
     KmerVocabulary,
     PromoterDatasetStage1,
+    PromoterDatasetStage2,
     build_dataloaders,
     compute_cksnap,
     compute_pseeiip,
@@ -121,6 +122,104 @@ def test_stage1_use_engineered_features_false_zeros_everything() -> None:
     assert engineered.abs().sum().item() == 0.0
 
 
+def test_stage2_feature_group_zeroing_keeps_dim_and_segments() -> None:
+    sequence = "ACGT" * 30
+    vocab = KmerVocabulary.build_from_sequences([sequence], k=3)
+    df = pd.DataFrame({"sequence": [sequence], "strength": [1.0]})
+
+    base_ds = PromoterDatasetStage2(
+        df,
+        max_bp_len=81,
+        positive_strength=1.0,
+        negative_strength=0.0,
+        vocab=vocab,
+        use_engineered_features=True,
+    )
+    _, base_features, _ = base_ds[0]
+    manual = _manual_engineered_features(sequence)
+
+    assert base_features.shape == (288,)
+    assert torch.allclose(base_features, manual)
+
+    tnc_off = PromoterDatasetStage2(
+        df,
+        max_bp_len=81,
+        positive_strength=1.0,
+        negative_strength=0.0,
+        vocab=vocab,
+        use_engineered_features=True,
+        feature_enable_tnc=False,
+    )
+    _, tnc_off_features, _ = tnc_off[0]
+    assert tnc_off_features.shape == (288,)
+    assert tnc_off_features[:64].abs().sum().item() == 0.0
+    assert torch.allclose(tnc_off_features[64:], base_features[64:])
+
+    pseeiip_off = PromoterDatasetStage2(
+        df,
+        max_bp_len=81,
+        positive_strength=1.0,
+        negative_strength=0.0,
+        vocab=vocab,
+        use_engineered_features=True,
+        feature_enable_pseeiip=False,
+    )
+    _, pseeiip_off_features, _ = pseeiip_off[0]
+    assert pseeiip_off_features.shape == (288,)
+    assert pseeiip_off_features[64:128].abs().sum().item() == 0.0
+    assert torch.allclose(pseeiip_off_features[:64], base_features[:64])
+    assert torch.allclose(pseeiip_off_features[128:], base_features[128:])
+
+    cksnap_off = PromoterDatasetStage2(
+        df,
+        max_bp_len=81,
+        positive_strength=1.0,
+        negative_strength=0.0,
+        vocab=vocab,
+        use_engineered_features=True,
+        feature_enable_cksnap=False,
+    )
+    _, cksnap_off_features, _ = cksnap_off[0]
+    assert cksnap_off_features.shape == (288,)
+    assert cksnap_off_features[128:224].abs().sum().item() == 0.0
+    assert torch.allclose(cksnap_off_features[:128], base_features[:128])
+    assert torch.allclose(cksnap_off_features[224:], base_features[224:])
+
+    pstnp_off = PromoterDatasetStage2(
+        df,
+        max_bp_len=81,
+        positive_strength=1.0,
+        negative_strength=0.0,
+        vocab=vocab,
+        use_engineered_features=True,
+        feature_enable_pstnp=False,
+    )
+    _, pstnp_off_features, _ = pstnp_off[0]
+    assert pstnp_off_features.shape == (288,)
+    assert pstnp_off_features[224:].abs().sum().item() == 0.0
+    assert torch.allclose(pstnp_off_features[:224], base_features[:224])
+
+
+def test_stage2_use_engineered_features_false_zeros_everything() -> None:
+    sequence = "ACGT" * 30
+    vocab = KmerVocabulary.build_from_sequences([sequence], k=3)
+    df = pd.DataFrame({"sequence": [sequence], "strength": [0.0]})
+
+    ds = PromoterDatasetStage2(
+        df,
+        max_bp_len=81,
+        positive_strength=1.0,
+        negative_strength=0.0,
+        vocab=vocab,
+        use_engineered_features=False,
+        feature_enable_tnc=True,
+        feature_enable_pseeiip=True,
+    )
+    _, engineered, _ = ds[0]
+    assert engineered.shape == (288,)
+    assert engineered.abs().sum().item() == 0.0
+
+
 def test_ensemble_infer_engineered_features_mirrors_cfg_toggles() -> None:
     sequence = "ACGT" * 30
     base = compute_engineered_features(sequence)
@@ -186,12 +285,18 @@ def test_build_dataloaders_passes_feature_toggles(tmp_path: Path) -> None:
         "stage1_feature_enable_pseeiip": False,
         "stage1_feature_enable_cksnap": False,
         "stage1_feature_enable_pstnp": False,
+        "stage2_use_engineered_features": True,
+        "stage2_feature_enable_tnc": False,
+        "stage2_feature_enable_pseeiip": False,
+        "stage2_feature_enable_cksnap": False,
+        "stage2_feature_enable_pstnp": False,
         "stage1_reverse_complement_prob": 0.0,
     }
 
     loaders = build_dataloaders(cfg)
     train_ds = loaders["stage1"]["train"].dataset
     val_ds = loaders["stage1"]["val"].dataset
+    stage2_train_ds = loaders["stage2"]["train"].dataset
 
     assert train_ds.feature_enable_tnc is False
     assert train_ds.feature_enable_pseeiip is False
@@ -202,3 +307,8 @@ def test_build_dataloaders_passes_feature_toggles(tmp_path: Path) -> None:
     assert val_ds.feature_enable_pseeiip is False
     assert val_ds.feature_enable_cksnap is False
     assert val_ds.feature_enable_pstnp is False
+
+    assert stage2_train_ds.feature_enable_tnc is False
+    assert stage2_train_ds.feature_enable_pseeiip is False
+    assert stage2_train_ds.feature_enable_cksnap is False
+    assert stage2_train_ds.feature_enable_pstnp is False

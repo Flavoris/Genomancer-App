@@ -687,6 +687,11 @@ class PromoterDatasetStage2(Dataset):
         positive_strength: float,
         negative_strength: float,
         vocab: KmerVocabulary,
+        use_engineered_features: bool = True,
+        feature_enable_tnc: bool = True,
+        feature_enable_pseeiip: bool = True,
+        feature_enable_cksnap: bool = True,
+        feature_enable_pstnp: bool = True,
         engineered_dim: int = PromoterDatasetStage1.ENGINEERED_DIM,
         cache_engineered_features: bool = False,
         cache_tokens: bool = False,
@@ -698,6 +703,12 @@ class PromoterDatasetStage2(Dataset):
         self.max_bp_len = max_bp_len
         self.vocab = vocab
         self.engineered_dim = int(engineered_dim)
+        self.use_engineered_features = bool(use_engineered_features)
+        self.feature_enable_tnc = bool(feature_enable_tnc)
+        self.feature_enable_pseeiip = bool(feature_enable_pseeiip)
+        self.feature_enable_cksnap = bool(feature_enable_cksnap)
+        self.feature_enable_pstnp = bool(feature_enable_pstnp)
+        self._zero_engineered = torch.zeros(self.engineered_dim, dtype=torch.float32)
 
         # Caching options
         self.cache_engineered_features = cache_engineered_features
@@ -715,11 +726,7 @@ class PromoterDatasetStage2(Dataset):
         LOGGER.info("Precomputing Stage2 engineered features for %d sequences...", len(self.sequences))
         self._cached_engineered = []
         for seq in self.sequences:
-            tnc = compute_tnc(seq)
-            pseeiip = compute_pseeiip(seq)
-            cksnap = compute_cksnap(seq)
-            pstnp = compute_pstnp(seq)
-            engineered = torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
+            engineered = self._build_engineered_features(seq)
             self._cached_engineered.append(engineered)
         LOGGER.info("Stage2 engineered features cached.")
 
@@ -753,6 +760,33 @@ class PromoterDatasetStage2(Dataset):
     def __len__(self) -> int:
         return len(self.sequences)
 
+    def _build_engineered_features(self, sequence: str) -> torch.FloatTensor:
+        if not self.use_engineered_features:
+            engineered = self._zero_engineered.clone()
+            assert engineered.shape[-1] == self.engineered_dim, (
+                f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
+                f"expected {self.engineered_dim}"
+            )
+            return engineered
+        tnc = compute_tnc(sequence)
+        pseeiip = compute_pseeiip(sequence)
+        cksnap = compute_cksnap(sequence)
+        pstnp = compute_pstnp(sequence)
+        if not self.feature_enable_tnc:
+            tnc = torch.zeros_like(tnc)
+        if not self.feature_enable_pseeiip:
+            pseeiip = torch.zeros_like(pseeiip)
+        if not self.feature_enable_cksnap:
+            cksnap = torch.zeros_like(cksnap)
+        if not self.feature_enable_pstnp:
+            pstnp = torch.zeros_like(pstnp)
+        engineered = torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
+        assert engineered.shape[-1] == self.engineered_dim, (
+            f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
+            f"expected {self.engineered_dim}"
+        )
+        return engineered
+
     def __getitem__(self, idx: int):
         sequence = self.sequences[idx]
 
@@ -766,11 +800,7 @@ class PromoterDatasetStage2(Dataset):
         if self._cached_engineered is not None:
             engineered = self._cached_engineered[idx]
         else:
-            tnc = compute_tnc(sequence)
-            pseeiip = compute_pseeiip(sequence)
-            cksnap = compute_cksnap(sequence)
-            pstnp = compute_pstnp(sequence)
-            engineered = torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
+            engineered = self._build_engineered_features(sequence)
 
         assert engineered.shape[-1] == self.engineered_dim, (
             f"Engineered feature dim mismatch: got {engineered.shape[-1]}, "
@@ -820,6 +850,11 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     stage1_feature_enable_pseeiip = bool(_cfg_value(cfg, "stage1_feature_enable_pseeiip", True))
     stage1_feature_enable_cksnap = bool(_cfg_value(cfg, "stage1_feature_enable_cksnap", True))
     stage1_feature_enable_pstnp = bool(_cfg_value(cfg, "stage1_feature_enable_pstnp", True))
+    stage2_use_engineered = bool(_cfg_value(cfg, "stage2_use_engineered_features", True))
+    stage2_feature_enable_tnc = bool(_cfg_value(cfg, "stage2_feature_enable_tnc", stage1_feature_enable_tnc))
+    stage2_feature_enable_pseeiip = bool(_cfg_value(cfg, "stage2_feature_enable_pseeiip", stage1_feature_enable_pseeiip))
+    stage2_feature_enable_cksnap = bool(_cfg_value(cfg, "stage2_feature_enable_cksnap", stage1_feature_enable_cksnap))
+    stage2_feature_enable_pstnp = bool(_cfg_value(cfg, "stage2_feature_enable_pstnp", stage1_feature_enable_pstnp))
     engineered_dim = int(_cfg_value(cfg, "engineered_dim", PromoterDatasetStage1.ENGINEERED_DIM))
     stage1_rc_prob = float(_cfg_value(cfg, "stage1_reverse_complement_prob", 0.5))
     kmer = int(_cfg_value(cfg, "kmer", 3))
@@ -984,6 +1019,11 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         pos_strength,
         neg_strength,
         stage1_vocab,
+        use_engineered_features=stage2_use_engineered,
+        feature_enable_tnc=stage2_feature_enable_tnc,
+        feature_enable_pseeiip=stage2_feature_enable_pseeiip,
+        feature_enable_cksnap=stage2_feature_enable_cksnap,
+        feature_enable_pstnp=stage2_feature_enable_pstnp,
         engineered_dim=engineered_dim,
         # Stage 2 has no augmentation, so caching is effective for both train and val
         cache_engineered_features=cache_engineered_features,
@@ -995,6 +1035,11 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         pos_strength,
         neg_strength,
         stage1_vocab,
+        use_engineered_features=stage2_use_engineered,
+        feature_enable_tnc=stage2_feature_enable_tnc,
+        feature_enable_pseeiip=stage2_feature_enable_pseeiip,
+        feature_enable_cksnap=stage2_feature_enable_cksnap,
+        feature_enable_pstnp=stage2_feature_enable_pstnp,
         engineered_dim=engineered_dim,
         cache_engineered_features=cache_engineered_features,
         cache_tokens=cache_tokens,
@@ -1006,6 +1051,11 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
             pos_strength,
             neg_strength,
             stage1_vocab,
+            use_engineered_features=stage2_use_engineered,
+            feature_enable_tnc=stage2_feature_enable_tnc,
+            feature_enable_pseeiip=stage2_feature_enable_pseeiip,
+            feature_enable_cksnap=stage2_feature_enable_cksnap,
+            feature_enable_pstnp=stage2_feature_enable_pstnp,
             engineered_dim=engineered_dim,
             cache_engineered_features=cache_engineered_features,
             cache_tokens=cache_tokens,

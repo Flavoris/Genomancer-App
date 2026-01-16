@@ -4103,8 +4103,5 @@
   ],
   "unk_token": "<UNK>",
   "pad_token": "<PAD>",
-  "mask_token": "[MASK]",
-  "vocab_size": 4099,
-  "num_kmers": 4096,
-  "num_special_tokens": 3
+  "mask_token": "[MASK]"
 }

@@ -1,0 +1,79 @@
+{
+  "config": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/artifacts/runs/stage1_multiscale_k5.yaml",
+  "best_epoch": 35,
+  "train_metrics": {
+    "accuracy": 0.6517560073937153,
+    "precision": 0.6614235155328352,
+    "recall": 0.6218114602587801,
+    "f1": 0.6410060975609756,
+    "mcc": 0.30405778718985343,
+    "specificity": 0.6817005545286506,
+    "roc_auc": 0.6914750872109908,
+    "acc_best": 0.6539741219963031,
+    "mcc_best": 0.3102374380890669,
+    "f1_best": 0.6316410861865407,
+    "best_threshold": 0.56,
+    "loss": 0.47633026391543215,
+    "optimizer_steps": 84
+  },
+  "val_metrics": {
+    "accuracy": 0.8292682926829268,
+    "precision": 0.8269794721407625,
+    "recall": 0.8330871491875923,
+    "f1": 0.8300220750551877,
+    "mcc": 0.6585525212382098,
+    "specificity": 0.8254437869822485,
+    "roc_auc": 0.8956630802443778,
+    "acc_best": 0.8388765705838876,
+    "mcc_best": 0.6781883100034912,
+    "f1_best": 0.8360902255639098,
+    "best_threshold": 0.56,
+    "loss": 0.405994572731097,
+    "optimizer_steps": 0
+  },
+  "class_balance": {
+    "total": 5410,
+    "positive": 2705,
+    "negative": 2705,
+    "positive_ratio": 0.5
+  },
+  "device": "mps",
+  "seed": 1337,
+  "model_params": {
+    "total": 38783204,
+    "trainable": 38783204,
+    "embedding_dim": 384,
+    "layers": 12,
+    "heads": 12,
+    "kmer": 5
+  },
+  "architecture_v4": {
+    "order": "Embedding \u2192 CNN/TCN \u2192 Transformer \u2192 Pool \u2192 Fusion \u2192 Classifier",
+    "use_tcn": true,
+    "tcn_hidden": 384,
+    "tcn_levels": 5,
+    "multiscale_kernels": [
+      3,
+      5,
+      7,
+      9,
+      15
+    ],
+    "post_cnn_transformer_layers": 3,
+    "engineered_mlp_hidden": 512,
+    "engineered_mlp_output": 384,
+    "fusion_hidden": 512,
+    "use_attention_fusion": true
+  },
+  "training_enhancements": {
+    "layer_wise_lr_decay": 0.85,
+    "stage1_label_smoothing": 0.0,
+    "stage1_mixup_alpha": 0.1,
+    "stage1_use_swa": true,
+    "stage1_swa_start_epoch": 80,
+    "stage1_swa_lr": 3e-05,
+    "stage1_drop_path_rate": 0.1,
+    "ablation_max_steps_stage1": null,
+    "ablation_disable_wandb": false
+  }
+}
