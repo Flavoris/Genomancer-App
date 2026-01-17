@@ -1838,6 +1838,780 @@ class GeneWhispererStage1(nn.Module):
 
 
 # =============================================================================
+# Simplified Stage 1: Transformer-Only Backbone
+# =============================================================================
+
+class GeneWhispererSimplified(nn.Module):
+    """
+    Simplified Stage 1 classifier that keeps the pretrained DNAEncoder intact and
+    removes CNN/TCN and post-CNN adapters that underperformed in ablations.
+
+    Architecture rationale:
+    - Preserve the full transformer stack (defaults to 12 layers) to retain MLM-pretrained context.
+    - Pool directly over transformer outputs (attention or masked mean).
+    - Retain the engineered feature MLP for non-sequence signals.
+    - Fuse via concatenation to avoid heavier gated attention.
+    - Use a small two-layer classifier head to reduce parameter count.
+
+    The constructor accepts the same configuration parameters as
+    GeneWhispererStage1 for drop-in compatibility; CNN/TCN-related arguments are
+    accepted but ignored in simplified mode. Set use_simplified=False to
+    delegate to GeneWhispererStage1 for a full model comparison.
+    """
+
+    def __init__(
+        self,
+        vocab_size: int = 67,
+        kmer: int = 3,
+        embedding_dim: int = 192,
+        num_layers: int = 12,
+        num_heads: int = 8,
+        ff_dim: int = 384,
+        dropout: float = 0.15,
+        pad_token_id: Optional[int] = None,
+        encoder: Optional[DNAEncoder] = None,
+        engineered_dim: int = 288,
+        use_engineered_features: bool = True,
+        use_attention_pool: bool = True,
+        use_simplified: bool = True,
+        # TCN parameters (accepted for compatibility)
+        use_tcn: bool = True,
+        tcn_hidden: int = 256,
+        tcn_levels: int = 4,
+        tcn_kernel: int = 3,
+        # Multi-scale CNN parameters (accepted for compatibility)
+        multiscale_channels: int = 64,
+        multiscale_kernels: Tuple[int, ...] = (3, 5, 7, 9, 15),
+        # LSTM parameters (accepted for compatibility)
+        lstm_hidden: int = 192,
+        # Post-CNN transformer parameters (accepted for compatibility)
+        post_cnn_transformer_layers: int = 3,
+        engineered_mlp_hidden: int = 512,
+        engineered_mlp_output: int = 256,
+        engineered_mlp_pre_norm: bool = True,
+        engineered_mlp_input_dropout: float = 0.05,
+        engineered_mlp_use_gated: bool = True,
+        engineered_mlp_use_residual: bool = True,
+        fusion_hidden: int = 384,
+        # Stochastic depth (drop path) rate for encoder
+        drop_path_rate: float = 0.1,
+        # Maximum sequence length for positional embeddings
+        max_seq_len: int = 256,
+        # Relative position bias parameters
+        use_relative_position_bias: bool = False,
+        relative_position_num_buckets: int = 32,
+        relative_position_max_distance: int = 128,
+        # GLU FFN parameters
+        use_glu_ffn: bool = False,
+        glu_activation: str = "gelu",
+    ):
+        super().__init__()
+
+        self.use_simplified = use_simplified
+        self._fallback_model: Optional[GeneWhispererStage1] = None
+
+        if not use_simplified:
+            self._fallback_model = GeneWhispererStage1(
+                vocab_size=vocab_size,
+                kmer=kmer,
+                embedding_dim=embedding_dim,
+                num_layers=num_layers,
+                num_heads=num_heads,
+                ff_dim=ff_dim,
+                dropout=dropout,
+                pad_token_id=pad_token_id,
+                encoder=encoder,
+                engineered_dim=engineered_dim,
+                use_engineered_features=use_engineered_features,
+                use_attention_pool=use_attention_pool,
+                use_tcn=use_tcn,
+                tcn_hidden=tcn_hidden,
+                tcn_levels=tcn_levels,
+                tcn_kernel=tcn_kernel,
+                multiscale_channels=multiscale_channels,
+                multiscale_kernels=multiscale_kernels,
+                lstm_hidden=lstm_hidden,
+                post_cnn_transformer_layers=post_cnn_transformer_layers,
+                engineered_mlp_hidden=engineered_mlp_hidden,
+                engineered_mlp_output=engineered_mlp_output,
+                engineered_mlp_pre_norm=engineered_mlp_pre_norm,
+                engineered_mlp_input_dropout=engineered_mlp_input_dropout,
+                engineered_mlp_use_gated=engineered_mlp_use_gated,
+                engineered_mlp_use_residual=engineered_mlp_use_residual,
+                fusion_hidden=fusion_hidden,
+                drop_path_rate=drop_path_rate,
+                max_seq_len=max_seq_len,
+                use_relative_position_bias=use_relative_position_bias,
+                relative_position_num_buckets=relative_position_num_buckets,
+                relative_position_max_distance=relative_position_max_distance,
+                use_glu_ffn=use_glu_ffn,
+                glu_activation=glu_activation,
+            )
+            return
+
+        self.pad_token_id = pad_token_id
+        self.use_attention_pool = use_attention_pool
+        self.engineered_dim = engineered_dim
+        self.use_engineered_features = use_engineered_features and engineered_dim > 0
+
+        self._full_encoder = encoder or DNAEncoder(
+            vocab_size=vocab_size,
+            kmer=kmer,
+            embedding_dim=embedding_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            dropout=dropout,
+            pad_token_id=pad_token_id,
+            max_seq_len=max_seq_len,
+            drop_path_rate=drop_path_rate,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
+        )
+        self.embedding = self._full_encoder.embedding
+        encoder_dim = self._full_encoder.embedding_dim
+
+        if use_attention_pool:
+            if encoder_dim % 4 != 0:
+                raise ValueError(
+                    f"embedding_dim ({encoder_dim}) must be divisible by 4 for attention pooling"
+                )
+            self.pool = AttentionPooling(encoder_dim, num_heads=4)
+        else:
+            self.pool = None
+
+        if self.use_engineered_features:
+            self.engineered_mlp = EngineeredFeatureMLP(
+                input_dim=engineered_dim,
+                hidden_dim=engineered_mlp_hidden,
+                output_dim=engineered_mlp_output,
+                dropout=dropout,
+                use_pre_norm=engineered_mlp_pre_norm,
+                input_dropout=engineered_mlp_input_dropout,
+                use_gated=engineered_mlp_use_gated,
+                use_residual=engineered_mlp_use_residual,
+            )
+            classifier_in = encoder_dim + self.engineered_mlp.output_dim
+        else:
+            self.engineered_mlp = None
+            classifier_in = encoder_dim
+
+        classifier_hidden = encoder_dim
+        self.classifier = nn.Sequential(
+            nn.Linear(classifier_in, classifier_hidden),
+            nn.LayerNorm(classifier_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(classifier_hidden, 1),
+        )
+
+    @property
+    def encoder(self):
+        """Compatibility property for MLM weight loading."""
+        if self._fallback_model is not None:
+            return self._fallback_model.encoder
+        return self._full_encoder
+
+    def load_pretrained_weights(
+        self,
+        checkpoint_path: Union[str, Path],
+        strict: bool = False,
+        transfer_mode: str = "embed_only",
+    ) -> None:
+        """
+        Load pretrained MLM weights into the transformer encoder.
+
+        In simplified mode, transformer-only weights are loaded directly into
+        DNAEncoder. The transfer_mode flag is accepted for compatibility with
+        GeneWhispererStage1; "embed_plus_adapter" behaves like "embed_only".
+        """
+        if self._fallback_model is not None:
+            self._fallback_model.load_pretrained_weights(
+                checkpoint_path, strict=strict, transfer_mode=transfer_mode
+            )
+            return
+
+        if transfer_mode == "none":
+            LOGGER.info("Skipping MLM weight loading (transfer_mode=none)")
+            return
+        if transfer_mode not in {"embed_only", "embed_plus_adapter"}:
+            raise ValueError(f"Unsupported transfer_mode: {transfer_mode}")
+
+        self._full_encoder.load_mlm_weights(checkpoint_path, strict=strict)
+        if transfer_mode == "embed_plus_adapter":
+            LOGGER.info("Simplified model ignores adapter transfer; loaded encoder weights only.")
+
+    def _get_padding_mask(self, tokens: torch.Tensor) -> Optional[torch.Tensor]:
+        """Generate padding mask from tokens."""
+        if self.pad_token_id is not None:
+            return tokens.eq(self.pad_token_id)
+        return None
+
+    def _encode_tokens(
+        self,
+        tokens: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Encode tokens with the full transformer and return token features + mask.
+        """
+        seq_len = tokens.size(1)
+        max_len = self._full_encoder.pos_embedding.num_embeddings
+        if seq_len > max_len:
+            raise ValueError(
+                f"Sequence length {seq_len} exceeds max_seq_len={max_len}. "
+                "Increase max_seq_len or shorten inputs."
+            )
+        padding_mask = self._get_padding_mask(tokens)
+        token_features = self._full_encoder(tokens, key_padding_mask=padding_mask)
+        return token_features, padding_mask
+
+    def _mean_pool(
+        self,
+        token_features: torch.Tensor,
+        padding_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if padding_mask is None:
+            return token_features.mean(dim=1)
+        keep_mask = (~padding_mask).unsqueeze(-1).type_as(token_features)
+        summed = (token_features * keep_mask).sum(dim=1)
+        denom = keep_mask.sum(dim=1).clamp(min=1.0)
+        return summed / denom
+
+    def _pool_sequence(
+        self,
+        token_features: torch.Tensor,
+        padding_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if self.use_attention_pool:
+            return self.pool(token_features, padding_mask)
+        return self._mean_pool(token_features, padding_mask)
+
+    def extract_features(
+        self,
+        tokens: torch.Tensor,
+        engineered_features: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Extract pooled sequence features and optional fused features.
+
+        Returns:
+            (seq_features, fused_features) both shaped (B, D).
+        """
+        if self._fallback_model is not None:
+            return self._fallback_model.extract_features(tokens, engineered_features)
+
+        token_features, padding_mask = self._encode_tokens(tokens)
+        seq_features = self._pool_sequence(token_features, padding_mask)
+
+        if engineered_features is not None:
+            assert engineered_features.size(-1) == self.engineered_dim, (
+                f"Engineered feature dim mismatch: got {engineered_features.size(-1)}, "
+                f"expected {self.engineered_dim}"
+            )
+
+        if self.use_engineered_features and engineered_features is not None:
+            eng_features = self.engineered_mlp(engineered_features)
+            fused = torch.cat([seq_features, eng_features], dim=-1)
+            return seq_features, fused
+
+        return seq_features, seq_features
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        engineered_features: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Forward pass for simplified Stage 1 classification.
+
+        Args:
+            tokens: (B, L) k-mer token indices
+            engineered_features: Optional (B, engineered_dim) hand-crafted features
+        return_logits: If True, also return sigmoid probabilities alongside logits
+        Returns:
+            (B, 1) promoter logits, or tuple of (probs, logits) if return_logits=True
+        """
+        if self._fallback_model is not None:
+            return self._fallback_model(
+                tokens, engineered_features=engineered_features, return_logits=return_logits
+            )
+
+        _, fused = self.extract_features(tokens, engineered_features)
+        logits = self.classifier(fused)
+
+        if return_logits:
+            probs = torch.sigmoid(logits)
+            return probs, logits
+
+        return logits
+
+
+# =============================================================================
+# Stage 1 Variant Models (Transformer-only, Features-only, Combined)
+# =============================================================================
+
+def _mean_pool_sequence(
+    token_features: torch.Tensor,
+    padding_mask: Optional[torch.Tensor],
+) -> torch.Tensor:
+    """Mean-pool sequence features with optional padding mask."""
+    if padding_mask is None:
+        return token_features.mean(dim=1)
+    keep_mask = (~padding_mask).unsqueeze(-1).type_as(token_features)
+    summed = (token_features * keep_mask).sum(dim=1)
+    denom = keep_mask.sum(dim=1).clamp(min=1.0)
+    return summed / denom
+
+
+def _encode_from_embeds(
+    encoder: DNAEncoder,
+    embeds: torch.Tensor,
+    padding_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Run a DNAEncoder stack starting from pre-computed embeddings."""
+    batch_size, seq_len, embed_dim = embeds.shape
+    if embed_dim != encoder.embedding_dim:
+        raise ValueError(
+            f"Embedding dim mismatch: got {embed_dim}, expected {encoder.embedding_dim}"
+        )
+    if seq_len > encoder.pos_embedding.num_embeddings:
+        raise ValueError(
+            f"Sequence length {seq_len} exceeds max_seq_len={encoder.pos_embedding.num_embeddings}. "
+            "Increase max_seq_len or shorten inputs."
+        )
+
+    positions = torch.arange(seq_len, device=embeds.device)
+    x = embeds + encoder.pos_embedding(positions).unsqueeze(0)
+    x = encoder.embed_norm(x)
+    x = encoder.embed_dropout(x)
+
+    position_bias = None
+    if encoder.relative_position_bias is not None:
+        position_bias = encoder.relative_position_bias(seq_len, embeds.device)
+
+    for layer in encoder.layers:
+        x = layer(x, key_padding_mask=padding_mask, position_bias=position_bias)
+
+    return encoder.final_norm(x)
+
+
+class GeneWhispererTransformerOnly(nn.Module):
+    """
+    Variant A: Transformer-only Stage 1 model with mean pooling and a 2-layer classifier.
+
+    Parameter count (defaults; vocab_size=4099, embedding_dim=384, num_layers=12,
+    num_heads=12, ff_dim=1536, max_seq_len=256): 23,115,649
+    """
+
+    def __init__(
+        self,
+        vocab_size: int = 4099,
+        kmer: int = 6,
+        embedding_dim: int = 384,
+        num_layers: int = 12,
+        num_heads: int = 12,
+        ff_dim: int = 1536,
+        dropout: float = 0.12,
+        pad_token_id: Optional[int] = 4098,
+        max_seq_len: int = 256,
+        encoder: Optional[DNAEncoder] = None,
+        classifier_hidden: Optional[int] = None,
+        classifier_dropout: Optional[float] = None,
+        drop_path_rate: float = 0.1,
+        use_relative_position_bias: bool = False,
+        relative_position_num_buckets: int = 32,
+        relative_position_max_distance: int = 128,
+        use_glu_ffn: bool = False,
+        glu_activation: str = "gelu",
+    ):
+        super().__init__()
+        self.pad_token_id = pad_token_id
+
+        self._full_encoder = encoder or DNAEncoder(
+            vocab_size=vocab_size,
+            kmer=kmer,
+            embedding_dim=embedding_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            dropout=dropout,
+            pad_token_id=pad_token_id,
+            max_seq_len=max_seq_len,
+            drop_path_rate=drop_path_rate,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
+        )
+        self.embedding = self._full_encoder.embedding
+
+        hidden_dim = classifier_hidden or embedding_dim
+        classifier_drop = dropout if classifier_dropout is None else classifier_dropout
+        self.classifier = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(classifier_drop),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    @property
+    def encoder(self) -> DNAEncoder:
+        return self._full_encoder
+
+    def load_pretrained_weights(
+        self,
+        checkpoint_path: Union[str, Path],
+        strict: bool = False,
+        transfer_mode: str = "embed_only",
+    ) -> None:
+        """Load pretrained MLM weights into the transformer encoder."""
+        if transfer_mode == "none":
+            LOGGER.info("Skipping MLM weight loading (transfer_mode=none)")
+            return
+        if transfer_mode not in {"embed_only", "embed_plus_adapter"}:
+            raise ValueError(f"Unsupported transfer_mode: {transfer_mode}")
+        if transfer_mode == "embed_plus_adapter":
+            LOGGER.info("Transformer-only variant ignores adapter transfer; loading encoder weights only.")
+        self._full_encoder.load_mlm_weights(checkpoint_path, strict=strict)
+
+    def _get_padding_mask(self, tokens: torch.Tensor) -> Optional[torch.Tensor]:
+        if self.pad_token_id is None:
+            return None
+        return tokens.eq(self.pad_token_id)
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        engineered_features: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        padding_mask = self._get_padding_mask(tokens)
+        token_features = self._full_encoder(tokens, key_padding_mask=padding_mask)
+        pooled = _mean_pool_sequence(token_features, padding_mask)
+        logits = self.classifier(pooled)
+        if return_logits:
+            probs = torch.sigmoid(logits)
+            return probs, logits
+        return logits
+
+    def forward_from_embeds(
+        self,
+        embeds: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+        engineered_features: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        token_features = _encode_from_embeds(self._full_encoder, embeds, padding_mask)
+        pooled = _mean_pool_sequence(token_features, padding_mask)
+        logits = self.classifier(pooled)
+        if return_logits:
+            probs = torch.sigmoid(logits)
+            return probs, logits
+        return logits
+
+
+class GeneWhispererFeaturesOnly(nn.Module):
+    """
+    Variant B: Engineered-features-only classifier with a 3-layer MLP.
+
+    Parameter count (defaults; engineered_dim=288, hidden_dim=512, second_hidden_dim=384): 345,345
+    """
+
+    def __init__(
+        self,
+        engineered_dim: int = 288,
+        hidden_dim: int = 512,
+        second_hidden_dim: int = 384,
+        dropout: float = 0.12,
+    ):
+        super().__init__()
+        if engineered_dim <= 0:
+            raise ValueError(f"engineered_dim must be > 0, got {engineered_dim}")
+        self.engineered_dim = engineered_dim
+
+        self.classifier = nn.Sequential(
+            nn.Linear(engineered_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, second_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(second_hidden_dim, 1),
+        )
+
+    @property
+    def encoder(self) -> Optional[DNAEncoder]:
+        return None
+
+    def load_pretrained_weights(
+        self,
+        checkpoint_path: Union[str, Path],
+        strict: bool = False,
+        transfer_mode: str = "embed_only",
+    ) -> None:
+        """No-op for features-only model (no transformer weights)."""
+        LOGGER.info("Features-only variant has no MLM weights to load; skipping.")
+
+    def _validate_engineered(self, engineered_features: Optional[torch.Tensor]) -> torch.Tensor:
+        if engineered_features is None:
+            raise ValueError("Engineered features are required for features-only variant.")
+        if engineered_features.size(-1) != self.engineered_dim:
+            raise ValueError(
+                f"Engineered feature dim mismatch: got {engineered_features.size(-1)}, "
+                f"expected {self.engineered_dim}"
+            )
+        return engineered_features
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        engineered_features: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        engineered = self._validate_engineered(engineered_features)
+        logits = self.classifier(engineered)
+        if return_logits:
+            probs = torch.sigmoid(logits)
+            return probs, logits
+        return logits
+
+
+class GeneWhispererCombined(nn.Module):
+    """
+    Variant C: Transformer + engineered features with mean pooling and concatenation.
+
+    Parameter count (defaults; vocab_size=4099, embedding_dim=384, num_layers=12,
+    engineered_dim=288, engineered_mlp_hidden=512, engineered_mlp_output=384, max_seq_len=256): 23,608,065
+    """
+
+    def __init__(
+        self,
+        vocab_size: int = 4099,
+        kmer: int = 6,
+        embedding_dim: int = 384,
+        num_layers: int = 12,
+        num_heads: int = 12,
+        ff_dim: int = 1536,
+        dropout: float = 0.12,
+        pad_token_id: Optional[int] = 4098,
+        max_seq_len: int = 256,
+        encoder: Optional[DNAEncoder] = None,
+        engineered_dim: int = 288,
+        engineered_mlp_hidden: int = 512,
+        engineered_mlp_output: int = 384,
+        classifier_hidden: Optional[int] = None,
+        classifier_dropout: Optional[float] = None,
+        drop_path_rate: float = 0.1,
+        use_relative_position_bias: bool = False,
+        relative_position_num_buckets: int = 32,
+        relative_position_max_distance: int = 128,
+        use_glu_ffn: bool = False,
+        glu_activation: str = "gelu",
+    ):
+        super().__init__()
+        self.pad_token_id = pad_token_id
+        self.engineered_dim = engineered_dim
+
+        self._full_encoder = encoder or DNAEncoder(
+            vocab_size=vocab_size,
+            kmer=kmer,
+            embedding_dim=embedding_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            dropout=dropout,
+            pad_token_id=pad_token_id,
+            max_seq_len=max_seq_len,
+            drop_path_rate=drop_path_rate,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
+        )
+        self.embedding = self._full_encoder.embedding
+
+        self.engineered_mlp = nn.Sequential(
+            nn.Linear(engineered_dim, engineered_mlp_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(engineered_mlp_hidden, engineered_mlp_output),
+            nn.GELU(),
+        )
+
+        hidden_dim = classifier_hidden or embedding_dim
+        classifier_drop = dropout if classifier_dropout is None else classifier_dropout
+        self.classifier = nn.Sequential(
+            nn.Linear(embedding_dim + engineered_mlp_output, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(classifier_drop),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    @property
+    def encoder(self) -> DNAEncoder:
+        return self._full_encoder
+
+    def load_pretrained_weights(
+        self,
+        checkpoint_path: Union[str, Path],
+        strict: bool = False,
+        transfer_mode: str = "embed_only",
+    ) -> None:
+        """Load pretrained MLM weights into the transformer encoder."""
+        if transfer_mode == "none":
+            LOGGER.info("Skipping MLM weight loading (transfer_mode=none)")
+            return
+        if transfer_mode not in {"embed_only", "embed_plus_adapter"}:
+            raise ValueError(f"Unsupported transfer_mode: {transfer_mode}")
+        if transfer_mode == "embed_plus_adapter":
+            LOGGER.info("Combined variant ignores adapter transfer; loading encoder weights only.")
+        self._full_encoder.load_mlm_weights(checkpoint_path, strict=strict)
+
+    def _get_padding_mask(self, tokens: torch.Tensor) -> Optional[torch.Tensor]:
+        if self.pad_token_id is None:
+            return None
+        return tokens.eq(self.pad_token_id)
+
+    def _validate_engineered(self, engineered_features: Optional[torch.Tensor]) -> torch.Tensor:
+        if engineered_features is None:
+            raise ValueError("Engineered features are required for combined variant.")
+        if engineered_features.size(-1) != self.engineered_dim:
+            raise ValueError(
+                f"Engineered feature dim mismatch: got {engineered_features.size(-1)}, "
+                f"expected {self.engineered_dim}"
+            )
+        return engineered_features
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        engineered_features: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        padding_mask = self._get_padding_mask(tokens)
+        token_features = self._full_encoder(tokens, key_padding_mask=padding_mask)
+        pooled = _mean_pool_sequence(token_features, padding_mask)
+        engineered = self._validate_engineered(engineered_features)
+        engineered_proj = self.engineered_mlp(engineered)
+        fused = torch.cat([pooled, engineered_proj], dim=-1)
+        logits = self.classifier(fused)
+        if return_logits:
+            probs = torch.sigmoid(logits)
+            return probs, logits
+        return logits
+
+    def forward_from_embeds(
+        self,
+        embeds: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+        engineered_features: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        token_features = _encode_from_embeds(self._full_encoder, embeds, padding_mask)
+        pooled = _mean_pool_sequence(token_features, padding_mask)
+        engineered = self._validate_engineered(engineered_features)
+        engineered_proj = self.engineered_mlp(engineered)
+        fused = torch.cat([pooled, engineered_proj], dim=-1)
+        logits = self.classifier(fused)
+        if return_logits:
+            probs = torch.sigmoid(logits)
+            return probs, logits
+        return logits
+
+
+def create_model_variant(variant: str, config: dict) -> nn.Module:
+    """
+    Factory for transformer-only, features-only, or combined model variants.
+    """
+    if not isinstance(config, dict):
+        raise ValueError("config must be a dict")
+
+    normalized = variant.strip().lower()
+    supported = {"transformer_only", "features_only", "combined"}
+    if normalized not in supported:
+        raise ValueError(f"Unsupported model variant: {variant}")
+
+    vocab_size = int(config.get("vocab_size", 67))
+    kmer = int(config.get("kmer", 3))
+    embedding_dim = int(config.get("embedding_dim", 192))
+    num_layers = int(config.get("transformer_layers", 12))
+    num_heads = int(config.get("transformer_heads", 8))
+    ff_dim = int(config.get("transformer_ff_dim", embedding_dim * 4))
+    dropout = float(config.get("transformer_dropout", 0.1))
+    pad_token_id = config.get("pad_token_id")
+    if pad_token_id is not None:
+        pad_token_id = int(pad_token_id)
+    max_seq_len = int(
+        config.get(
+            "max_seq_len",
+            int(config.get("max_bp_len", 81)) - kmer + 1,
+        )
+    )
+    engineered_dim = int(config.get("engineered_dim", 288))
+    engineered_mlp_hidden = int(config.get("engineered_mlp_hidden", 256))
+    engineered_mlp_output = int(config.get("engineered_mlp_output", 128))
+
+    drop_path_rate = float(config.get("drop_path_rate", 0.1))
+    use_relative_position_bias = bool(config.get("use_relative_position_bias", False))
+    relative_position_num_buckets = int(config.get("relative_position_num_buckets", 32))
+    relative_position_max_distance = int(config.get("relative_position_max_distance", 128))
+    use_glu_ffn = bool(config.get("use_glu_ffn", False))
+    glu_activation = str(config.get("glu_activation", "gelu"))
+
+    if normalized == "transformer_only":
+        return GeneWhispererTransformerOnly(
+            vocab_size=vocab_size,
+            kmer=kmer,
+            embedding_dim=embedding_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            dropout=dropout,
+            pad_token_id=pad_token_id,
+            max_seq_len=max_seq_len,
+            drop_path_rate=drop_path_rate,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
+        )
+    if normalized == "features_only":
+        return GeneWhispererFeaturesOnly(
+            engineered_dim=engineered_dim,
+            hidden_dim=engineered_mlp_hidden,
+            second_hidden_dim=engineered_mlp_output,
+            dropout=dropout,
+        )
+    return GeneWhispererCombined(
+        vocab_size=vocab_size,
+        kmer=kmer,
+        embedding_dim=embedding_dim,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        ff_dim=ff_dim,
+        dropout=dropout,
+        pad_token_id=pad_token_id,
+        max_seq_len=max_seq_len,
+        engineered_dim=engineered_dim,
+        engineered_mlp_hidden=engineered_mlp_hidden,
+        engineered_mlp_output=engineered_mlp_output,
+        drop_path_rate=drop_path_rate,
+        use_relative_position_bias=use_relative_position_bias,
+        relative_position_num_buckets=relative_position_num_buckets,
+        relative_position_max_distance=relative_position_max_distance,
+        use_glu_ffn=use_glu_ffn,
+        glu_activation=glu_activation,
+    )
+
+
+# =============================================================================
 # Stage 2 Heads: Transformer, BiLSTM, and Combined
 # =============================================================================
 
@@ -2519,6 +3293,10 @@ def _diff_checksums(before: dict, after: dict, atol: float = 1e-12) -> list:
     return changed
 
 
+def _count_parameters(model: nn.Module) -> int:
+    return sum(param.numel() for param in model.parameters())
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -2532,7 +3310,6 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mlm-checkpoint",
-        required=True,
         help="Path to pretrained MLM encoder checkpoint",
     )
     parser.add_argument(
@@ -2542,10 +3319,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    checkpoint_path = Path(args.mlm_checkpoint).expanduser().resolve()
-    if not checkpoint_path.exists():
-        raise SystemExit(f"Checkpoint not found: {checkpoint_path}")
-
     config_path = Path(args.config).expanduser().resolve()
     cfg = {}
     if config_path.exists():
@@ -2554,14 +3327,25 @@ if __name__ == "__main__":
     else:
         LOGGER.warning("Config not found at %s; using model defaults", config_path)
 
+    max_bp_len = cfg.get("max_bp_len")
+    if max_bp_len is not None:
+        max_seq_len = int(max_bp_len) - int(cfg.get("kmer", 3)) + 1
+    else:
+        max_seq_len = int(cfg.get("max_seq_len", 256))
+
+    transformer_layers = int(cfg.get("transformer_layers", 6))
+    transformer_heads = int(cfg.get("transformer_heads", 8))
+    transformer_ff_dim = int(cfg.get("transformer_ff_dim", 384))
+    transformer_dropout = float(cfg.get("transformer_dropout", 0.15))
+
     model = GeneWhispererStage1(
         vocab_size=int(cfg.get("vocab_size", 67)),
         kmer=int(cfg.get("kmer", 3)),
         embedding_dim=int(cfg.get("embedding_dim", 192)),
-        num_layers=int(cfg.get("transformer_layers", 6)),
-        num_heads=int(cfg.get("transformer_heads", 8)),
-        ff_dim=int(cfg.get("transformer_ff_dim", 384)),
-        dropout=float(cfg.get("transformer_dropout", 0.15)),
+        num_layers=transformer_layers,
+        num_heads=transformer_heads,
+        ff_dim=transformer_ff_dim,
+        dropout=transformer_dropout,
         pad_token_id=cfg.get("pad_token_id"),
         engineered_dim=int(cfg.get("engineered_dim", 288)),
         use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
@@ -2576,8 +3360,65 @@ if __name__ == "__main__":
         post_cnn_transformer_layers=int(cfg.get("post_cnn_transformer_layers", 3)),
         engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 256)),
         engineered_mlp_output=int(cfg.get("engineered_mlp_output", 128)),
+        engineered_mlp_pre_norm=bool(cfg.get("engineered_mlp_pre_norm", True)),
+        engineered_mlp_input_dropout=float(cfg.get("engineered_mlp_input_dropout", 0.05)),
+        engineered_mlp_use_gated=bool(cfg.get("engineered_mlp_use_gated", True)),
+        engineered_mlp_use_residual=bool(cfg.get("engineered_mlp_use_residual", True)),
         fusion_hidden=int(cfg.get("fusion_hidden", 256)),
+        drop_path_rate=float(cfg.get("drop_path_rate", 0.1)),
+        max_seq_len=max_seq_len,
+        use_relative_position_bias=bool(cfg.get("use_relative_position_bias", False)),
+        relative_position_num_buckets=int(cfg.get("relative_position_num_buckets", 32)),
+        relative_position_max_distance=int(cfg.get("relative_position_max_distance", 128)),
+        use_glu_ffn=bool(cfg.get("use_glu_ffn", False)),
+        glu_activation=str(cfg.get("glu_activation", "gelu")),
     )
+
+    simplified_model = GeneWhispererSimplified(
+        vocab_size=int(cfg.get("vocab_size", 67)),
+        kmer=int(cfg.get("kmer", 3)),
+        embedding_dim=int(cfg.get("embedding_dim", 192)),
+        num_layers=transformer_layers,
+        num_heads=transformer_heads,
+        ff_dim=transformer_ff_dim,
+        dropout=transformer_dropout,
+        pad_token_id=cfg.get("pad_token_id"),
+        engineered_dim=int(cfg.get("engineered_dim", 288)),
+        use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
+        use_attention_pool=bool(cfg.get("use_attention_pool", True)),
+        use_simplified=True,
+        engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 256)),
+        engineered_mlp_output=int(cfg.get("engineered_mlp_output", 128)),
+        engineered_mlp_pre_norm=bool(cfg.get("engineered_mlp_pre_norm", True)),
+        engineered_mlp_input_dropout=float(cfg.get("engineered_mlp_input_dropout", 0.05)),
+        engineered_mlp_use_gated=bool(cfg.get("engineered_mlp_use_gated", True)),
+        engineered_mlp_use_residual=bool(cfg.get("engineered_mlp_use_residual", True)),
+        drop_path_rate=float(cfg.get("drop_path_rate", 0.1)),
+        max_seq_len=max_seq_len,
+        use_relative_position_bias=bool(cfg.get("use_relative_position_bias", False)),
+        relative_position_num_buckets=int(cfg.get("relative_position_num_buckets", 32)),
+        relative_position_max_distance=int(cfg.get("relative_position_max_distance", 128)),
+        use_glu_ffn=bool(cfg.get("use_glu_ffn", False)),
+        glu_activation=str(cfg.get("glu_activation", "gelu")),
+    )
+
+    stage1_params = _count_parameters(model)
+    simplified_params = _count_parameters(simplified_model)
+    reduction_pct = 0.0
+    if stage1_params > 0:
+        reduction_pct = (1.0 - (simplified_params / stage1_params)) * 100.0
+
+    print(f"GeneWhispererStage1 params: {stage1_params:,}")
+    print(f"GeneWhispererSimplified params: {simplified_params:,}")
+    print(f"Reduction: {reduction_pct:.2f}%")
+
+    if args.mlm_checkpoint is None:
+        print("No MLM checkpoint provided; skipping transfer-mode verification.")
+        raise SystemExit(0)
+
+    checkpoint_path = Path(args.mlm_checkpoint).expanduser().resolve()
+    if not checkpoint_path.exists():
+        raise SystemExit(f"Checkpoint not found: {checkpoint_path}")
 
     before = _post_cnn_checksums(model)
     model.load_pretrained_weights(checkpoint_path, strict=False, transfer_mode="embed_only")

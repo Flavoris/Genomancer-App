@@ -43,6 +43,7 @@ model: &model
   transformer_heads: 12
   transformer_ff_dim: 1536
   transformer_dropout: 0.12
+  model_variant: stage1  # options: transformer_only, features_only, combined
   use_glu_ffn: true
   glu_activation: "gelu"
   use_relative_position_bias: true

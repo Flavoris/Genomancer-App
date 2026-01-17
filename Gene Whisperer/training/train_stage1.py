@@ -59,7 +59,7 @@ from dataset import (
     random_base_substitution,
     reverse_complement,
 )
-from model import GeneWhispererStage1, DNAEncoder
+from model import GeneWhispererStage1, DNAEncoder, create_model_variant
 from numerics import cap_model_param_norm_
 from seed_utils import set_global_seed
 from stage1_settings import log_stage1_training_configuration, resolve_stage1_lr
@@ -1015,14 +1015,21 @@ def mixup_batch_embeddings(
       y_a: (B, 1)
       y_b: (B, 1)
       lam: float
-      padding_mask: Optional[(B, L)] True=pad
+    padding_mask: Optional[(B, L)] True=pad
     """
     core = unwrap_model(model)
+    embedding_layer = getattr(core, "embedding", None)
+    if not isinstance(embedding_layer, nn.Embedding):
+        global _embedding_mixup_logged
+        if not _embedding_mixup_logged:
+            LOGGER.info("Embedding mixup disabled: model lacks an embedding layer.")
+            _embedding_mixup_logged = True
+        return None, engineered, labels, labels, 1.0, None
 
     # Default: no mixup
     if alpha is None or alpha <= 0 or tokens.size(0) < 2:
         with torch.no_grad():
-            emb = core.embedding(tokens)
+            emb = embedding_layer(tokens)
         pad_id = getattr(core, "pad_token_id", None)
         padding_mask = tokens.eq(pad_id) if pad_id is not None else None
         return emb, engineered, labels, labels, 1.0, padding_mask
@@ -1032,8 +1039,8 @@ def mixup_batch_embeddings(
     index = torch.randperm(B, device=tokens.device)
 
     # Embeddings (keep grad so embedding learns under mixup)
-    emb_a = core.embedding(tokens)              # (B, L, D)
-    emb_b = core.embedding(tokens[index])       # (B, L, D)
+    emb_a = embedding_layer(tokens)              # (B, L, D)
+    emb_b = embedding_layer(tokens[index])       # (B, L, D)
     mixed_embeds = lam * emb_a + (1.0 - lam) * emb_b
 
     # Engineered features
@@ -1261,6 +1268,19 @@ def run_epoch(
 
     if is_train and use_cuda_scaler:
         LOGGER.info("%s: GradScaler scale = %.0f", desc, scaler.get_scale())
+
+    if is_train and use_mixup:
+        core = unwrap_model(model)
+        supports_mixup = (
+            isinstance(getattr(core, "embedding", None), nn.Embedding)
+            and callable(getattr(core, "forward_from_embeds", None))
+        )
+        if not supports_mixup:
+            global _embedding_mixup_logged
+            if not _embedding_mixup_logged:
+                LOGGER.info("Embedding mixup disabled: model lacks forward_from_embeds support.")
+                _embedding_mixup_logged = True
+            use_mixup = False
 
     if is_train and max_optimizer_steps is not None and max_optimizer_steps <= 0:
         return {
@@ -2408,49 +2428,101 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # Compute stage1_drop_path_rate with fallback (needed before model creation)
     stage1_drop_path_rate = get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)
 
-    model = GeneWhispererStage1(
-        vocab_size=vocab_size,
-        kmer=kmer,
-        embedding_dim=embedding_dim,
-        num_layers=transformer_layers,
-        num_heads=transformer_heads,
-        ff_dim=transformer_ff_dim,
-        dropout=transformer_dropout,
-        pad_token_id=pad_token_id,
-        engineered_dim=engineered_dim,
-        use_engineered_features=use_engineered_features,
-        use_attention_pool=use_attention_pool,
-        # TCN parameters
-        use_tcn=use_tcn,
-        tcn_hidden=tcn_hidden,
-        tcn_levels=tcn_levels,
-        tcn_kernel=tcn_kernel,
-        multiscale_channels=multiscale_channels,
-        multiscale_kernels=multiscale_kernels,
-        lstm_hidden=lstm_hidden,
-        # New architecture parameters
-        post_cnn_transformer_layers=post_cnn_transformer_layers,
-        engineered_mlp_hidden=engineered_mlp_hidden,
-        engineered_mlp_output=engineered_mlp_output,
-        fusion_hidden=fusion_hidden,
-        # Stochastic depth rate (effective Stage 1 value)
-        drop_path_rate=stage1_drop_path_rate,
-        # Positional embedding max length
-        max_seq_len=max_bp_len - kmer + 1,
-    ).to(device)
+    model_variant = str(cfg_run.get("model_variant", "")).strip().lower()
+    variant_config = dict(cfg_run)
+    variant_config.update({
+        "vocab_size": vocab_size,
+        "kmer": kmer,
+        "pad_token_id": pad_token_id,
+        "engineered_dim": engineered_dim,
+        "engineered_mlp_hidden": engineered_mlp_hidden,
+        "engineered_mlp_output": engineered_mlp_output,
+        "max_seq_len": max_bp_len - kmer + 1,
+        "drop_path_rate": stage1_drop_path_rate,
+    })
+    use_variant_model = model_variant in {"transformer_only", "features_only", "combined"}
+
+    if use_variant_model:
+        model = create_model_variant(model_variant, variant_config).to(device)
+    else:
+        model = GeneWhispererStage1(
+            vocab_size=vocab_size,
+            kmer=kmer,
+            embedding_dim=embedding_dim,
+            num_layers=transformer_layers,
+            num_heads=transformer_heads,
+            ff_dim=transformer_ff_dim,
+            dropout=transformer_dropout,
+            pad_token_id=pad_token_id,
+            engineered_dim=engineered_dim,
+            use_engineered_features=use_engineered_features,
+            use_attention_pool=use_attention_pool,
+            # TCN parameters
+            use_tcn=use_tcn,
+            tcn_hidden=tcn_hidden,
+            tcn_levels=tcn_levels,
+            tcn_kernel=tcn_kernel,
+            multiscale_channels=multiscale_channels,
+            multiscale_kernels=multiscale_kernels,
+            lstm_hidden=lstm_hidden,
+            # New architecture parameters
+            post_cnn_transformer_layers=post_cnn_transformer_layers,
+            engineered_mlp_hidden=engineered_mlp_hidden,
+            engineered_mlp_output=engineered_mlp_output,
+            fusion_hidden=fusion_hidden,
+            # Stochastic depth rate (effective Stage 1 value)
+            drop_path_rate=stage1_drop_path_rate,
+            # Positional embedding max length
+            max_seq_len=max_bp_len - kmer + 1,
+        ).to(device)
     
     # Log architecture configuration
     LOGGER.info("=" * 60)
-    LOGGER.info("MODEL ARCHITECTURE V4")
-    LOGGER.info("=" * 60)
-    LOGGER.info("Architecture: Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier")
-    if use_tcn:
-        LOGGER.info("CNN/TCN: Multi-scale kernels %s → TCN(%d levels, %d hidden, k=%d)", 
-                    multiscale_kernels, tcn_levels, tcn_hidden, tcn_kernel)
-    LOGGER.info("Post-CNN Transformer: %d layers, %d heads", post_cnn_transformer_layers, transformer_heads)
-    if use_engineered_features:
-        LOGGER.info("Engineered Features MLP: %d → %d → %d", engineered_dim, engineered_mlp_hidden, engineered_mlp_output)
-        LOGGER.info("Attention Fusion: Gated cross-attention (hidden=%d)", fusion_hidden)
+    if use_variant_model:
+        LOGGER.info("MODEL VARIANT: %s", model_variant)
+        if model_variant == "features_only":
+            LOGGER.info(
+                "Engineered MLP: %d → %d → %d",
+                engineered_dim,
+                engineered_mlp_hidden,
+                engineered_mlp_output,
+            )
+        else:
+            LOGGER.info(
+                "Transformer: %d layers, %d heads, dim=%d",
+                transformer_layers,
+                transformer_heads,
+                embedding_dim,
+            )
+            LOGGER.info("Pooling: mean")
+            if model_variant == "combined":
+                LOGGER.info(
+                    "Engineered MLP: %d → %d → %d",
+                    engineered_dim,
+                    engineered_mlp_hidden,
+                    engineered_mlp_output,
+                )
+        LOGGER.info("Classifier: 2-layer head")
+    else:
+        LOGGER.info("MODEL ARCHITECTURE V4")
+        LOGGER.info("Architecture: Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier")
+        if use_tcn:
+            LOGGER.info(
+                "CNN/TCN: Multi-scale kernels %s → TCN(%d levels, %d hidden, k=%d)",
+                multiscale_kernels,
+                tcn_levels,
+                tcn_hidden,
+                tcn_kernel,
+            )
+        LOGGER.info("Post-CNN Transformer: %d layers, %d heads", post_cnn_transformer_layers, transformer_heads)
+        if use_engineered_features:
+            LOGGER.info(
+                "Engineered Features MLP: %d → %d → %d",
+                engineered_dim,
+                engineered_mlp_hidden,
+                engineered_mlp_output,
+            )
+            LOGGER.info("Attention Fusion: Gated cross-attention (hidden=%d)", fusion_hidden)
     LOGGER.info("=" * 60)
     
     # Load pretrained MLM weights if available
@@ -2459,9 +2531,15 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     if transfer_mode not in {"none", "embed_only", "embed_plus_adapter"}:
         raise ValueError(f"Invalid stage1_mlm_transfer_mode: {transfer_mode}")
     should_load_mlm = load_mlm_weights and transfer_mode != "none"
-    with torch.no_grad():
-        emb_before = model.embedding.weight.detach().float().clone()
-        emb_before_norm = emb_before.norm().item()
+    embedding_layer = getattr(model, "embedding", None)
+    has_embedding = isinstance(embedding_layer, nn.Embedding)
+    if has_embedding:
+        with torch.no_grad():
+            emb_before = embedding_layer.weight.detach().float().clone()
+            emb_before_norm = emb_before.norm().item()
+    else:
+        emb_before = None
+        emb_before_norm = 0.0
     load_attempted = False
     if should_load_mlm:
         checkpoint_path = get_mlm_checkpoint_for_kmer(cfg_run, kmer, script_dir=script_dir)
@@ -2473,40 +2551,52 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 transfer_mode,
             )
             load_attempted = True
-            model.load_pretrained_weights(
-                checkpoint_path=checkpoint_path,
-                strict=False,
-                transfer_mode=transfer_mode,
-            )
-            if transfer_mode == "embed_plus_adapter":
-                LOGGER.info(
-                    "Pretrained weights loaded: embedding + %d transformer layers",
-                    post_cnn_transformer_layers,
+            if hasattr(model, "load_pretrained_weights"):
+                model.load_pretrained_weights(
+                    checkpoint_path=checkpoint_path,
+                    strict=False,
+                    transfer_mode=transfer_mode,
                 )
+                if transfer_mode == "embed_plus_adapter":
+                    if hasattr(model, "post_cnn_transformer"):
+                        LOGGER.info(
+                            "Pretrained weights loaded: embedding + %d transformer layers",
+                            post_cnn_transformer_layers,
+                        )
+                    else:
+                        LOGGER.info("Pretrained weights loaded: embedding only (no adapter)")
+                else:
+                    LOGGER.info("Pretrained weights loaded: embedding only")
             else:
-                LOGGER.info("Pretrained weights loaded: embedding only")
+                LOGGER.warning("Model does not support pretrained weight loading; skipping.")
 
             freeze_layers = int(cfg_run.get("stage1_freeze_layers", 0))
             if freeze_layers > 0:
-                LOGGER.info("Freezing bottom %d encoder layers", freeze_layers)
-                model.encoder.freeze_bottom_layers(freeze_layers)
+                if hasattr(model, "encoder") and getattr(model, "encoder") is not None:
+                    LOGGER.info("Freezing bottom %d encoder layers", freeze_layers)
+                    model.encoder.freeze_bottom_layers(freeze_layers)
+                else:
+                    LOGGER.warning("Requested layer freezing, but model has no encoder to freeze.")
         else:
             LOGGER.warning("No MLM weights loaded - training from scratch")
     elif load_mlm_weights and transfer_mode == "none":
         LOGGER.info("stage1_mlm_transfer_mode=none; skipping MLM weight load")
-    with torch.no_grad():
-        emb_after = model.embedding.weight.detach().float()
-        emb_after_norm = emb_after.norm().item()
-        diff_norm = (emb_after - emb_before).norm().item()
-    LOGGER.info(
-        "Load sanity: embedding norm before=%.6f after=%.6f diff_norm=%.6f (load_attempted=%s)",
-        emb_before_norm,
-        emb_after_norm,
-        diff_norm,
-        load_attempted,
-    )
-    if load_attempted and diff_norm < 1e-6:
-        LOGGER.warning("Pretrain load had no effect (likely key mismatch or already loaded).")
+    if has_embedding:
+        with torch.no_grad():
+            emb_after = embedding_layer.weight.detach().float()
+            emb_after_norm = emb_after.norm().item()
+            diff_norm = (emb_after - emb_before).norm().item()
+        LOGGER.info(
+            "Load sanity: embedding norm before=%.6f after=%.6f diff_norm=%.6f (load_attempted=%s)",
+            emb_before_norm,
+            emb_after_norm,
+            diff_norm,
+            load_attempted,
+        )
+        if load_attempted and diff_norm < 1e-6:
+            LOGGER.warning("Pretrain load had no effect (likely key mismatch or already loaded).")
+    else:
+        LOGGER.info("Load sanity skipped: model has no embedding layer.")
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())

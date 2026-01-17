@@ -33,3 +33,6 @@ Gene Whisperer/artifacts/checkpoints/
 # Logs
 *.log
 runs/
+
+# Local prompt scratchpad
+prompt.txt
