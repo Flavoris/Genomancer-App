@@ -742,7 +742,9 @@ def main():
     LOGGER.info("Device: %s", device)
 
     # Build data loaders
-    train_loader, val_loader = build_dataloaders(cfg, device)
+    loaders = build_dataloaders(cfg)
+    train_loader = loaders["stage1"]["train"]
+    val_loader = loaders["stage1"]["val"]
     LOGGER.info("Train samples: %d, Val samples: %d",
                 len(train_loader.dataset), len(val_loader.dataset))
 
