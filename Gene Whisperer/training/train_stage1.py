@@ -1256,8 +1256,16 @@ def run_epoch(
     param_norm_warn: float = 150.0,
     param_norm_cap: float = 200.0,
     eval_checkpoint_path: Optional[Path] = None,
+    model_variant: str = "original",
 ) -> Dict[str, float]:
-    """Run one epoch of training or evaluation."""
+    """Run one epoch of training or evaluation.
+
+    Args:
+        model_variant: Model variant type for input handling:
+            - "original" or "combined": pass both tokens and engineered features
+            - "transformer_only": pass tokens only (engineered features set to None)
+            - "features_only": pass engineered features only (tokens set to None)
+    """
     is_train = optimizer is not None
     model.train(is_train)
 
@@ -1269,18 +1277,33 @@ def run_epoch(
     if is_train and use_cuda_scaler:
         LOGGER.info("%s: GradScaler scale = %.0f", desc, scaler.get_scale())
 
+    # Determine input requirements based on model variant
+    # features_only: only uses engineered features (no tokens)
+    # transformer_only: only uses tokens (no engineered features)
+    # combined/original: uses both
+    use_tokens = model_variant not in {"features_only"}
+    use_engineered = model_variant not in {"transformer_only"}
+
     if is_train and use_mixup:
-        core = unwrap_model(model)
-        supports_mixup = (
-            isinstance(getattr(core, "embedding", None), nn.Embedding)
-            and callable(getattr(core, "forward_from_embeds", None))
-        )
-        if not supports_mixup:
-            global _embedding_mixup_logged
-            if not _embedding_mixup_logged:
-                LOGGER.info("Embedding mixup disabled: model lacks forward_from_embeds support.")
-                _embedding_mixup_logged = True
+        # Mixup requires embeddings, so disable for features_only variant
+        if model_variant == "features_only":
+            global _features_only_mixup_logged
+            if "_features_only_mixup_logged" not in globals() or not _features_only_mixup_logged:
+                LOGGER.info("Embedding mixup disabled: features_only variant has no embeddings.")
+                _features_only_mixup_logged = True
             use_mixup = False
+        else:
+            core = unwrap_model(model)
+            supports_mixup = (
+                isinstance(getattr(core, "embedding", None), nn.Embedding)
+                and callable(getattr(core, "forward_from_embeds", None))
+            )
+            if not supports_mixup:
+                global _embedding_mixup_logged
+                if not _embedding_mixup_logged:
+                    LOGGER.info("Embedding mixup disabled: model lacks forward_from_embeds support.")
+                    _embedding_mixup_logged = True
+                use_mixup = False
 
     if is_train and max_optimizer_steps is not None and max_optimizer_steps <= 0:
         return {
@@ -1312,11 +1335,14 @@ def run_epoch(
     
     iterable = tqdm(loader, desc=desc, leave=False)
     for batch_idx, (tokens, engineered, labels) in enumerate(iterable):
-        tokens = tokens.to(device)
-        engineered = engineered.to(device)
+        # Move tensors to device, respecting variant input requirements
+        # For variants that don't use certain inputs, we still load them but pass None to model
+        tokens = tokens.to(device) if use_tokens else None
+        engineered = engineered.to(device) if use_engineered else None
         labels = labels.to(device).unsqueeze(1)
-        
+
         # Embedding-space mixup augmentation (training only)
+        # Note: mixup is automatically disabled for features_only variant earlier
         lam = 1.0
         labels_b = labels
         mixed_emb = None
@@ -1336,6 +1362,7 @@ def run_epoch(
                         core = unwrap_model(model)
                         logits = core.forward_from_embeds(mixed_emb, mix_padding_mask, engineered)
                     else:
+                        # Pass variant-appropriate inputs
                         logits = model(tokens, engineered)
             else:
                 if is_train and use_mixup and lam < 1.0:
@@ -1343,6 +1370,7 @@ def run_epoch(
                     core = unwrap_model(model)
                     logits = core.forward_from_embeds(mixed_emb, mix_padding_mask, engineered)
                 else:
+                    # Pass variant-appropriate inputs
                     logits = model(tokens, engineered)
 
             # Ensure logits are in fp32 for loss computation if force_fp32_loss is True
@@ -1895,8 +1923,21 @@ def save_checkpoint(
     scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
     epoch: int,
     metrics: Dict[str, float],
+    model_variant: str = "original",
+    use_simplified_architecture: bool = False,
 ) -> None:
-    """Save training checkpoint."""
+    """Save training checkpoint with variant metadata.
+
+    Args:
+        path: Path to save checkpoint
+        model: Model to save
+        optimizer: Optimizer state
+        scheduler: Optional scheduler state
+        epoch: Current epoch number
+        metrics: Training/validation metrics
+        model_variant: Model variant type ("original", "transformer_only", "features_only", "combined")
+        use_simplified_architecture: Whether simplified architecture is used
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Extract best threshold info from metrics for deployment
@@ -1912,10 +1953,14 @@ def save_checkpoint(
         # Top-level keys for deployment-safe inference
         "best_threshold": best_threshold,
         "val_acc_best_threshold": val_acc_best_threshold,
+        # Model variant metadata for checkpoint loading
+        "model_variant": model_variant,
+        "use_simplified_architecture": use_simplified_architecture,
     }
     torch.save(checkpoint, path)
     LOGGER.info("Saved checkpoint to %s", path)
     LOGGER.info("  best_threshold=%.4f, val_acc_best_threshold=%.4f", best_threshold, val_acc_best_threshold)
+    LOGGER.info("  model_variant=%s, use_simplified_architecture=%s", model_variant, use_simplified_architecture)
 
 
 def check_gradients_and_frozen(model: nn.Module) -> Dict[str, Any]:
@@ -2428,7 +2473,28 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # Compute stage1_drop_path_rate with fallback (needed before model creation)
     stage1_drop_path_rate = get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)
 
+    # Model variant configuration
+    # use_simplified_architecture: If False (default), always use original GeneWhispererStage1
+    # If True, use simplified variant based on model_variant setting
+    use_simplified_architecture = bool(cfg_run.get("use_simplified_architecture", False))
     model_variant = str(cfg_run.get("model_variant", "")).strip().lower()
+
+    # Supported simplified variants
+    simplified_variants = {"transformer_only", "features_only", "combined"}
+
+    # Determine if we should use a simplified variant model
+    # Only use simplified variant if: use_simplified_architecture=True AND model_variant is a valid simplified variant
+    use_variant_model = use_simplified_architecture and model_variant in simplified_variants
+
+    # For "original" variant or when use_simplified_architecture=False, use original GeneWhispererStage1
+    # This maintains backward compatibility: if use_simplified_architecture is not in config, default to False
+    if not use_simplified_architecture and model_variant in simplified_variants:
+        LOGGER.warning(
+            "model_variant='%s' specified but use_simplified_architecture=False; "
+            "using original GeneWhispererStage1 (set use_simplified_architecture=True to use simplified variant)",
+            model_variant,
+        )
+
     variant_config = dict(cfg_run)
     variant_config.update({
         "vocab_size": vocab_size,
@@ -2440,7 +2506,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "max_seq_len": max_bp_len - kmer + 1,
         "drop_path_rate": stage1_drop_path_rate,
     })
-    use_variant_model = model_variant in {"transformer_only", "features_only", "combined"}
 
     if use_variant_model:
         model = create_model_variant(model_variant, variant_config).to(device)
@@ -2478,16 +2543,12 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     
     # Log architecture configuration
     LOGGER.info("=" * 60)
+    LOGGER.info("use_simplified_architecture: %s", use_simplified_architecture)
     if use_variant_model:
-        LOGGER.info("MODEL VARIANT: %s", model_variant)
-        if model_variant == "features_only":
-            LOGGER.info(
-                "Engineered MLP: %d → %d → %d",
-                engineered_dim,
-                engineered_mlp_hidden,
-                engineered_mlp_output,
-            )
-        else:
+        LOGGER.info("MODEL VARIANT: %s (simplified)", model_variant)
+        # Log inputs required for this variant
+        if model_variant == "transformer_only":
+            LOGGER.info("Inputs required: tokens only (engineered features ignored)")
             LOGGER.info(
                 "Transformer: %d layers, %d heads, dim=%d",
                 transformer_layers,
@@ -2495,16 +2556,33 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 embedding_dim,
             )
             LOGGER.info("Pooling: mean")
-            if model_variant == "combined":
-                LOGGER.info(
-                    "Engineered MLP: %d → %d → %d",
-                    engineered_dim,
-                    engineered_mlp_hidden,
-                    engineered_mlp_output,
-                )
+        elif model_variant == "features_only":
+            LOGGER.info("Inputs required: engineered features only (tokens ignored)")
+            LOGGER.info(
+                "Engineered MLP: %d → %d → %d",
+                engineered_dim,
+                engineered_mlp_hidden,
+                engineered_mlp_output,
+            )
+        elif model_variant == "combined":
+            LOGGER.info("Inputs required: tokens + engineered features")
+            LOGGER.info(
+                "Transformer: %d layers, %d heads, dim=%d",
+                transformer_layers,
+                transformer_heads,
+                embedding_dim,
+            )
+            LOGGER.info("Pooling: mean")
+            LOGGER.info(
+                "Engineered MLP: %d → %d → %d",
+                engineered_dim,
+                engineered_mlp_hidden,
+                engineered_mlp_output,
+            )
         LOGGER.info("Classifier: 2-layer head")
     else:
-        LOGGER.info("MODEL ARCHITECTURE V4")
+        LOGGER.info("MODEL VARIANT: original (GeneWhispererStage1)")
+        LOGGER.info("Inputs required: tokens + engineered features")
         LOGGER.info("Architecture: Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier")
         if use_tcn:
             LOGGER.info(
@@ -2941,6 +3019,8 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 param_norm_cap=param_norm_cap,
             )
         else:
+            # Compute effective variant for run_epoch
+            effective_variant = model_variant if use_variant_model else "original"
             train_metrics = run_epoch(
                 train_loader,
                 model,
@@ -2958,6 +3038,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 mixup_alpha=stage1_mixup_alpha,
                 amp_ctx=amp_ctx,
                 scaler=scaler,
+                model_variant=effective_variant,
             )
         global_optimizer_steps += int(train_metrics.get("optimizer_steps", 0))
         reached_max_steps = ablation_max_steps is not None and global_optimizer_steps >= ablation_max_steps
@@ -2975,6 +3056,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             optimizer=None,
             desc="Val",
             amp_ctx=amp_ctx,
+            model_variant=effective_variant,
         )
         
         # Also evaluate SWA model if active (every 5 epochs to save time)
@@ -2982,19 +3064,18 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         if in_swa_phase and swa_model is not None and epoch % 5 == 0:
             # Update batch norm stats for SWA model using a limited subset
             try:
-                # Create a wrapper dataloader that yields only tokens (for BN update)
-                def bn_loader():
-                    for tokens, _, _ in train_loader:
-                        yield tokens.to(device), None
-                
+                # Determine variant-appropriate inputs for BN update
+                use_tokens_swa = effective_variant not in {"features_only"}
+                use_eng_swa = effective_variant not in {"transformer_only"}
+
                 # Use the SWA model directly for BN update
                 swa_model.train()
                 with torch.no_grad():
                     for i, (tokens, eng, _) in enumerate(train_loader):
                         if i >= 50:  # Limit to 50 batches for speed
                             break
-                        tokens = tokens.to(device)
-                        eng = eng.to(device)
+                        tokens = tokens.to(device) if use_tokens_swa else None
+                        eng = eng.to(device) if use_eng_swa else None
                         _ = swa_model(tokens, eng)
                 
                 swa_model.eval()
@@ -3006,6 +3087,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                     optimizer=None,
                     desc="Val-SWA",
                     amp_ctx=amp_ctx,
+                    model_variant=effective_variant,
                 )
             except Exception as e:
                 LOGGER.warning("SWA evaluation failed: %s", e)
@@ -3077,10 +3159,20 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             best_val_metrics = eval_metrics
 
             # Save either SWA model or regular model
+            # Include variant metadata for checkpoint loading
+            effective_variant = model_variant if use_variant_model else "original"
             if swa_val_metrics and swa_mcc_best > val_mcc_best:
-                save_checkpoint(checkpoint_path, swa_model.module, optimizer, scheduler, epoch, eval_metrics)
+                save_checkpoint(
+                    checkpoint_path, swa_model.module, optimizer, scheduler, epoch, eval_metrics,
+                    model_variant=effective_variant,
+                    use_simplified_architecture=use_simplified_architecture,
+                )
             else:
-                save_checkpoint(checkpoint_path, model, optimizer, scheduler, epoch, val_metrics)
+                save_checkpoint(
+                    checkpoint_path, model, optimizer, scheduler, epoch, val_metrics,
+                    model_variant=effective_variant,
+                    use_simplified_architecture=use_simplified_architecture,
+                )
             LOGGER.info(
                 "★ New best! MCC@best: %.4f, Acc@best: %.4f (%.2f%%), thr=%.2f",
                 best_val_mcc, best_val_acc, best_val_acc * 100,
@@ -3108,6 +3200,9 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         best_val_metrics = val_metrics
         best_epoch = epochs
     
+    # Determine effective variant for report
+    effective_variant = model_variant if use_variant_model else "original"
+
     report = {
         "config": config_id,
         "best_epoch": best_epoch,
@@ -3116,6 +3211,16 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "class_balance": class_balance,
         "device": str(device),
         "seed": seed,
+        "model_variant_config": {
+            "use_simplified_architecture": use_simplified_architecture,
+            "model_variant": effective_variant,
+            "inputs_required": {
+                "transformer_only": "tokens",
+                "features_only": "engineered",
+                "combined": "tokens + engineered",
+                "original": "tokens + engineered",
+            }.get(effective_variant, "tokens + engineered"),
+        },
         "model_params": {
             "total": total_params,
             "trainable": trainable_params,
@@ -3125,16 +3230,16 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             "kmer": kmer,
         },
         "architecture_v4": {
-            "order": "Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier",
-            "use_tcn": use_tcn,
-            "tcn_hidden": tcn_hidden,
-            "tcn_levels": tcn_levels,
-            "multiscale_kernels": list(multiscale_kernels),
-            "post_cnn_transformer_layers": post_cnn_transformer_layers,
+            "order": "Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier" if not use_variant_model else f"{effective_variant} simplified",
+            "use_tcn": use_tcn if not use_variant_model else False,
+            "tcn_hidden": tcn_hidden if not use_variant_model else None,
+            "tcn_levels": tcn_levels if not use_variant_model else None,
+            "multiscale_kernels": list(multiscale_kernels) if not use_variant_model else None,
+            "post_cnn_transformer_layers": post_cnn_transformer_layers if not use_variant_model else None,
             "engineered_mlp_hidden": engineered_mlp_hidden,
             "engineered_mlp_output": engineered_mlp_output,
-            "fusion_hidden": fusion_hidden,
-            "use_attention_fusion": use_engineered_features,
+            "fusion_hidden": fusion_hidden if not use_variant_model else None,
+            "use_attention_fusion": use_engineered_features if not use_variant_model else False,
         },
         "training_enhancements": {
             "layer_wise_lr_decay": layer_lr_decay,
