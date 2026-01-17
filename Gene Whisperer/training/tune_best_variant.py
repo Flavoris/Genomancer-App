@@ -549,8 +549,9 @@ def train_with_config(
             best_val_mcc = val_mcc
             best_epoch = epoch + 1
 
-        # Check early stopping
-        if early_stopping.step(val_acc, model):
+        # Check early stopping (uses __call__, returns True if should stop)
+        early_stopping(val_acc, model, epoch)
+        if early_stopping.should_stop:
             LOGGER.info("Early stopping at epoch %d", epoch + 1)
             break
 
