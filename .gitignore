@@ -26,8 +26,6 @@ Thumbs.db
 *.mp4
 
 # Training artifacts (large files)
-*.pt
-!Gene Whisperer/artifacts/**/*.pt
 Gene Whisperer/artifacts/checkpoints/
 
 # Logs

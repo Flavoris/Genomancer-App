@@ -1,3 +1,2 @@
-# LFS disabled: large artifacts are stored outside Git (Drive).
-# Keep this file for future attribute rules.
+# Large artifacts are tracked with Git LFS.
 *.pt filter=lfs diff=lfs merge=lfs -text
