@@ -41,7 +41,7 @@ from amp_utils import get_amp_context, create_grad_scaler
 from dataset import build_dataloaders
 from early_stopping import EarlyStopping
 from seed_utils import set_global_seed
-from train_stage1 import run_epoch, load_config
+from train_stage1 import run_epoch, load_config, get_mlm_checkpoint_for_kmer
 
 LOGGER = logging.getLogger("gene_whisperer.hyperparameter_tuning")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -437,6 +437,7 @@ def train_with_config(
     epochs: int = 30,
     patience: int = 10,
     config_id: int = 0,
+    load_mlm_weights: bool = True,
 ) -> TuningResult:
     """Train model with a specific hyperparameter configuration."""
 
@@ -459,6 +460,20 @@ def train_with_config(
     model = create_tunable_model(variant, cfg, hp_config, device)
     param_count = count_parameters(model)
     LOGGER.info("Parameters: %d", param_count)
+
+    # Load pretrained MLM weights if enabled
+    if load_mlm_weights and hasattr(model, "load_pretrained_weights"):
+        kmer = int(cfg.get("kmer", 6))
+        checkpoint_path = get_mlm_checkpoint_for_kmer(cfg, kmer)
+        if checkpoint_path is not None:
+            LOGGER.info("Loading MLM weights for k=%d from %s", kmer, checkpoint_path)
+            model.load_pretrained_weights(
+                checkpoint_path=checkpoint_path,
+                strict=False,
+                transfer_mode="embed_only",
+            )
+        else:
+            LOGGER.warning("No MLM checkpoint found for k=%d", kmer)
 
     # Optimizer with tuned parameters
     optimizer = torch.optim.AdamW(

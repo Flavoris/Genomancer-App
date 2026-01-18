@@ -42,6 +42,9 @@ from torch.utils.data import DataLoader
 LOGGER = logging.getLogger("gene_whisperer.final_training")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
+# Import MLM weight loading function
+from train_stage1 import get_mlm_checkpoint_for_kmer
+
 
 # Best hyperparameters from tuning (from screenshot)
 BEST_CONFIG = {
@@ -168,13 +171,13 @@ def load_base_config(config_path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def create_model(
+def create_tunable_model_wrapper(
     variant: str,
     cfg: dict,
     training_config: TrainingConfig,
     device: torch.device,
 ) -> nn.Module:
-    """Create model with tuned hyperparameters."""
+    """Create tunable model with hyperparameters (for experimentation)."""
     from tune_best_variant import create_tunable_model
 
     hp_config = {
@@ -188,9 +191,168 @@ def create_model(
     return create_tunable_model(variant, cfg, hp_config, device)
 
 
+def create_standard_model(
+    cfg: dict,
+    training_config: TrainingConfig,
+    device: torch.device,
+    vocab: "KmerVocabulary",
+) -> nn.Module:
+    """
+    Create standard GeneWhispererStage1 model compatible with ensemble scripts.
+
+    This model can be used with ensemble_infer.py and eval_stage1_ensemble.py.
+    Applies tuned hyperparameters (dropout) to the standard architecture.
+    """
+    from model import GeneWhispererStage1
+
+    kmer = int(cfg.get("kmer", 6))
+    max_bp_len = int(cfg.get("max_bp_len", 81))
+
+    model = GeneWhispererStage1(
+        vocab_size=len(vocab.itos),
+        kmer=kmer,
+        embedding_dim=int(cfg.get("embedding_dim", 384)),
+        num_layers=int(cfg.get("transformer_layers", 12)),
+        num_heads=int(cfg.get("transformer_heads", 12)),
+        ff_dim=int(cfg.get("transformer_ff_dim", 1536)),
+        dropout=training_config.dropout,  # Use tuned dropout
+        pad_token_id=vocab.pad_id,
+        engineered_dim=int(cfg.get("engineered_dim", 288)),
+        use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
+        use_attention_pool=bool(cfg.get("use_attention_pool", True)),
+        use_tcn=bool(cfg.get("use_tcn", True)),
+        tcn_hidden=int(cfg.get("tcn_hidden", 384)),
+        tcn_levels=int(cfg.get("tcn_levels", 5)),
+        tcn_kernel=int(cfg.get("tcn_kernel", 3)),
+        multiscale_channels=int(cfg.get("multiscale_channels", 64)),
+        multiscale_kernels=tuple(cfg.get("multiscale_kernels", [3, 5, 7, 9, 15])),
+        lstm_hidden=int(cfg.get("lstm_hidden", 192)),
+        post_cnn_transformer_layers=int(cfg.get("post_cnn_transformer_layers", 3)),
+        engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 512)),
+        engineered_mlp_output=int(cfg.get("engineered_mlp_output", 384)),
+        fusion_hidden=int(cfg.get("fusion_hidden", 512)),
+        max_seq_len=max_bp_len - kmer + 1,
+        drop_path_rate=float(cfg.get("drop_path_rate", 0.1)),
+        use_relative_position_bias=bool(cfg.get("use_relative_position_bias", True)),
+        use_glu_ffn=bool(cfg.get("use_glu_ffn", True)),
+    ).to(device)
+
+    return model
+
+
+def create_model(
+    variant: str,
+    cfg: dict,
+    training_config: TrainingConfig,
+    device: torch.device,
+    use_standard_model: bool = False,
+    vocab: Optional["KmerVocabulary"] = None,
+) -> nn.Module:
+    """
+    Create model with tuned hyperparameters.
+
+    Args:
+        variant: Model variant (combined, transformer_only, features_only)
+        cfg: Base configuration dictionary
+        training_config: Training configuration with tuned hyperparameters
+        device: Target device
+        use_standard_model: If True, use GeneWhispererStage1 (compatible with ensemble scripts)
+        vocab: Required if use_standard_model=True
+
+    Returns:
+        Created model on the specified device
+    """
+    if use_standard_model:
+        if vocab is None:
+            raise ValueError("vocab is required when use_standard_model=True")
+        LOGGER.info("Using standard GeneWhispererStage1 model (ensemble-compatible)")
+        return create_standard_model(cfg, training_config, device, vocab)
+    else:
+        LOGGER.info("Using tunable model variant: %s", variant)
+        return create_tunable_model_wrapper(variant, cfg, training_config, device)
+
+
 def count_parameters(model: nn.Module) -> int:
     """Count trainable parameters."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def load_pretrained_mlm_weights(
+    model: nn.Module,
+    cfg: dict,
+    transfer_mode: str = "embed_only",
+) -> bool:
+    """
+    Load pretrained MLM weights into the model.
+
+    Args:
+        model: Model with load_pretrained_weights method
+        cfg: Configuration dictionary
+        transfer_mode: One of "embed_only", "embed_plus_adapter", or "none"
+
+    Returns:
+        True if weights were successfully loaded, False otherwise
+    """
+    if transfer_mode == "none":
+        LOGGER.info("Skipping MLM weight loading (transfer_mode=none)")
+        return False
+
+    if not hasattr(model, "load_pretrained_weights"):
+        LOGGER.warning("Model does not support pretrained weight loading")
+        return False
+
+    kmer = int(cfg.get("kmer", 6))
+    checkpoint_path = get_mlm_checkpoint_for_kmer(cfg, kmer)
+
+    if checkpoint_path is None:
+        LOGGER.warning("No MLM checkpoint found for k=%d - training from scratch", kmer)
+        return False
+
+    LOGGER.info(
+        "Loading MLM encoder weights for k=%d from %s (transfer_mode=%s)",
+        kmer,
+        checkpoint_path,
+        transfer_mode,
+    )
+
+    # Capture embedding norm before loading for sanity check
+    embedding_layer = getattr(model, "embedding", None)
+    has_embedding = isinstance(embedding_layer, nn.Embedding)
+    if has_embedding:
+        with torch.no_grad():
+            emb_before = embedding_layer.weight.detach().float().clone()
+            emb_before_norm = emb_before.norm().item()
+    else:
+        emb_before = None
+        emb_before_norm = 0.0
+
+    # Load the weights
+    model.load_pretrained_weights(
+        checkpoint_path=checkpoint_path,
+        strict=False,
+        transfer_mode=transfer_mode,
+    )
+    LOGGER.info("Pretrained MLM weights loaded successfully")
+
+    # Verify weights actually changed
+    if has_embedding:
+        with torch.no_grad():
+            emb_after = embedding_layer.weight.detach().float()
+            emb_after_norm = emb_after.norm().item()
+            diff_norm = (emb_after - emb_before).norm().item()
+        LOGGER.info(
+            "Load sanity: embedding norm before=%.6f after=%.6f diff_norm=%.6f",
+            emb_before_norm,
+            emb_after_norm,
+            diff_norm,
+        )
+        if diff_norm < 1e-6:
+            LOGGER.warning(
+                "Pretrain load had no effect (likely key mismatch or already loaded)"
+            )
+            return False
+
+    return True
 
 
 def train_final_model(
@@ -200,9 +362,25 @@ def train_final_model(
     val_loader: DataLoader,
     device: torch.device,
     output_dir: Path,
+    use_standard_model: bool = False,
+    vocab: Optional["KmerVocabulary"] = None,
+    load_mlm_weights: bool = True,
+    mlm_transfer_mode: str = "embed_only",
 ) -> Tuple[nn.Module, TrainingResult, Dict[str, List[float]]]:
     """
     Train the final model with best configuration.
+
+    Args:
+        cfg: Base configuration dictionary
+        training_config: Training configuration with tuned hyperparameters
+        train_loader: Training data loader
+        val_loader: Validation data loader
+        device: Target device
+        output_dir: Directory to save checkpoints and results
+        use_standard_model: If True, use GeneWhispererStage1 (compatible with ensemble scripts)
+        vocab: Vocabulary (required if use_standard_model=True)
+        load_mlm_weights: Whether to load pretrained MLM weights (default: True)
+        mlm_transfer_mode: Transfer mode for MLM weights ("embed_only", "embed_plus_adapter", "none")
 
     Returns:
         Tuple of (trained model, training results, training history)
@@ -224,10 +402,26 @@ def train_final_model(
     }
 
     # Create model
-    model = create_model(training_config.variant, cfg, training_config, device)
+    model = create_model(
+        training_config.variant, cfg, training_config, device,
+        use_standard_model=use_standard_model, vocab=vocab
+    )
+
+    # Determine model variant for run_epoch (standard model is always "combined"-like)
+    model_variant = "combined" if use_standard_model else training_config.variant
     result.param_count = count_parameters(model)
     LOGGER.info("Model created with %d parameters (%.2fM)",
                 result.param_count, result.param_count / 1e6)
+
+    # Load pretrained MLM weights if enabled
+    if load_mlm_weights:
+        mlm_loaded = load_pretrained_mlm_weights(
+            model=model,
+            cfg=cfg,
+            transfer_mode=mlm_transfer_mode,
+        )
+        if not mlm_loaded:
+            LOGGER.warning("MLM weight loading was requested but failed or had no effect")
 
     # Optimizer
     optimizer = torch.optim.AdamW(
@@ -289,7 +483,7 @@ def train_final_model(
             use_mixup=False,
             amp_ctx=amp_ctx,
             scaler=scaler,
-            model_variant=training_config.variant,
+            model_variant=model_variant,
         )
 
         # Validation epoch
@@ -308,7 +502,7 @@ def train_final_model(
                 use_mixup=False,
                 amp_ctx=amp_ctx,
                 scaler=None,
-                model_variant=training_config.variant,
+                model_variant=model_variant,
             )
 
         # Record history
@@ -335,14 +529,16 @@ def train_final_model(
             result.best_epoch = epoch + 1
             best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
-            # Save best checkpoint
+            # Save best checkpoint (use 'model_state' key for ensemble script compatibility)
             torch.save({
                 "epoch": epoch + 1,
-                "model_state_dict": model.state_dict(),
+                "model_state": model.state_dict(),  # Compatible with ensemble_infer.py
+                "model_state_dict": model.state_dict(),  # Backward compatibility
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_acc": val_acc,
                 "val_mcc": val_mcc,
                 "val_auc": val_auc,
+                "best_threshold": 0.5,  # Default threshold for ensemble scripts
                 "config": asdict(training_config),
             }, checkpoint_dir / "best_model.pt")
 
@@ -366,13 +562,15 @@ def train_final_model(
 
         result.final_train_loss = train_metrics.get("loss", 0.0)
 
-    # Save last checkpoint
+    # Save last checkpoint (use 'model_state' key for ensemble script compatibility)
     torch.save({
         "epoch": epoch + 1,
-        "model_state_dict": model.state_dict(),
+        "model_state": model.state_dict(),  # Compatible with ensemble_infer.py
+        "model_state_dict": model.state_dict(),  # Backward compatibility
         "optimizer_state_dict": optimizer.state_dict(),
         "val_acc": val_acc,
         "val_mcc": val_mcc,
+        "best_threshold": 0.5,  # Default threshold for ensemble scripts
         "config": asdict(training_config),
     }, checkpoint_dir / "last_model.pt")
 
@@ -749,6 +947,30 @@ def main():
         default=42,
         help="Random seed",
     )
+    parser.add_argument(
+        "--use-standard-model",
+        action="store_true",
+        help="Use standard GeneWhispererStage1 model (compatible with ensemble scripts)",
+    )
+    parser.add_argument(
+        "--load-mlm-weights",
+        action="store_true",
+        default=True,
+        help="Load pretrained MLM weights (default: True)",
+    )
+    parser.add_argument(
+        "--no-load-mlm-weights",
+        action="store_false",
+        dest="load_mlm_weights",
+        help="Disable loading pretrained MLM weights",
+    )
+    parser.add_argument(
+        "--mlm-transfer-mode",
+        type=str,
+        default="embed_only",
+        choices=["embed_only", "embed_plus_adapter", "none"],
+        help="MLM weight transfer mode (default: embed_only)",
+    )
     args = parser.parse_args()
 
     # Load configurations
@@ -782,6 +1004,9 @@ def main():
     LOGGER.info("Weight Decay: %s", training_config.weight_decay)
     LOGGER.info("Epochs: %s", training_config.epochs)
     LOGGER.info("Patience: %s", training_config.patience)
+    LOGGER.info("Use Standard Model: %s", args.use_standard_model)
+    LOGGER.info("Load MLM Weights: %s", args.load_mlm_weights)
+    LOGGER.info("MLM Transfer Mode: %s", args.mlm_transfer_mode)
     LOGGER.info("=" * 60)
 
     # Set seed
@@ -798,12 +1023,34 @@ def main():
     LOGGER.info("Device: %s", device)
 
     # Build data loaders
-    from dataset import build_dataloaders
+    from dataset import build_dataloaders, KmerVocabulary
     loaders = build_dataloaders(cfg)
     train_loader = loaders["stage1"]["train"]
     val_loader = loaders["stage1"]["val"]
     LOGGER.info("Train samples: %d, Val samples: %d",
                 len(train_loader.dataset), len(val_loader.dataset))
+
+    # Load vocabulary if using standard model
+    vocab = None
+    if args.use_standard_model:
+        kmer = int(cfg.get("kmer", 6))
+        vocab_path = cfg.get("mlm_vocab_path") or cfg.get("mlm_vocab_by_k", {}).get(kmer)
+        if vocab_path and Path(vocab_path).exists():
+            vocab = KmerVocabulary.load(Path(vocab_path))
+            LOGGER.info("Loaded vocabulary from %s (k=%d, vocab_size=%d)",
+                        vocab_path, kmer, len(vocab.itos))
+        else:
+            # Build vocabulary from config
+            vocab_cache_dir = Path(cfg.get("vocab_cache_dir", "../artifacts/vocabs"))
+            vocab_cache_path = vocab_cache_dir / f"mlm_k{kmer}_vocab.json"
+            if vocab_cache_path.exists():
+                vocab = KmerVocabulary.load(vocab_cache_path)
+                LOGGER.info("Loaded vocabulary from cache %s", vocab_cache_path)
+            else:
+                raise FileNotFoundError(
+                    f"Vocabulary not found. Please run MLM pretraining first or "
+                    f"provide vocab at {vocab_cache_path}"
+                )
 
     # Create output directory with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -818,16 +1065,21 @@ def main():
         val_loader=val_loader,
         device=device,
         output_dir=output_dir,
+        use_standard_model=args.use_standard_model,
+        vocab=vocab,
+        load_mlm_weights=args.load_mlm_weights,
+        mlm_transfer_mode=args.mlm_transfer_mode,
     )
 
     # Run final evaluation
     LOGGER.info("Running final evaluation...")
+    eval_variant = "combined" if args.use_standard_model else training_config.variant
     eval_results = run_final_evaluation(
         model=model,
         val_loader=val_loader,
         device=device,
         cfg=cfg,
-        variant=training_config.variant,
+        variant=eval_variant,
     )
 
     # Save visualizations
