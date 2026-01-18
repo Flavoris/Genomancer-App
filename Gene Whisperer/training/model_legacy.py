@@ -1,16 +1,29 @@
-"""Legacy CNN/TCN and fusion components for Gene Whisperer.
+"""Legacy CNN/TCN components for Gene Whisperer.
 
-This module preserves the pre-simplification building blocks so that older
-architectures can still be instantiated or inspected.
+These classes are kept for backward compatibility with older checkpoints. The
+simplified transformer-only Stage 1 architecture performs better in ablation
+studies (84.1% accuracy vs 83.3%) while using 38% fewer parameters.
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple
+import logging
+import warnings
+from pathlib import Path
+from typing import Optional, Tuple, Union
 
 import torch  # pyright: ignore[reportMissingImports]
 import torch.nn as nn  # pyright: ignore[reportMissingImports]
 
-from model import PreNormTransformerLayer, RelativePositionBias
+LOGGER = logging.getLogger(__name__)
+
+_LEGACY_WARNING = (
+    "GeneWhispererStage1Legacy is deprecated. Use GeneWhispererStage1 (simplified) instead. "
+    "The simplified model achieves 84.1% accuracy vs 83.3% with 38% fewer parameters."
+)
+
+
+def _warn_legacy() -> None:
+    warnings.warn(_LEGACY_WARNING, DeprecationWarning)
 
 
 class CausalConv1d(nn.Module):
@@ -30,6 +43,7 @@ class CausalConv1d(nn.Module):
         groups: int = 1,
     ):
         super().__init__()
+        _warn_legacy()
         self.padding = (kernel_size - 1) * dilation
         self.conv = nn.Conv1d(
             in_channels,
@@ -74,6 +88,7 @@ class TCNBlock(nn.Module):
         dropout: float = 0.2,
     ):
         super().__init__()
+        _warn_legacy()
 
         # First causal convolution
         self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size, dilation)
@@ -89,7 +104,8 @@ class TCNBlock(nn.Module):
         # Residual connection with 1x1 conv if dimensions differ
         self.downsample = (
             nn.Conv1d(in_channels, out_channels, 1)
-            if in_channels != out_channels else None
+            if in_channels != out_channels
+            else None
         )
 
         # Initialize weights
@@ -155,6 +171,7 @@ class TCNEncoder(nn.Module):
         dropout: float = 0.2,
     ):
         super().__init__()
+        _warn_legacy()
         self.num_levels = num_levels
 
         layers = []
@@ -209,6 +226,7 @@ class MultiScaleCNN(nn.Module):
         dropout: float = 0.1,
     ):
         super().__init__()
+        _warn_legacy()
         self.kernel_sizes = kernel_sizes
         self.num_scales = len(kernel_sizes)
 
@@ -298,6 +316,7 @@ class MultiScaleTCN(nn.Module):
         dropout: float = 0.2,
     ):
         super().__init__()
+        _warn_legacy()
 
         # Multi-scale CNN for local pattern extraction
         self.multiscale = MultiScaleCNN(
@@ -355,6 +374,7 @@ class GatedAttentionFusion(nn.Module):
         dropout: float = 0.15,  # Reduced from 0.2
     ):
         super().__init__()
+        _warn_legacy()
         self.seq_dim = seq_dim
         self.eng_dim = eng_dim
         self.hidden_dim = hidden_dim
@@ -480,6 +500,9 @@ class PostCNNTransformerAdapter(nn.Module):
         relative_position_max_distance: int = 128,
     ):
         super().__init__()
+        _warn_legacy()
+        from model import PreNormTransformerLayer, RelativePositionBias
+
         self.input_dim = input_dim
         self.transformer_dim = transformer_dim
         self.use_relative_position_bias = use_relative_position_bias
@@ -564,7 +587,7 @@ class PostCNNTransformerAdapter(nn.Module):
         if len(self.layers) == 0:
             return x
 
-        B, L, _ = x.shape
+        _, seq_len, _ = x.shape
 
         # Project to transformer dimension
         x = self.input_proj(x)
@@ -573,7 +596,7 @@ class PostCNNTransformerAdapter(nn.Module):
         # Compute relative position bias once (shared across all layers)
         position_bias = None
         if self.relative_position_bias is not None:
-            position_bias = self.relative_position_bias(L, x.device)
+            position_bias = self.relative_position_bias(seq_len, x.device)
 
         # Apply transformer layers
         for layer in self.layers:
@@ -588,6 +611,481 @@ class PostCNNTransformerAdapter(nn.Module):
         return x
 
 
+class GeneWhispererStage1Legacy(nn.Module):
+    """
+    Legacy Stage 1 classifier with CNN/TCN backbone and attention fusion.
+
+    Architecture: Embedding → CNN/TCN → Transformer → Pooling → Attention Fusion → Classifier
+
+    Deprecated: use GeneWhispererStage1 (simplified transformer-only backbone).
+    """
+
+    def __init__(
+        self,
+        vocab_size: int = 67,
+        kmer: int = 3,
+        embedding_dim: int = 192,
+        num_layers: int = 6,
+        num_heads: int = 8,
+        ff_dim: int = 384,
+        dropout: float = 0.15,
+        pad_token_id: Optional[int] = None,
+        encoder: Optional["DNAEncoder"] = None,
+        engineered_dim: int = 288,
+        use_engineered_features: bool = True,
+        use_attention_pool: bool = True,
+        # TCN parameters
+        use_tcn: bool = True,
+        tcn_hidden: int = 256,
+        tcn_levels: int = 4,
+        tcn_kernel: int = 3,
+        # Multi-scale CNN parameters
+        multiscale_channels: int = 64,
+        multiscale_kernels: Tuple[int, ...] = (3, 5, 7, 9, 15),
+        # LSTM parameters (kept for compatibility but optional)
+        lstm_hidden: int = 192,
+        # New architecture parameters
+        post_cnn_transformer_layers: int = 3,
+        engineered_mlp_hidden: int = 512,
+        engineered_mlp_output: int = 256,
+        engineered_mlp_pre_norm: bool = True,
+        engineered_mlp_input_dropout: float = 0.05,
+        engineered_mlp_use_gated: bool = True,
+        engineered_mlp_use_residual: bool = True,
+        fusion_hidden: int = 384,
+        # Stochastic depth (drop path) rate for encoder
+        drop_path_rate: float = 0.1,
+        # Maximum sequence length for positional embeddings
+        max_seq_len: int = 256,
+        # Relative position bias parameters
+        use_relative_position_bias: bool = False,
+        relative_position_num_buckets: int = 32,
+        relative_position_max_distance: int = 128,
+        # GLU FFN parameters
+        use_glu_ffn: bool = False,
+        glu_activation: str = "gelu",
+    ):
+        super().__init__()
+        _warn_legacy()
+        from model import AttentionPooling, DNAEncoder, EngineeredFeatureMLP
+
+        self.use_tcn = use_tcn
+        self.pad_token_id = pad_token_id
+        self.max_seq_len = int(max_seq_len)
+        self.pos_embedding = nn.Embedding(self.max_seq_len, embedding_dim)
+
+        # Step 1: Embedding layer (from DNAEncoder, but we only use embedding)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_token_id)
+        self.embed_dropout = nn.Dropout(dropout)
+
+        # Store the full encoder for MLM weight loading compatibility
+        self._full_encoder = encoder or DNAEncoder(
+            vocab_size=vocab_size,
+            kmer=kmer,
+            embedding_dim=embedding_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            dropout=dropout,
+            pad_token_id=pad_token_id,
+            drop_path_rate=drop_path_rate,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
+        )
+        # Copy embedding weights from encoder
+        self.embedding.weight = self._full_encoder.embedding.weight
+
+        # Step 2: CNN/TCN for local pattern extraction (FIRST)
+        if use_tcn:
+            self.feature_extractor = MultiScaleTCN(
+                in_channels=embedding_dim,
+                multiscale_out_per_branch=multiscale_channels,
+                multiscale_kernels=multiscale_kernels,
+                tcn_hidden=tcn_hidden,
+                tcn_levels=tcn_levels,
+                tcn_kernel=tcn_kernel,
+                dropout=dropout,
+            )
+            cnn_out_dim = tcn_hidden
+        else:
+            self.conv = nn.Conv1d(embedding_dim, 256, kernel_size=7, padding=3)
+            self.conv_bn = nn.BatchNorm1d(256)
+            self.conv_act = nn.GELU()
+            cnn_out_dim = 256
+
+        # Step 3: Transformer adapter for global contextualization (AFTER CNN)
+        # Uses same dimension as pretrained encoder for weight transfer
+        self.post_cnn_transformer = PostCNNTransformerAdapter(
+            input_dim=cnn_out_dim,
+            transformer_dim=embedding_dim,  # Match pretrained encoder dimension
+            num_layers=post_cnn_transformer_layers,
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            dropout=dropout,
+            use_glu_ffn=use_glu_ffn,
+            glu_activation=glu_activation,
+            use_relative_position_bias=use_relative_position_bias,
+            relative_position_num_buckets=relative_position_num_buckets,
+            relative_position_max_distance=relative_position_max_distance,
+        )
+
+        # Step 4: Attention pooling
+        self.use_attention_pool = use_attention_pool
+        if use_attention_pool:
+            self.pool = AttentionPooling(cnn_out_dim, num_heads=4)
+
+        seq_out_dim = cnn_out_dim
+
+        # Step 5: Engineered features MLP branch
+        self.use_engineered_features = use_engineered_features and engineered_dim > 0
+        self.engineered_dim = engineered_dim
+
+        if self.use_engineered_features:
+            self.engineered_mlp = EngineeredFeatureMLP(
+                input_dim=engineered_dim,
+                hidden_dim=engineered_mlp_hidden,
+                output_dim=engineered_mlp_output,
+                dropout=dropout,
+                use_pre_norm=engineered_mlp_pre_norm,
+                input_dropout=engineered_mlp_input_dropout,
+                use_gated=engineered_mlp_use_gated,
+                use_residual=engineered_mlp_use_residual,
+            )
+            eng_out_dim = self.engineered_mlp.output_dim
+
+            # Step 6: Attention-based fusion
+            self.fusion = GatedAttentionFusion(
+                seq_dim=seq_out_dim,
+                eng_dim=eng_out_dim,
+                hidden_dim=fusion_hidden,
+                num_heads=4,
+                dropout=dropout,
+            )
+            classifier_in = self.fusion.output_dim
+        else:
+            classifier_in = seq_out_dim
+
+        # Step 7: Classifier head with reduced dropout (outputs logits)
+        # Original had 0.4/0.3 dropout which was too aggressive
+        classifier_hidden = 512 if use_tcn else 384
+        classifier_dropout = dropout * 1.5  # Scale with base dropout (0.15 -> 0.225)
+
+        self.classifier = nn.Sequential(
+            nn.Linear(classifier_in, classifier_hidden),
+            nn.LayerNorm(classifier_hidden),
+            nn.GELU(),
+            nn.Dropout(classifier_dropout),  # Was 0.4, now ~0.22
+            nn.Linear(classifier_hidden, classifier_hidden // 2),
+            nn.LayerNorm(classifier_hidden // 2),
+            nn.GELU(),
+            nn.Dropout(classifier_dropout * 0.8),  # Was 0.3, now ~0.18
+            nn.Linear(classifier_hidden // 2, 1),
+        )
+
+    @property
+    def encoder(self) -> "DNAEncoder":
+        """Compatibility property for MLM weight loading."""
+        return self._full_encoder
+
+    def load_pretrained_weights(
+        self,
+        checkpoint_path: Union[str, Path],
+        strict: bool = False,
+        transfer_mode: str = "embed_only",
+    ) -> None:
+        """
+        Load pretrained MLM weights into the model.
+
+        This properly transfers:
+        1. Embedding weights (directly used in forward pass)
+        2. Transformer layer weights (into post_cnn_transformer adapter) when requested
+
+        Args:
+            checkpoint_path: Path to pretrained encoder checkpoint
+            strict: Whether to require exact match
+            transfer_mode: One of ["embed_only", "embed_plus_adapter", "none"]
+        """
+        if transfer_mode == "none":
+            LOGGER.info("Skipping MLM weight loading (transfer_mode=none)")
+            return
+        if transfer_mode not in {"embed_only", "embed_plus_adapter"}:
+            raise ValueError(f"Unsupported transfer_mode: {transfer_mode}")
+        # Load into the full encoder first
+        self._full_encoder.load_mlm_weights(checkpoint_path, strict=strict)
+
+        # Transfer transformer layers to post_cnn_transformer
+        if transfer_mode == "embed_plus_adapter":
+            num_layers = len(self.post_cnn_transformer.layers)
+            loaded = self.post_cnn_transformer.load_pretrained_layers(self._full_encoder, num_layers)
+            LOGGER.info("Transferred %d transformer layers to post-CNN adapter", loaded)
+
+    def load_pretrained(
+        self,
+        checkpoint_path: Union[str, Path],
+        strict: bool = False,
+    ) -> None:
+        """
+        Load checkpoint with backward compatibility for architecture enhancements.
+
+        New layers (relative position bias, GLU FFN components) will be randomly
+        initialized if not present in the checkpoint. This allows loading older
+        checkpoints into models with new architectural features enabled.
+
+        Args:
+            checkpoint_path: Path to checkpoint file
+            strict: If False (default), allows missing keys for new components
+        """
+        from model import _load_checkpoint_file
+
+        state_dict = _load_checkpoint_file(Path(checkpoint_path))
+
+        # Handle nested state dict (e.g., from training checkpoints)
+        if "model_state_dict" in state_dict:
+            state_dict = state_dict["model_state_dict"]
+
+        # Get current model state
+        model_state = self.state_dict()
+
+        # Filter to only keys that exist in both and have matching shapes
+        filtered_state = {}
+        for key, value in state_dict.items():
+            if key in model_state:
+                if model_state[key].shape == value.shape:
+                    filtered_state[key] = value
+                else:
+                    LOGGER.warning(
+                        "Shape mismatch for %s: checkpoint %s vs model %s (skipping)",
+                        key,
+                        value.shape,
+                        model_state[key].shape,
+                    )
+
+        # Log which keys are new (in model but not in checkpoint)
+        new_keys = set(model_state.keys()) - set(filtered_state.keys())
+        if new_keys:
+            # Group by component for cleaner logging
+            rel_pos_keys = [k for k in new_keys if "relative_position" in k]
+            glu_keys = [k for k in new_keys if "gate_proj" in k or "up_proj" in k or "down_proj" in k]
+            other_keys = [k for k in new_keys if k not in rel_pos_keys and k not in glu_keys]
+
+            if rel_pos_keys:
+                LOGGER.info(
+                    "New relative position bias parameters (randomly initialized): %d keys",
+                    len(rel_pos_keys),
+                )
+            if glu_keys:
+                LOGGER.info("New GLU FFN parameters (randomly initialized): %d keys", len(glu_keys))
+            if other_keys:
+                LOGGER.info("Other new parameters (randomly initialized): %s", other_keys)
+
+        # Log which keys are in checkpoint but not in model (removed components)
+        missing_keys = set(state_dict.keys()) - set(model_state.keys())
+        if missing_keys:
+            LOGGER.info("Checkpoint keys not in model (ignored): %d keys", len(missing_keys))
+
+        # Load the filtered state dict
+        # When strict=True, fail if model has parameters not covered by checkpoint
+        if strict and new_keys:
+            raise RuntimeError(
+                f"strict=True but {len(new_keys)} model parameters not in checkpoint: "
+                f"{list(new_keys)[:5]}{'...' if len(new_keys) > 5 else ''}"
+            )
+        self.load_state_dict(filtered_state, strict=False)
+        LOGGER.info(
+            "Loaded %d/%d parameters from checkpoint (new: %d, ignored: %d)",
+            len(filtered_state),
+            len(state_dict),
+            len(new_keys),
+            len(missing_keys),
+        )
+
+    def _get_padding_mask(self, tokens: torch.Tensor) -> Optional[torch.Tensor]:
+        """Generate padding mask from tokens."""
+        if self.pad_token_id is not None:
+            return tokens.eq(self.pad_token_id)
+        return None
+
+    def _sequence_backbone_from_embeds(
+        self,
+        embeds: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Process pre-computed embeddings through CNN/TCN → Transformer → Pool.
+
+        This method enables embedding-space mixup and distillation by allowing
+        forward passes that start from embeddings rather than token indices.
+
+        Args:
+            embeds: (B, L, embedding_dim) pre-computed embeddings
+            padding_mask: Optional (B, L) padding mask (True = pad)
+        Returns:
+            (B, D) pooled sequence features
+        """
+        # Add positional embeddings
+        batch_size, seq_len, _ = embeds.shape
+        if seq_len > self.pos_embedding.num_embeddings:
+            raise ValueError(
+                f"Sequence token length {seq_len} exceeds max_seq_len={self.pos_embedding.num_embeddings}. "
+                f"Increase max_bp_len or pass a larger max_seq_len."
+            )
+        pos_ids = torch.arange(seq_len, device=embeds.device).unsqueeze(0).expand(batch_size, seq_len)
+        x = embeds + self.pos_embedding(pos_ids)
+        x = self.embed_dropout(x)
+
+        # CNN/TCN (transpose for conv: B, L, D -> B, D, L)
+        x = x.transpose(1, 2)
+
+        if self.use_tcn:
+            x = self.feature_extractor(x)  # (B, tcn_hidden, L)
+        else:
+            x = self.conv(x)
+            x = self.conv_bn(x)
+            x = self.conv_act(x)
+
+        # Transpose back: (B, D, L) -> (B, L, D)
+        x = x.transpose(1, 2)
+
+        # Post-CNN Transformer for global context
+        x = self.post_cnn_transformer(x, key_padding_mask=padding_mask)
+
+        # Pooling
+        if self.use_attention_pool:
+            pooled = self.pool(x, padding_mask)
+        else:
+            pooled = torch.max(x, dim=1).values
+
+        return pooled
+
+    def _sequence_backbone(
+        self,
+        tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Process sequence through embedding → CNN/TCN → Transformer → Pool.
+
+        Args:
+            tokens: (B, L) token indices
+        Returns:
+            (B, D) pooled sequence features
+        """
+        embeds = self.embedding(tokens)
+        padding_mask = self._get_padding_mask(tokens)
+        return self._sequence_backbone_from_embeds(embeds, padding_mask)
+
+    def extract_features(
+        self,
+        tokens: torch.Tensor,
+        engineered_features: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Extract sequence and fused features."""
+        seq_features = self._sequence_backbone(tokens)
+
+        if engineered_features is not None:
+            assert engineered_features.size(-1) == self.engineered_dim, (
+                f"Engineered feature dim mismatch: got {engineered_features.size(-1)}, "
+                f"expected {self.engineered_dim}"
+            )
+        if self.use_engineered_features and engineered_features is not None:
+            eng_features = self.engineered_mlp(engineered_features)
+            fused = self.fusion(seq_features, eng_features)
+            return seq_features, fused
+
+        return seq_features, seq_features
+
+    def extract_features_from_embeds(
+        self,
+        embeds: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+        engineered_features: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Extract sequence and fused features from pre-computed embeddings.
+
+        This method enables embedding-space mixup and distillation by allowing
+        feature extraction that starts from embeddings rather than token indices.
+
+        Args:
+            embeds: (B, L, embedding_dim) pre-computed embeddings
+            padding_mask: Optional (B, L) padding mask (True = pad)
+            engineered_features: Optional (B, engineered_dim) hand-crafted features
+        Returns:
+            Tuple of (seq_features, fused_features) both (B, D)
+        """
+        seq_features = self._sequence_backbone_from_embeds(embeds, padding_mask)
+
+        if engineered_features is not None:
+            assert engineered_features.size(-1) == self.engineered_dim, (
+                f"Engineered feature dim mismatch: got {engineered_features.size(-1)}, "
+                f"expected {self.engineered_dim}"
+            )
+        if self.use_engineered_features and engineered_features is not None:
+            eng_features = self.engineered_mlp(engineered_features)
+            fused = self.fusion(seq_features, eng_features)
+            return seq_features, fused
+
+        return seq_features, seq_features
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        engineered_features: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Forward pass with legacy architecture order.
+
+        Args:
+            tokens: (B, L) k-mer token indices
+            engineered_features: Optional (B, engineered_dim) hand-crafted features
+        return_logits: If True, also return sigmoid probabilities alongside logits
+        Returns:
+            (B, 1) promoter logits, or tuple of (probs, logits) if return_logits=True
+        """
+        _, fused = self.extract_features(tokens, engineered_features)
+
+        logits = self.classifier(fused)
+        if return_logits:
+            probs = torch.sigmoid(logits)
+            return probs, logits
+
+        return logits
+
+    def forward_from_embeds(
+        self,
+        embeds: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+        engineered_features: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Forward pass from pre-computed embeddings (parity path for mixup/distillation).
+
+        This method enables embedding-space mixup and distillation by allowing
+        forward passes that start from embeddings rather than token indices.
+        Behavior is identical to forward() except it takes embeddings directly.
+
+        Args:
+            embeds: (B, L, embedding_dim) pre-computed embeddings
+            padding_mask: Optional (B, L) padding mask (True = pad)
+            engineered_features: Optional (B, engineered_dim) hand-crafted features
+        return_logits: If True, also return sigmoid probabilities alongside logits
+        Returns:
+            (B, 1) promoter logits, or tuple of (probs, logits) if return_logits=True
+        """
+        _, fused = self.extract_features_from_embeds(embeds, padding_mask, engineered_features)
+
+        logits = self.classifier(fused)
+        if return_logits:
+            probs = torch.sigmoid(logits)
+            return probs, logits
+
+        return logits
+
+
 __all__ = [
     "CausalConv1d",
     "TCNBlock",
@@ -596,4 +1094,5 @@ __all__ = [
     "MultiScaleTCN",
     "GatedAttentionFusion",
     "PostCNNTransformerAdapter",
+    "GeneWhispererStage1Legacy",
 ]
