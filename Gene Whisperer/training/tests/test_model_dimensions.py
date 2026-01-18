@@ -10,9 +10,9 @@ sys.path.insert(0, ".")
 
 def test_model_with_288_dim_features():
     """Test model works with 288-dim engineered features."""
-    from model import GeneWhispererStage1
+    from model import GeneWhispererStage1Legacy
 
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=4099,
         kmer=6,
         embedding_dim=256,
@@ -62,9 +62,9 @@ def test_model_with_288_dim_features():
 
 def test_model_backward_compatible():
     """Test model still works with old 128-dim features."""
-    from model import GeneWhispererStage1
+    from model import GeneWhispererStage1Legacy
 
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=67,
         kmer=3,
         embedding_dim=256,

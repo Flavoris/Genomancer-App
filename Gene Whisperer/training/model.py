@@ -1,16 +1,13 @@
-"""Enhanced model definitions for Gene Whisperer with TCN and multi-scale CNN.
+"""Model definitions for Gene Whisperer.
 
-Key improvements from DNABERT, msBERT, Procables, and iPro-TCN papers:
-1. Multi-scale k-mer encoding (k=3,4,5,6) for capturing patterns at different scales
-2. Temporal Convolutional Network (TCN) with dilated causal convolutions
-3. Multi-scale parallel CNN for capturing different motif lengths (3-15bp)
-4. Attention pooling instead of max pooling for position-aware aggregation
-5. CoreML-compatible design for iPhone deployment
+Stage 1 now defaults to a simplified transformer-only backbone.
+Legacy CNN/TCN and adapter components live in model_legacy for reference.
 """
 from __future__ import annotations
 
 import logging
 import math
+import warnings
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -156,333 +153,6 @@ class AttentionPooling(nn.Module):
         out = out.reshape(B, D)
         
         return self.out_proj(out)
-
-
-# =============================================================================
-# TCN (Temporal Convolutional Network) Components
-# Based on iPro-TCN paper for promoter prediction
-# =============================================================================
-
-class CausalConv1d(nn.Module):
-    """
-    Causal convolution that ensures output at time t only depends on inputs up to time t.
-    
-    Uses left-padding to maintain causality - critical for DNA sequence modeling
-    where we want to preserve the natural order of nucleotides.
-    """
-    
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-        dilation: int = 1,
-        groups: int = 1,
-    ):
-        super().__init__()
-        self.padding = (kernel_size - 1) * dilation
-        self.conv = nn.Conv1d(
-            in_channels,
-            out_channels,
-            kernel_size,
-            padding=self.padding,
-            dilation=dilation,
-            groups=groups,
-        )
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, C, L) input tensor
-        Returns:
-            (B, C, L) output tensor with same length (causal)
-        """
-        out = self.conv(x)
-        # Remove future padding to maintain causality
-        if self.padding > 0:
-            out = out[:, :, :-self.padding]
-        return out
-
-
-class TCNBlock(nn.Module):
-    """
-    Temporal Convolutional Block with dilated causal convolutions.
-    
-    Key features from iPro-TCN:
-    - Dilated convolutions for exponentially growing receptive field
-    - Residual connections for gradient flow
-    - Weight normalization for training stability
-    - Dropout for regularization
-    """
-    
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int = 3,
-        dilation: int = 1,
-        dropout: float = 0.2,
-    ):
-        super().__init__()
-        
-        # First causal convolution
-        self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size, dilation)
-        self.bn1 = nn.BatchNorm1d(out_channels)
-        
-        # Second causal convolution
-        self.conv2 = CausalConv1d(out_channels, out_channels, kernel_size, dilation)
-        self.bn2 = nn.BatchNorm1d(out_channels)
-        
-        self.relu = nn.GELU()
-        self.dropout = nn.Dropout(dropout)
-        
-        # Residual connection with 1x1 conv if dimensions differ
-        self.downsample = (
-            nn.Conv1d(in_channels, out_channels, 1) 
-            if in_channels != out_channels else None
-        )
-        
-        # Initialize weights
-        self._init_weights()
-    
-    def _init_weights(self):
-        """Initialize weights using He initialization."""
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, C, L) input tensor
-        Returns:
-            (B, C, L) output tensor
-        """
-        residual = x
-        
-        # First conv block
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.dropout(out)
-        
-        # Second conv block
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out = self.relu(out)
-        out = self.dropout(out)
-        
-        # Residual connection
-        if self.downsample is not None:
-            residual = self.downsample(residual)
-        
-        return self.relu(out + residual)
-
-
-class TCNEncoder(nn.Module):
-    """
-    Multi-level TCN encoder with exponentially growing receptive field.
-    
-    Architecture inspired by iPro-TCN:
-    - Multiple TCN blocks with increasing dilation rates (1, 2, 4, 8, ...)
-    - Each level doubles the receptive field
-    - Total receptive field = kernel_size * (2^num_levels - 1)
-    
-    For DNA sequences of 81bp, 4 levels with kernel_size=3 gives:
-    receptive field = 3 * (2^4 - 1) = 45bp coverage per position
-    """
-    
-    def __init__(
-        self,
-        in_channels: int,
-        hidden_channels: int = 256,
-        num_levels: int = 4,
-        kernel_size: int = 3,
-        dropout: float = 0.2,
-    ):
-        super().__init__()
-        self.num_levels = num_levels
-        
-        layers = []
-        for i in range(num_levels):
-            dilation = 2 ** i  # Exponential dilation: 1, 2, 4, 8, ...
-            in_ch = in_channels if i == 0 else hidden_channels
-            layers.append(
-                TCNBlock(
-                    in_channels=in_ch,
-                    out_channels=hidden_channels,
-                    kernel_size=kernel_size,
-                    dilation=dilation,
-                    dropout=dropout,
-                )
-            )
-        
-        self.network = nn.ModuleList(layers)
-        self.out_channels = hidden_channels
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, C, L) input tensor
-        Returns:
-            (B, hidden_channels, L) output tensor
-        """
-        for layer in self.network:
-            x = layer(x)
-        return x
-
-
-# =============================================================================
-# Multi-Scale CNN Components
-# Based on PROCABLES paper for capturing different motif lengths
-# =============================================================================
-
-class MultiScaleCNN(nn.Module):
-    """
-    Multi-scale parallel CNN for capturing DNA motifs of different lengths.
-    
-    Promoter motifs vary in size:
-    - TATA box: ~7bp
-    - -10 element: ~6bp
-    - -35 element: ~6bp
-    - Initiator: ~7bp
-    - Downstream elements: ~15-20bp
-    
-    This module uses parallel convolutions with different kernel sizes
-    to capture all these patterns simultaneously.
-    """
-    
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels_per_scale: int = 64,
-        kernel_sizes: Tuple[int, ...] = (3, 5, 7, 9, 15),
-        dropout: float = 0.1,
-    ):
-        super().__init__()
-        self.kernel_sizes = kernel_sizes
-        self.num_scales = len(kernel_sizes)
-        
-        # Parallel convolution branches for different motif lengths
-        self.convs = nn.ModuleList([
-            nn.Conv1d(
-                in_channels,
-                out_channels_per_scale,
-                kernel_size=ks,
-                padding=ks // 2,  # Same padding to maintain length
-            )
-            for ks in kernel_sizes
-        ])
-        
-        total_channels = out_channels_per_scale * self.num_scales
-        self.bn = nn.BatchNorm1d(total_channels)
-        self.activation = nn.GELU()
-        self.dropout = nn.Dropout(dropout)
-        
-        # Channel reduction to manage complexity
-        self.channel_reduce = nn.Conv1d(total_channels, total_channels // 2, 1)
-        self.bn_reduce = nn.BatchNorm1d(total_channels // 2)
-        
-        self.out_channels = total_channels // 2
-        
-        self._init_weights()
-    
-    def _init_weights(self):
-        """Initialize convolution weights."""
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, C, L) input tensor
-        Returns:
-            (B, out_channels, L) multi-scale features
-        """
-        # Apply parallel convolutions
-        conv_outputs = [conv(x) for conv in self.convs]
-        
-        # Concatenate along channel dimension
-        out = torch.cat(conv_outputs, dim=1)  # (B, num_scales * out_per_scale, L)
-        
-        out = self.bn(out)
-        out = self.activation(out)
-        out = self.dropout(out)
-        
-        # Reduce channels
-        out = self.channel_reduce(out)
-        out = self.bn_reduce(out)
-        out = self.activation(out)
-        
-        return out
-
-
-class MultiScaleTCN(nn.Module):
-    """
-    Combined Multi-Scale CNN + TCN architecture.
-    
-    This hybrid approach combines:
-    1. Multi-Scale CNN: Captures motifs of different lengths in parallel
-    2. TCN: Captures long-range dependencies with dilated convolutions
-    
-    Architecture:
-    Input → Multi-Scale CNN → TCN → Output
-    
-    This is more powerful than either alone because:
-    - Multi-Scale CNN extracts diverse local patterns
-    - TCN builds hierarchical long-range representations
-    """
-    
-    def __init__(
-        self,
-        in_channels: int,
-        multiscale_out_per_branch: int = 64,
-        multiscale_kernels: Tuple[int, ...] = (3, 5, 7, 9, 15),
-        tcn_hidden: int = 256,
-        tcn_levels: int = 4,
-        tcn_kernel: int = 3,
-        dropout: float = 0.2,
-    ):
-        super().__init__()
-        
-        # Multi-scale CNN for local pattern extraction
-        self.multiscale = MultiScaleCNN(
-            in_channels=in_channels,
-            out_channels_per_scale=multiscale_out_per_branch,
-            kernel_sizes=multiscale_kernels,
-            dropout=dropout,
-        )
-        
-        # TCN for long-range dependencies
-        self.tcn = TCNEncoder(
-            in_channels=self.multiscale.out_channels,
-            hidden_channels=tcn_hidden,
-            num_levels=tcn_levels,
-            kernel_size=tcn_kernel,
-            dropout=dropout,
-        )
-        
-        self.out_channels = tcn_hidden
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (B, C, L) input tensor
-        Returns:
-            (B, tcn_hidden, L) hierarchical features
-        """
-        # Extract multi-scale local patterns
-        x = self.multiscale(x)
-        
-        # Build long-range dependencies
-        x = self.tcn(x)
-        
-        return x
 
 
 class DNAEncoder(nn.Module):
@@ -1107,278 +777,25 @@ class EngineeredFeatureMLP(nn.Module):
         return x
 
 
-class GatedAttentionFusion(nn.Module):
+# Legacy components import after core transformer definitions to avoid circular imports.
+from model_legacy import (
+    CausalConv1d,
+    GatedAttentionFusion,
+    MultiScaleCNN,
+    MultiScaleTCN,
+    PostCNNTransformerAdapter,
+    TCNBlock,
+    TCNEncoder,
+)
+
+
+class GeneWhispererStage1Legacy(nn.Module):
     """
-    Attention-based fusion of sequence and engineered features with residual.
-    
-    Uses cross-attention where engineered features attend to sequence features,
-    plus a gating mechanism to control the contribution of each modality.
-    This is more expressive than simple concatenation.
-    
-    Key improvement: Residual connection from sequence features ensures
-    the model doesn't lose important sequence information during fusion.
-    """
-    
-    def __init__(
-        self,
-        seq_dim: int,
-        eng_dim: int,
-        hidden_dim: int = 256,
-        num_heads: int = 4,
-        dropout: float = 0.15,  # Reduced from 0.2
-    ):
-        super().__init__()
-        self.seq_dim = seq_dim
-        self.eng_dim = eng_dim
-        self.hidden_dim = hidden_dim
-        
-        # Project both to same dimension for attention
-        self.seq_proj = nn.Linear(seq_dim, hidden_dim)
-        self.eng_proj = nn.Linear(eng_dim, hidden_dim)
-        
-        # Cross-attention: engineered features query sequence features
-        self.cross_attn = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
-        
-        # Self-attention for sequence features to enhance them
-        self.seq_self_attn = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
-        
-        # Gating mechanism to balance sequence vs engineered contributions
-        self.gate_seq = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.Sigmoid(),
-        )
-        self.gate_eng = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.Sigmoid(),
-        )
-        
-        # Final projection after fusion with residual pathway
-        self.out_proj = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-        )
-        
-        # Residual projection for sequence features (preserves seq info)
-        self.seq_residual_proj = nn.Linear(seq_dim, hidden_dim)
-        
-        self.output_dim = hidden_dim
-    
-    def forward(
-        self,
-        seq_features: torch.Tensor,
-        eng_features: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Args:
-            seq_features: (B, seq_dim) pooled sequence features
-            eng_features: (B, eng_dim) processed engineered features
-        Returns:
-            (B, hidden_dim) fused representation
-        """
-        # Residual from original sequence features
-        seq_residual = self.seq_residual_proj(seq_features)  # (B, hidden_dim)
-        
-        # Project to common dimension
-        seq_h = self.seq_proj(seq_features)  # (B, hidden_dim)
-        eng_h = self.eng_proj(eng_features)  # (B, hidden_dim)
-        
-        # Cross-attention: engineered features attend to sequence
-        # Reshape for attention: (B, 1, hidden_dim) as single token
-        seq_h_expanded = seq_h.unsqueeze(1)  # (B, 1, hidden_dim)
-        eng_h_expanded = eng_h.unsqueeze(1)  # (B, 1, hidden_dim)
-        
-        # Engineered queries sequence (learn what sequence info is relevant for eng features)
-        attn_out, _ = self.cross_attn(
-            query=eng_h_expanded,
-            key=seq_h_expanded,
-            value=seq_h_expanded,
-        )
-        attn_out = attn_out.squeeze(1)  # (B, hidden_dim)
-        
-        # Concatenate for gating
-        concat = torch.cat([seq_h, eng_h], dim=1)  # (B, hidden_dim * 2)
-        
-        # Compute gates
-        g_seq = self.gate_seq(concat)  # (B, hidden_dim)
-        g_eng = self.gate_eng(concat)  # (B, hidden_dim)
-        
-        # Apply gates with sequence residual
-        gated_seq = g_seq * (seq_h + seq_residual)  # Add residual for seq preservation
-        gated_eng = g_eng * (eng_h + attn_out)  # Add attention-enhanced eng features
-        
-        # Fuse
-        fused = torch.cat([gated_seq, gated_eng], dim=1)  # (B, hidden_dim * 2)
-        return self.out_proj(fused)
+    Legacy Stage 1 classifier with CNN/TCN backbone and attention fusion.
 
+    Architecture: Embedding → CNN/TCN → Transformer → Pooling → Attention Fusion → Classifier
 
-class PostCNNTransformerAdapter(nn.Module):
-    """
-    Adapter to apply pretrained transformer layers after CNN/TCN.
-    
-    This bridges the dimension mismatch between CNN/TCN output (tcn_hidden)
-    and the pretrained transformer (embedding_dim), allowing us to reuse
-    the pretrained transformer weights from MLM.
-    
-    Architecture:
-    CNN/TCN output (tcn_hidden) → Projection → Pretrained Transformer → Output
-    """
-    
-    def __init__(
-        self,
-        input_dim: int,
-        transformer_dim: int,
-        num_layers: int = 3,
-        num_heads: int = 8,
-        ff_dim: int = 384,
-        dropout: float = 0.15,
-        drop_path_rate: float = 0.1,  # Stochastic depth
-        use_glu_ffn: bool = False,  # Use GLU-style FFN
-        glu_activation: str = "gelu",  # Activation for GLU: "gelu" or "silu"
-        use_relative_position_bias: bool = False,  # Relative position bias
-        relative_position_num_buckets: int = 32,
-        relative_position_max_distance: int = 128,
-    ):
-        super().__init__()
-        self.input_dim = input_dim
-        self.transformer_dim = transformer_dim
-        self.use_relative_position_bias = use_relative_position_bias
-
-        # Projection to transformer dimension
-        self.input_proj = nn.Linear(input_dim, transformer_dim)
-        self.input_norm = nn.LayerNorm(transformer_dim)
-
-        # Relative position bias (shared across all layers)
-        if use_relative_position_bias:
-            self.relative_position_bias = RelativePositionBias(
-                num_heads=num_heads,
-                max_distance=relative_position_max_distance,
-                num_buckets=relative_position_num_buckets,
-                bidirectional=True,
-            )
-        else:
-            self.relative_position_bias = None
-
-        # Transformer layers (can be initialized from pretrained DNAEncoder)
-
-        # Linearly increasing stochastic depth
-        if num_layers < 0:
-            raise ValueError(f"num_layers must be >= 0, got {num_layers}")
-        dpr = (
-            [x.item() for x in torch.linspace(0, drop_path_rate, num_layers)]
-            if num_layers > 0
-            else []
-        )
-        self.layers = nn.ModuleList([
-            PreNormTransformerLayer(
-                d_model=transformer_dim,
-                nhead=num_heads,
-                dim_feedforward=ff_dim,
-                dropout=dropout,
-                drop_path=dpr[i],
-                use_glu_ffn=use_glu_ffn,
-                glu_activation=glu_activation,
-            )
-            for i in range(num_layers)
-        ])
-
-        self.final_norm = nn.LayerNorm(transformer_dim)
-
-        # Project back to original dimension for pooling
-        self.output_proj = nn.Linear(transformer_dim, input_dim)
-        self.output_norm = nn.LayerNorm(input_dim)
-    
-    def load_pretrained_layers(self, encoder: 'DNAEncoder', num_layers: int) -> int:
-        """
-        Load transformer layers from a pretrained DNAEncoder.
-        
-        Args:
-            encoder: Pretrained DNAEncoder
-            num_layers: Number of layers to copy (from the top of encoder)
-        Returns:
-            Number of layers successfully loaded
-        """
-        loaded = 0
-        encoder_layers = list(encoder.layers)
-        
-        # Copy from the TOP of the pretrained encoder (most general layers)
-        # to our adapter layers
-        for i in range(min(num_layers, len(self.layers), len(encoder_layers))):
-            src_idx = len(encoder_layers) - num_layers + i  # Take from top
-            if src_idx >= 0:
-                self.layers[i].load_state_dict(encoder_layers[src_idx].state_dict())
-                loaded += 1
-        
-        return loaded
-    
-    def forward(
-        self,
-        x: torch.Tensor,
-        key_padding_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Args:
-            x: (B, L, input_dim) features from CNN/TCN
-            key_padding_mask: Optional (B, L) padding mask
-        Returns:
-            (B, L, input_dim) contextualized features
-        """
-        if len(self.layers) == 0:
-            return x
-
-        B, L, D = x.shape
-
-        # Project to transformer dimension
-        x = self.input_proj(x)
-        x = self.input_norm(x)
-
-        # Compute relative position bias once (shared across all layers)
-        position_bias = None
-        if self.relative_position_bias is not None:
-            position_bias = self.relative_position_bias(L, x.device)
-
-        # Apply transformer layers
-        for layer in self.layers:
-            x = layer(x, key_padding_mask=key_padding_mask, position_bias=position_bias)
-
-        x = self.final_norm(x)
-
-        # Project back to input dimension
-        x = self.output_proj(x)
-        x = self.output_norm(x)
-
-        return x
-
-
-class GeneWhispererStage1(nn.Module):
-    """
-    Enhanced Stage 1 classifier with improved architecture order and attention fusion.
-    
-    NEW Architecture: Embedding → CNN/TCN → Transformer → Pooling → Attention Fusion → Classifier
-    
-    Key improvements:
-    1. CNN/TCN FIRST: Extract local patterns before global contextualization
-    2. Transformer AFTER: Add global context to local features
-    3. Separate MLP for engineered features: Learn dedicated representations
-    4. Attention-based fusion: Gated cross-attention instead of concatenation
-    
-    This architecture processes information in a more logical order:
-    - Local patterns (motifs) are extracted first by CNN/TCN
-    - Global context is then added by transformer
-    - Engineered features are processed separately and fused via attention
+    Deprecated: use GeneWhispererStage1 (simplified transformer-only backbone).
     """
     
     def __init__(
@@ -1427,6 +844,11 @@ class GeneWhispererStage1(nn.Module):
         glu_activation: str = "gelu",
     ):
         super().__init__()
+        warnings.warn(
+            "GeneWhispererStage1Legacy is deprecated; use GeneWhispererStage1 instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         self.use_tcn = use_tcn
         self.pad_token_id = pad_token_id
@@ -1841,22 +1263,13 @@ class GeneWhispererStage1(nn.Module):
 # Simplified Stage 1: Transformer-Only Backbone
 # =============================================================================
 
-class GeneWhispererSimplified(nn.Module):
+class GeneWhispererStage1(nn.Module):
     """
     Simplified Stage 1 classifier that keeps the pretrained DNAEncoder intact and
     removes CNN/TCN and post-CNN adapters that underperformed in ablations.
 
-    Architecture rationale:
-    - Preserve the full transformer stack (defaults to 12 layers) to retain MLM-pretrained context.
-    - Pool directly over transformer outputs (attention or masked mean).
-    - Retain the engineered feature MLP for non-sequence signals.
-    - Fuse via concatenation to avoid heavier gated attention.
-    - Use a small two-layer classifier head to reduce parameter count.
-
-    The constructor accepts the same configuration parameters as
-    GeneWhispererStage1 for drop-in compatibility; CNN/TCN-related arguments are
-    accepted but ignored in simplified mode. Set use_simplified=False to
-    delegate to GeneWhispererStage1 for a full model comparison.
+    Architecture:
+    Embedding → Transformer → Pooling → [Concat Engineered] → Classifier
     """
 
     def __init__(
@@ -1873,26 +1286,12 @@ class GeneWhispererSimplified(nn.Module):
         engineered_dim: int = 288,
         use_engineered_features: bool = True,
         use_attention_pool: bool = True,
-        use_simplified: bool = True,
-        # TCN parameters (accepted for compatibility)
-        use_tcn: bool = True,
-        tcn_hidden: int = 256,
-        tcn_levels: int = 4,
-        tcn_kernel: int = 3,
-        # Multi-scale CNN parameters (accepted for compatibility)
-        multiscale_channels: int = 64,
-        multiscale_kernels: Tuple[int, ...] = (3, 5, 7, 9, 15),
-        # LSTM parameters (accepted for compatibility)
-        lstm_hidden: int = 192,
-        # Post-CNN transformer parameters (accepted for compatibility)
-        post_cnn_transformer_layers: int = 3,
         engineered_mlp_hidden: int = 512,
         engineered_mlp_output: int = 256,
         engineered_mlp_pre_norm: bool = True,
         engineered_mlp_input_dropout: float = 0.05,
         engineered_mlp_use_gated: bool = True,
         engineered_mlp_use_residual: bool = True,
-        fusion_hidden: int = 384,
         # Stochastic depth (drop path) rate for encoder
         drop_path_rate: float = 0.1,
         # Maximum sequence length for positional embeddings
@@ -1906,48 +1305,6 @@ class GeneWhispererSimplified(nn.Module):
         glu_activation: str = "gelu",
     ):
         super().__init__()
-
-        self.use_simplified = use_simplified
-        self._fallback_model: Optional[GeneWhispererStage1] = None
-
-        if not use_simplified:
-            self._fallback_model = GeneWhispererStage1(
-                vocab_size=vocab_size,
-                kmer=kmer,
-                embedding_dim=embedding_dim,
-                num_layers=num_layers,
-                num_heads=num_heads,
-                ff_dim=ff_dim,
-                dropout=dropout,
-                pad_token_id=pad_token_id,
-                encoder=encoder,
-                engineered_dim=engineered_dim,
-                use_engineered_features=use_engineered_features,
-                use_attention_pool=use_attention_pool,
-                use_tcn=use_tcn,
-                tcn_hidden=tcn_hidden,
-                tcn_levels=tcn_levels,
-                tcn_kernel=tcn_kernel,
-                multiscale_channels=multiscale_channels,
-                multiscale_kernels=multiscale_kernels,
-                lstm_hidden=lstm_hidden,
-                post_cnn_transformer_layers=post_cnn_transformer_layers,
-                engineered_mlp_hidden=engineered_mlp_hidden,
-                engineered_mlp_output=engineered_mlp_output,
-                engineered_mlp_pre_norm=engineered_mlp_pre_norm,
-                engineered_mlp_input_dropout=engineered_mlp_input_dropout,
-                engineered_mlp_use_gated=engineered_mlp_use_gated,
-                engineered_mlp_use_residual=engineered_mlp_use_residual,
-                fusion_hidden=fusion_hidden,
-                drop_path_rate=drop_path_rate,
-                max_seq_len=max_seq_len,
-                use_relative_position_bias=use_relative_position_bias,
-                relative_position_num_buckets=relative_position_num_buckets,
-                relative_position_max_distance=relative_position_max_distance,
-                use_glu_ffn=use_glu_ffn,
-                glu_activation=glu_activation,
-            )
-            return
 
         self.pad_token_id = pad_token_id
         self.use_attention_pool = use_attention_pool
@@ -2009,10 +1366,8 @@ class GeneWhispererSimplified(nn.Module):
         )
 
     @property
-    def encoder(self):
+    def encoder(self) -> DNAEncoder:
         """Compatibility property for MLM weight loading."""
-        if self._fallback_model is not None:
-            return self._fallback_model.encoder
         return self._full_encoder
 
     def load_pretrained_weights(
@@ -2024,16 +1379,9 @@ class GeneWhispererSimplified(nn.Module):
         """
         Load pretrained MLM weights into the transformer encoder.
 
-        In simplified mode, transformer-only weights are loaded directly into
-        DNAEncoder. The transfer_mode flag is accepted for compatibility with
-        GeneWhispererStage1; "embed_plus_adapter" behaves like "embed_only".
+        The transfer_mode flag is accepted for compatibility; "embed_plus_adapter"
+        behaves like "embed_only" for the simplified architecture.
         """
-        if self._fallback_model is not None:
-            self._fallback_model.load_pretrained_weights(
-                checkpoint_path, strict=strict, transfer_mode=transfer_mode
-            )
-            return
-
         if transfer_mode == "none":
             LOGGER.info("Skipping MLM weight loading (transfer_mode=none)")
             return
@@ -2043,6 +1391,61 @@ class GeneWhispererSimplified(nn.Module):
         self._full_encoder.load_mlm_weights(checkpoint_path, strict=strict)
         if transfer_mode == "embed_plus_adapter":
             LOGGER.info("Simplified model ignores adapter transfer; loaded encoder weights only.")
+
+    def load_legacy_checkpoint(
+        self,
+        checkpoint: Union[str, Path, dict],
+        strict: bool = False,
+    ) -> int:
+        """
+        Load legacy Stage 1 checkpoints while ignoring incompatible weights.
+
+        Returns:
+            Number of parameters successfully loaded.
+        """
+        if isinstance(checkpoint, (str, Path)):
+            state_dict = _load_checkpoint_file(Path(checkpoint))
+        else:
+            state_dict = checkpoint
+
+        if "model_state_dict" in state_dict:
+            state_dict = state_dict["model_state_dict"]
+        elif "model_state" in state_dict:
+            state_dict = state_dict["model_state"]
+        elif "state_dict" in state_dict:
+            state_dict = state_dict["state_dict"]
+
+        LOGGER.warning(
+            "Loading legacy Stage 1 checkpoint into simplified architecture; "
+            "CNN/TCN and adapter weights will be ignored."
+        )
+
+        model_state = self.state_dict()
+        compatible: dict = {}
+        for key, value in state_dict.items():
+            target = model_state.get(key)
+            if target is None:
+                continue
+            if getattr(target, "shape", None) != getattr(value, "shape", None):
+                continue
+            compatible[key] = value
+
+        missing = set(model_state.keys()) - set(compatible.keys())
+        skipped = set(state_dict.keys()) - set(compatible.keys())
+
+        if strict and missing:
+            raise RuntimeError(
+                f"strict=True but {len(missing)} model parameters not in checkpoint."
+            )
+
+        self.load_state_dict(compatible, strict=False)
+        LOGGER.info(
+            "Loaded %d compatible tensors (missing=%d, skipped=%d)",
+            len(compatible),
+            len(missing),
+            len(skipped),
+        )
+        return len(compatible)
 
     def _get_padding_mask(self, tokens: torch.Tensor) -> Optional[torch.Tensor]:
         """Generate padding mask from tokens."""
@@ -2054,9 +1457,7 @@ class GeneWhispererSimplified(nn.Module):
         self,
         tokens: torch.Tensor,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        """
-        Encode tokens with the full transformer and return token features + mask.
-        """
+        """Encode tokens with the full transformer and return token features + mask."""
         seq_len = tokens.size(1)
         max_len = self._full_encoder.pos_embedding.num_embeddings
         if seq_len > max_len:
@@ -2100,9 +1501,6 @@ class GeneWhispererSimplified(nn.Module):
         Returns:
             (seq_features, fused_features) both shaped (B, D).
         """
-        if self._fallback_model is not None:
-            return self._fallback_model.extract_features(tokens, engineered_features)
-
         token_features, padding_mask = self._encode_tokens(tokens)
         seq_features = self._pool_sequence(token_features, padding_mask)
 
@@ -2135,11 +1533,6 @@ class GeneWhispererSimplified(nn.Module):
         Returns:
             (B, 1) promoter logits, or tuple of (probs, logits) if return_logits=True
         """
-        if self._fallback_model is not None:
-            return self._fallback_model(
-                tokens, engineered_features=engineered_features, return_logits=return_logits
-            )
-
         _, fused = self.extract_features(tokens, engineered_features)
         logits = self.classifier(fused)
 
@@ -2804,7 +2197,7 @@ class GeneWhispererStage2(nn.Module):
     """
     Stage 2 model for strong vs weak promoter classification.
 
-    Reuses the same backbone as GeneWhispererStage1:
+    Reuses the legacy backbone from GeneWhispererStage1Legacy:
     - Embedding layer
     - CNN/TCN for local pattern extraction
     - Post-CNN Transformer for global context
@@ -3274,7 +2667,7 @@ class MultiScaleEnsemble(nn.Module):
         return probs
 
 
-def _post_cnn_checksums(model: GeneWhispererStage1) -> dict:
+def _post_cnn_checksums(model: GeneWhispererStage1Legacy) -> dict:
     checksums = {}
     for name, param in model.post_cnn_transformer.named_parameters():
         checksums[name] = param.detach().float().mean().item()
@@ -3338,7 +2731,7 @@ if __name__ == "__main__":
     transformer_ff_dim = int(cfg.get("transformer_ff_dim", 384))
     transformer_dropout = float(cfg.get("transformer_dropout", 0.15))
 
-    model = GeneWhispererStage1(
+    legacy_model = GeneWhispererStage1Legacy(
         vocab_size=int(cfg.get("vocab_size", 67)),
         kmer=int(cfg.get("kmer", 3)),
         embedding_dim=int(cfg.get("embedding_dim", 192)),
@@ -3374,7 +2767,7 @@ if __name__ == "__main__":
         glu_activation=str(cfg.get("glu_activation", "gelu")),
     )
 
-    simplified_model = GeneWhispererSimplified(
+    stage1_model = GeneWhispererStage1(
         vocab_size=int(cfg.get("vocab_size", 67)),
         kmer=int(cfg.get("kmer", 3)),
         embedding_dim=int(cfg.get("embedding_dim", 192)),
@@ -3386,7 +2779,6 @@ if __name__ == "__main__":
         engineered_dim=int(cfg.get("engineered_dim", 288)),
         use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
         use_attention_pool=bool(cfg.get("use_attention_pool", True)),
-        use_simplified=True,
         engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 256)),
         engineered_mlp_output=int(cfg.get("engineered_mlp_output", 128)),
         engineered_mlp_pre_norm=bool(cfg.get("engineered_mlp_pre_norm", True)),
@@ -3402,15 +2794,44 @@ if __name__ == "__main__":
         glu_activation=str(cfg.get("glu_activation", "gelu")),
     )
 
-    stage1_params = _count_parameters(model)
-    simplified_params = _count_parameters(simplified_model)
+    legacy_params = _count_parameters(legacy_model)
+    stage1_params = _count_parameters(stage1_model)
     reduction_pct = 0.0
-    if stage1_params > 0:
-        reduction_pct = (1.0 - (simplified_params / stage1_params)) * 100.0
+    if legacy_params > 0:
+        reduction_pct = (1.0 - (stage1_params / legacy_params)) * 100.0
 
+    print(f"GeneWhispererStage1Legacy params: {legacy_params:,}")
     print(f"GeneWhispererStage1 params: {stage1_params:,}")
-    print(f"GeneWhispererSimplified params: {simplified_params:,}")
     print(f"Reduction: {reduction_pct:.2f}%")
+
+    # Sanity test for the simplified Stage 1 model.
+    print("\nRunning GeneWhispererStage1 sanity test...")
+    expected_params = 24_000_000
+    tolerance = 2_000_000
+    if abs(stage1_params - expected_params) > tolerance:
+        raise SystemExit(
+            f"Stage1 params {stage1_params:,} outside expected ~24M (+/- {tolerance:,})."
+        )
+
+    batch_size = 2
+    seq_len = min(max_seq_len, 64)
+    tokens = torch.randint(
+        0,
+        stage1_model.embedding.num_embeddings,
+        (batch_size, seq_len),
+    )
+    engineered = None
+    if stage1_model.use_engineered_features:
+        engineered = torch.randn(batch_size, stage1_model.engineered_dim)
+
+    with torch.no_grad():
+        logits = stage1_model(tokens, engineered)
+
+    if logits.shape != (batch_size, 1):
+        raise SystemExit(f"Unexpected Stage1 output shape: {logits.shape}")
+    if not torch.isfinite(logits).all():
+        raise SystemExit("Stage1 forward produced non-finite values")
+    print("Stage1 sanity test passed.")
 
     if args.mlm_checkpoint is None:
         print("No MLM checkpoint provided; skipping transfer-mode verification.")
@@ -3420,9 +2841,9 @@ if __name__ == "__main__":
     if not checkpoint_path.exists():
         raise SystemExit(f"Checkpoint not found: {checkpoint_path}")
 
-    before = _post_cnn_checksums(model)
-    model.load_pretrained_weights(checkpoint_path, strict=False, transfer_mode="embed_only")
-    after_embed_only = _post_cnn_checksums(model)
+    before = _post_cnn_checksums(legacy_model)
+    legacy_model.load_pretrained_weights(checkpoint_path, strict=False, transfer_mode="embed_only")
+    after_embed_only = _post_cnn_checksums(legacy_model)
     embed_only_changes = _diff_checksums(before, after_embed_only)
     if embed_only_changes:
         raise SystemExit(
@@ -3431,8 +2852,10 @@ if __name__ == "__main__":
         )
     print("embed_only: post_cnn_transformer weights unchanged")
 
-    model.load_pretrained_weights(checkpoint_path, strict=False, transfer_mode="embed_plus_adapter")
-    after_adapter = _post_cnn_checksums(model)
+    legacy_model.load_pretrained_weights(
+        checkpoint_path, strict=False, transfer_mode="embed_plus_adapter"
+    )
+    after_adapter = _post_cnn_checksums(legacy_model)
     adapter_changes = _diff_checksums(after_embed_only, after_adapter)
     if not adapter_changes:
         raise SystemExit("embed_plus_adapter did not change post_cnn_transformer weights")

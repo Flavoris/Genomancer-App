@@ -8,7 +8,7 @@ import torch
 # Add training directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "training"))
 
-from model import GeneWhispererStage1
+from model import GeneWhispererStage1Legacy
 
 
 def test_architecture_combinations():
@@ -23,7 +23,7 @@ def test_architecture_combinations():
     for cfg in configs:
         print(f"\nTesting config: {cfg}")
 
-        model = GeneWhispererStage1(
+        model = GeneWhispererStage1Legacy(
             vocab_size=4099,
             kmer=6,
             embedding_dim=256,
@@ -90,7 +90,7 @@ def test_backward_pass():
     for cfg in configs:
         print(f"\nTesting backward pass for: {cfg}")
 
-        model = GeneWhispererStage1(
+        model = GeneWhispererStage1Legacy(
             vocab_size=4099,
             kmer=6,
             embedding_dim=256,
@@ -130,7 +130,7 @@ def test_load_pretrained_compatibility():
     print("\nTesting load_pretrained backward compatibility...")
 
     # Create a model WITHOUT new features and save it
-    old_model = GeneWhispererStage1(
+    old_model = GeneWhispererStage1Legacy(
         vocab_size=4099,
         kmer=6,
         embedding_dim=256,
@@ -150,7 +150,7 @@ def test_load_pretrained_compatibility():
 
     try:
         # Create a NEW model WITH new features
-        new_model = GeneWhispererStage1(
+        new_model = GeneWhispererStage1Legacy(
             vocab_size=4099,
             kmer=6,
             embedding_dim=256,
@@ -175,7 +175,7 @@ def test_load_pretrained_compatibility():
         print("  load_pretrained with missing keys: OK")
 
         # Test that strict=True raises error for missing keys
-        new_model2 = GeneWhispererStage1(
+        new_model2 = GeneWhispererStage1Legacy(
             vocab_size=4099,
             kmer=6,
             embedding_dim=256,

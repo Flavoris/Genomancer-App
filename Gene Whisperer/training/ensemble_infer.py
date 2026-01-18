@@ -11,7 +11,7 @@ import torch
 import yaml
 
 from dataset import KmerVocabulary, compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc
-from model import GeneWhispererStage1
+from model import GeneWhispererStage1Legacy
 
 LOGGER = logging.getLogger("gene_whisperer.ensemble")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -160,7 +160,7 @@ def infer_model_architecture(checkpoint_path: Path) -> dict:
     return overrides
 
 
-def load_checkpoint(model: GeneWhispererStage1, path: Path, device: torch.device) -> None:
+def load_checkpoint(model: GeneWhispererStage1Legacy, path: Path, device: torch.device) -> None:
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     state_dict = checkpoint.get("model_state", checkpoint)
 
@@ -198,7 +198,7 @@ def load_vocab(vocab_path: Path) -> KmerVocabulary:
     return KmerVocabulary.load(vocab_path)
 
 
-def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneWhispererStage1:
+def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneWhispererStage1Legacy:
     """Build GeneWhispererStage1 model with V3 architecture parameters."""
     embedding_dim = int(cfg.get("embedding_dim", 192))
     transformer_layers = int(cfg.get("transformer_layers", 6))
@@ -221,7 +221,7 @@ def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneW
     engineered_mlp_output = int(cfg.get("engineered_mlp_output", 128))
     fusion_hidden = int(cfg.get("fusion_hidden", 256))
     
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=len(vocab.itos),
         kmer=vocab.k,
         embedding_dim=embedding_dim,

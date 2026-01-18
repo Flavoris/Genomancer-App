@@ -25,7 +25,7 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 import torch
 import yaml
 
-from model import GeneWhispererStage1
+from model import GeneWhispererStage1Legacy
 
 
 def get_device() -> torch.device:
@@ -44,9 +44,9 @@ def load_config(config_path: Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
-def build_stage1_model(cfg: dict) -> GeneWhispererStage1:
+def build_stage1_model(cfg: dict) -> GeneWhispererStage1Legacy:
     """Build a Stage 1 model instance from config."""
-    return GeneWhispererStage1(
+    return GeneWhispererStage1Legacy(
         vocab_size=int(cfg.get("vocab_size", 67)),
         kmer=int(cfg.get("kmer", 3)),
         embedding_dim=int(cfg.get("embedding_dim", 256)),

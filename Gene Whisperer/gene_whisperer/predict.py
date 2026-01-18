@@ -38,7 +38,7 @@ if str(_TRAINING_DIR) not in sys.path:
     sys.path.insert(0, str(_TRAINING_DIR))
 
 from dataset import KmerVocabulary, compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc
-from model import GeneWhispererStage1, MultiScaleEnsemble
+from model import GeneWhispererStage1, GeneWhispererStage1Legacy, MultiScaleEnsemble
 
 LOGGER = logging.getLogger("gene_whisperer.predict")
 
@@ -100,6 +100,12 @@ def _infer_architecture_from_checkpoint(
     if emb_key in state:
         arch["embedding_dim"] = state[emb_key].shape[1]
 
+    # Flag legacy architecture if CNN/TCN or adapter keys are present
+    legacy_prefixes = ("feature_extractor.", "post_cnn_transformer.", "fusion.")
+    arch["legacy_architecture"] = any(
+        key.startswith(legacy_prefixes) for key in state.keys()
+    )
+
     # Infer multiscale_channels from first conv weight shape
     ms_key = "feature_extractor.multiscale.convs.0.weight"
     if ms_key in state:
@@ -150,8 +156,8 @@ def _build_model(
     vocab: KmerVocabulary,
     device: torch.device,
     arch_overrides: Optional[Dict] = None,
-) -> GeneWhispererStage1:
-    """Build GeneWhispererStage1 model with config parameters.
+) -> torch.nn.Module:
+    """Build Stage 1 model with config parameters.
 
     Args:
         cfg: Base configuration dictionary
@@ -170,20 +176,14 @@ def _build_model(
     transformer_ff_dim = int(effective_cfg.get("transformer_ff_dim", 384))
     transformer_dropout = float(effective_cfg.get("transformer_dropout", 0.2))
 
-    use_tcn = bool(effective_cfg.get("use_tcn", True))
-    tcn_hidden = int(effective_cfg.get("tcn_hidden", 256))
-    tcn_levels = int(effective_cfg.get("tcn_levels", 4))
-    tcn_kernel = int(effective_cfg.get("tcn_kernel", 3))
-    multiscale_channels = int(effective_cfg.get("multiscale_channels", 64))
-    multiscale_kernels = tuple(effective_cfg.get("multiscale_kernels", [3, 5, 7, 9, 15]))
-    lstm_hidden = int(effective_cfg.get("lstm_hidden", 192))
-
-    post_cnn_transformer_layers = int(effective_cfg.get("post_cnn_transformer_layers", 3))
     engineered_mlp_hidden = int(effective_cfg.get("engineered_mlp_hidden", 256))
     engineered_mlp_output = int(effective_cfg.get("engineered_mlp_output", 128))
-    fusion_hidden = int(effective_cfg.get("fusion_hidden", 256))
 
-    model = GeneWhispererStage1(
+    use_legacy_architecture = bool(effective_cfg.get("legacy_architecture", False))
+    if arch_overrides and arch_overrides.get("legacy_architecture") is True:
+        use_legacy_architecture = True
+
+    common_kwargs = dict(
         vocab_size=len(vocab.itos),
         kmer=vocab.k,
         embedding_dim=embedding_dim,
@@ -195,23 +195,35 @@ def _build_model(
         engineered_dim=int(effective_cfg.get("engineered_dim", 288)),
         use_engineered_features=bool(effective_cfg.get("stage1_use_engineered_features", True)),
         use_attention_pool=bool(effective_cfg.get("use_attention_pool", True)),
-        use_tcn=use_tcn,
-        tcn_hidden=tcn_hidden,
-        tcn_levels=tcn_levels,
-        tcn_kernel=tcn_kernel,
-        multiscale_channels=multiscale_channels,
-        multiscale_kernels=multiscale_kernels,
-        lstm_hidden=lstm_hidden,
-        post_cnn_transformer_layers=post_cnn_transformer_layers,
         engineered_mlp_hidden=engineered_mlp_hidden,
         engineered_mlp_output=engineered_mlp_output,
-        fusion_hidden=fusion_hidden,
-    ).to(device)
+    )
+
+    if use_legacy_architecture:
+        model = GeneWhispererStage1Legacy(
+            **common_kwargs,
+            use_tcn=bool(effective_cfg.get("use_tcn", True)),
+            tcn_hidden=int(effective_cfg.get("tcn_hidden", 256)),
+            tcn_levels=int(effective_cfg.get("tcn_levels", 4)),
+            tcn_kernel=int(effective_cfg.get("tcn_kernel", 3)),
+            multiscale_channels=int(effective_cfg.get("multiscale_channels", 64)),
+            multiscale_kernels=tuple(
+                effective_cfg.get("multiscale_kernels", [3, 5, 7, 9, 15])
+            ),
+            lstm_hidden=int(effective_cfg.get("lstm_hidden", 192)),
+            post_cnn_transformer_layers=int(
+                effective_cfg.get("post_cnn_transformer_layers", 3)
+            ),
+            fusion_hidden=int(effective_cfg.get("fusion_hidden", 256)),
+        ).to(device)
+        return model
+
+    model = GeneWhispererStage1(**common_kwargs).to(device)
     return model
 
 
 def _load_checkpoint(
-    model: GeneWhispererStage1,
+    model: torch.nn.Module,
     path: Path,
     device: torch.device,
 ) -> Optional[float]:
@@ -398,7 +410,7 @@ def load_stage1_ensemble(
 
     LOGGER.info("Using device: %s", device)
 
-    models: List[GeneWhispererStage1] = []
+    models: List[torch.nn.Module] = []
     vocabs: Dict[int, KmerVocabulary] = {}
     checkpoint_thresholds: List[float] = []
 

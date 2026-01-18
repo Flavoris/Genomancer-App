@@ -52,12 +52,12 @@ def test_soft_voting_vs_logit_average():
 
 def test_soft_voting_ensemble_class():
     """Test the updated MultiScaleEnsemble class uses soft voting."""
-    from model import GeneWhispererStage1, MultiScaleEnsemble
+    from model import GeneWhispererStage1Legacy, MultiScaleEnsemble
 
     # Create mock models (minimal config)
     models = []
     for k in [3, 4]:
-        model = GeneWhispererStage1(
+        model = GeneWhispererStage1Legacy(
             vocab_size=4**k + 3,
             kmer=k,
             embedding_dim=64,
@@ -94,11 +94,11 @@ def test_soft_voting_ensemble_class():
 
 def test_soft_voting_with_return_logits():
     """Test that return_logits option works for training."""
-    from model import GeneWhispererStage1, MultiScaleEnsemble
+    from model import GeneWhispererStage1Legacy, MultiScaleEnsemble
 
     models = []
     for k in [3, 4]:
-        model = GeneWhispererStage1(
+        model = GeneWhispererStage1Legacy(
             vocab_size=4**k + 3,
             kmer=k,
             embedding_dim=64,

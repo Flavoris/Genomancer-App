@@ -25,7 +25,7 @@ sys.path.insert(0, str(TRAINING_DIR))
 from model import (
     GeneWhispererCombined,
     GeneWhispererFeaturesOnly,
-    GeneWhispererStage1,
+    GeneWhispererStage1Legacy,
     GeneWhispererTransformerOnly,
     create_model_variant,
 )
@@ -461,7 +461,7 @@ def test_backward_compat_missing_model_variant():
 
     # Simulate old config without model_variant - should still be able to create
     # the original GeneWhispererStage1 model
-    original_model = GeneWhispererStage1(
+    original_model = GeneWhispererStage1Legacy(
         vocab_size=config["vocab_size"],
         kmer=config["kmer"],
         embedding_dim=config["embedding_dim"],
@@ -473,7 +473,7 @@ def test_backward_compat_missing_model_variant():
     )
 
     assert original_model is not None
-    assert isinstance(original_model, GeneWhispererStage1)
+    assert isinstance(original_model, GeneWhispererStage1Legacy)
 
 
 def test_backward_compat_original_model_forward():
@@ -481,7 +481,7 @@ def test_backward_compat_original_model_forward():
     config = _small_config()
     tokens, engineered, _ = _build_inputs(config)
 
-    original_model = GeneWhispererStage1(
+    original_model = GeneWhispererStage1Legacy(
         vocab_size=config["vocab_size"],
         kmer=config["kmer"],
         embedding_dim=config["embedding_dim"],
@@ -506,7 +506,7 @@ def test_backward_compat_original_model_training():
     """Test that training works with original model architecture."""
     config = _small_config()
 
-    original_model = GeneWhispererStage1(
+    original_model = GeneWhispererStage1Legacy(
         vocab_size=config["vocab_size"],
         kmer=config["kmer"],
         embedding_dim=config["embedding_dim"],
@@ -547,7 +547,7 @@ def test_backward_compat_checkpoint_without_variant_metadata():
     """Test loading checkpoint that doesn't have variant metadata."""
     config = _small_config()
 
-    original_model = GeneWhispererStage1(
+    original_model = GeneWhispererStage1Legacy(
         vocab_size=config["vocab_size"],
         kmer=config["kmer"],
         embedding_dim=config["embedding_dim"],
@@ -582,7 +582,7 @@ def test_backward_compat_checkpoint_without_variant_metadata():
         assert use_simplified is False, "Default should not use simplified architecture"
 
         # Verify we can load the state dict
-        new_model = GeneWhispererStage1(
+        new_model = GeneWhispererStage1Legacy(
             vocab_size=config["vocab_size"],
             kmer=config["kmer"],
             embedding_dim=config["embedding_dim"],

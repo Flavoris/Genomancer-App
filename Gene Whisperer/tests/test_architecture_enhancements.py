@@ -3,7 +3,9 @@ import torch
 import torch.nn as nn
 import pytest
 import sys
-sys.path.insert(0, '.')
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "training"))
 
 from model import (
     GeneWhispererStage1,
@@ -141,8 +143,6 @@ class TestIntegratedModel:
                 num_heads=4,
                 ff_dim=512,
                 engineered_dim=288,
-                use_tcn=False,  # Faster testing
-                post_cnn_transformer_layers=1,
                 **cfg
             )
 
@@ -171,8 +171,6 @@ class TestIntegratedModel:
             engineered_dim=288,
             use_relative_position_bias=True,
             use_glu_ffn=True,
-            use_tcn=False,
-            post_cnn_transformer_layers=1,
         )
 
         tokens = torch.randint(0, 4096, (2, 76))
@@ -214,8 +212,6 @@ class TestIntegratedModel:
             engineered_dim=128,  # Old dimension
             use_relative_position_bias=False,
             use_glu_ffn=False,
-            use_tcn=False,
-            post_cnn_transformer_layers=1,
         )
 
         # Save "old" checkpoint
@@ -235,19 +231,11 @@ class TestIntegratedModel:
             engineered_dim=128,
             use_relative_position_bias=True,  # NEW
             use_glu_ffn=True,                 # NEW
-            use_tcn=False,
-            post_cnn_transformer_layers=1,
         )
 
         # Load old checkpoint into new model (should not error)
-        state_dict = torch.load(checkpoint_path)
-
-        # Filter to only matching keys
-        new_state = new_model.state_dict()
-        compatible_state = {k: v for k, v in state_dict.items()
-                          if k in new_state and new_state[k].shape == v.shape}
-
-        new_model.load_state_dict(compatible_state, strict=False)
+        loaded = new_model.load_legacy_checkpoint(checkpoint_path, strict=False)
+        assert loaded > 0
 
         # Verify model still works
         tokens = torch.randint(0, 256, (2, 78))

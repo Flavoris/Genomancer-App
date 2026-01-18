@@ -8,7 +8,7 @@ from pathlib import Path
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "training"))
 
-from model import GeneWhispererStage1
+from model import GeneWhispererStage1Legacy
 
 
 def test_forward_from_embeds_parity():
@@ -17,7 +17,7 @@ def test_forward_from_embeds_parity():
     torch.manual_seed(42)
 
     # Instantiate a tiny model
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=50,
         kmer=6,
         embedding_dim=16,

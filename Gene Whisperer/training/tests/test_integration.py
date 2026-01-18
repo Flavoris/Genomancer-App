@@ -20,11 +20,11 @@ def _compute_grad_norm(parameters) -> float:
 def test_full_training_step():
     """Test a complete training step with all optimizations."""
     from dataset import compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc
-    from model import GeneWhispererStage1
+    from model import GeneWhispererStage1Legacy
 
     print("Testing full training step with all optimizations...")
 
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=4099,
         kmer=6,
         embedding_dim=256,
@@ -94,13 +94,13 @@ def test_full_training_step():
 
 def test_ensemble_inference():
     """Test ensemble inference with soft voting."""
-    from model import GeneWhispererStage1, MultiScaleEnsemble
+    from model import GeneWhispererStage1Legacy, MultiScaleEnsemble
 
     print("\nTesting ensemble inference with soft voting...")
 
     models = []
     for kmer_size in [3, 4]:
-        model = GeneWhispererStage1(
+        model = GeneWhispererStage1Legacy(
             vocab_size=4**kmer_size + 3,
             kmer=kmer_size,
             embedding_dim=64,
@@ -138,7 +138,7 @@ def test_memory_usage():
     """Test that model fits in M4 MacBook memory."""
     import gc
 
-    from model import GeneWhispererStage1
+    from model import GeneWhispererStage1Legacy
 
     print("\nTesting memory usage...")
 
@@ -146,7 +146,7 @@ def test_memory_usage():
     if torch.backends.mps.is_available():
         torch.mps.empty_cache()
 
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=4099,
         kmer=6,
         embedding_dim=256,

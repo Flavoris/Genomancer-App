@@ -1,4 +1,4 @@
-"""Coverage for Stage 1 engineered feature dimension wiring."""
+"""Coverage for legacy Stage 1 engineered feature dimension wiring."""
 from __future__ import annotations
 
 import sys
@@ -9,7 +9,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "training"))
 
-from model import GeneWhispererStage1
+from model import GeneWhispererStage1Legacy
 
 
 def _base_stage1_kwargs() -> dict:
@@ -41,7 +41,7 @@ def test_stage1_engineered_dims_forward(
     mlp_output: int,
     fusion_hidden: int,
 ) -> None:
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         **_base_stage1_kwargs(),
         engineered_dim=engineered_dim,
         engineered_mlp_hidden=mlp_hidden,
@@ -63,7 +63,7 @@ def test_stage1_engineered_dims_forward(
 
 
 def test_stage1_engineered_defaults_match_config() -> None:
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         **_base_stage1_kwargs(),
         engineered_dim=288,
         use_engineered_features=True,
@@ -77,7 +77,7 @@ def test_stage1_engineered_defaults_match_config() -> None:
 
 
 def test_engineered_mlp_improvements_default_noops() -> None:
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         **_base_stage1_kwargs(),
         engineered_dim=128,
         use_engineered_features=True,
@@ -94,7 +94,7 @@ def test_engineered_mlp_improvements_default_noops() -> None:
 
 
 def test_engineered_mlp_improvements_can_disable() -> None:
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         **_base_stage1_kwargs(),
         engineered_dim=128,
         use_engineered_features=True,

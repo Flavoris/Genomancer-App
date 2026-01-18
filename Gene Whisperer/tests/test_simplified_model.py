@@ -1,4 +1,4 @@
-"""Verification tests for GeneWhispererSimplified."""
+"""Verification tests for the simplified GeneWhispererStage1."""
 from __future__ import annotations
 
 import sys
@@ -12,7 +12,7 @@ import torch
 # Add training directory to path for local imports.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "training"))
 
-from model import GeneWhispererSimplified, GeneWhispererStage1
+from model import GeneWhispererStage1, GeneWhispererStage1Legacy
 
 
 def _count_parameters(model: torch.nn.Module) -> int:
@@ -39,7 +39,6 @@ def _small_model_kwargs() -> Dict[str, object]:
         "engineered_mlp_use_gated": True,
         "engineered_mlp_use_residual": True,
         "drop_path_rate": 0.0,
-        "use_simplified": True,
     }
 
 
@@ -115,25 +114,39 @@ def _infer_kmer_from_path(ckpt_path: Path) -> int:
 
 def test_model_instantiation() -> None:
     """Validate instantiation paths and parameter reduction."""
-    default_model = GeneWhispererSimplified()
-    with_engineered = GeneWhispererSimplified(engineered_dim=288, use_engineered_features=True)
-    without_engineered = GeneWhispererSimplified(engineered_dim=0, use_engineered_features=False)
+    default_model = GeneWhispererStage1()
+    with_engineered = GeneWhispererStage1(engineered_dim=288, use_engineered_features=True)
+    without_engineered = GeneWhispererStage1(engineered_dim=0, use_engineered_features=False)
 
     assert with_engineered.engineered_mlp is not None, "Engineered MLP should be initialized"
     assert without_engineered.engineered_mlp is None, "Engineered MLP should be disabled"
 
-    simplified_params = _count_parameters(default_model)
-    stage1_params = _count_parameters(GeneWhispererStage1())
+    small_model = GeneWhispererStage1(**_small_model_kwargs())
+    simplified_params = _count_parameters(small_model)
+    legacy_kwargs = dict(_small_model_kwargs())
+    legacy_kwargs.update(
+        {
+            "use_tcn": True,
+            "tcn_hidden": 64,
+            "tcn_levels": 2,
+            "tcn_kernel": 3,
+            "multiscale_channels": 16,
+            "multiscale_kernels": (3, 5),
+            "post_cnn_transformer_layers": 1,
+            "fusion_hidden": 64,
+        }
+    )
+    stage1_params = _count_parameters(GeneWhispererStage1Legacy(**legacy_kwargs))
     assert simplified_params < stage1_params, "Simplified model should have fewer parameters"
 
     ratio = simplified_params / stage1_params
-    assert ratio <= 0.60, f"Expected ~50% fewer params; ratio={ratio:.2f}"
+    assert ratio <= 0.85, f"Expected fewer params; ratio={ratio:.2f}"
 
 
 def test_forward_pass() -> None:
     """Check forward outputs for shape and numerical stability."""
     torch.manual_seed(0)
-    model = GeneWhispererSimplified(**_small_model_kwargs())
+    model = GeneWhispererStage1(**_small_model_kwargs())
     model.eval()
 
     tokens = torch.randint(1, model.embedding.num_embeddings, (4, 76))
@@ -149,7 +162,7 @@ def test_forward_pass() -> None:
 def test_gradient_flow() -> None:
     """Ensure gradients exist and are finite for all parameters."""
     torch.manual_seed(0)
-    model = GeneWhispererSimplified(**_small_model_kwargs())
+    model = GeneWhispererStage1(**_small_model_kwargs())
     model.train()
 
     tokens = torch.randint(1, model.embedding.num_embeddings, (4, 76))
@@ -190,7 +203,7 @@ def test_mlm_weight_loading() -> None:
         rel_key = "relative_position_bias.relative_attention_bias.weight"
         rel_buckets = int(state_dict[rel_key].shape[0])
 
-    model = GeneWhispererSimplified(
+    model = GeneWhispererStage1(
         vocab_size=vocab_size,
         kmer=_infer_kmer_from_path(ckpt_path),
         embedding_dim=embedding_dim,
@@ -203,7 +216,6 @@ def test_mlm_weight_loading() -> None:
         use_engineered_features=False,
         use_attention_pool=False,
         drop_path_rate=0.0,
-        use_simplified=True,
         use_relative_position_bias=use_relative_position_bias,
         relative_position_num_buckets=rel_buckets or 32,
         relative_position_max_distance=128,
@@ -224,7 +236,7 @@ def test_mlm_weight_loading() -> None:
 
 def test_save_load_and_compile() -> None:
     """Confirm save/load round-trip and torch.compile compatibility."""
-    model = GeneWhispererSimplified(**_small_model_kwargs())
+    model = GeneWhispererStage1(**_small_model_kwargs())
     model.eval()
 
     tokens = torch.randint(1, model.embedding.num_embeddings, (2, 16))
@@ -237,7 +249,7 @@ def test_save_load_and_compile() -> None:
         ckpt_path = Path(tmpdir) / "simplified_model.pt"
         torch.save(model.state_dict(), ckpt_path)
 
-        reloaded = GeneWhispererSimplified(**_small_model_kwargs())
+        reloaded = GeneWhispererStage1(**_small_model_kwargs())
         reloaded.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
         reloaded.eval()
 

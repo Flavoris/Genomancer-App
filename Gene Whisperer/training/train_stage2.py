@@ -28,7 +28,7 @@ from torch.optim.swa_utils import AveragedModel, SWALR
 
 from amp_utils import get_amp_context, log_amp_status, create_grad_scaler
 from dataset import build_dataloaders
-from model import GeneWhispererStage1, GeneWhispererStage2
+from model import GeneWhispererStage1Legacy, GeneWhispererStage2
 
 import train_stage1 as stage1
 

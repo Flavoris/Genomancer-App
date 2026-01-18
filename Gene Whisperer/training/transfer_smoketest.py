@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 
 from dataset import build_dataloaders
-from model import GeneWhispererStage1
+from model import GeneWhispererStage1Legacy
 from pretrain_mlm import run_mlm_pretrain
 from train_stage1 import load_config, run_stage1_training
 from train_stage2 import run_stage2_training
@@ -107,13 +107,15 @@ def _load_checkpoint_state(path: Path) -> Dict[str, Any]:
     raise ValueError(f"Unsupported checkpoint format at {path} (type={type(state)})")
 
 
-def _build_stage1_model(cfg: dict, *, engineered_dim: int, use_engineered: bool) -> GeneWhispererStage1:
+def _build_stage1_model(
+    cfg: dict, *, engineered_dim: int, use_engineered: bool
+) -> GeneWhispererStage1Legacy:
     multiscale_kernels = cfg.get("multiscale_kernels", [3, 5, 7, 9, 15])
     if not isinstance(multiscale_kernels, (list, tuple)):
         multiscale_kernels = [3, 5, 7, 9, 15]
     pad_token_id = cfg.get("pad_token_id")
     pad_token_id = None if pad_token_id is None else int(pad_token_id)
-    return GeneWhispererStage1(
+    return GeneWhispererStage1Legacy(
         vocab_size=int(cfg.get("vocab_size", 67)),
         kmer=int(cfg.get("kmer", 3)),
         embedding_dim=int(cfg.get("embedding_dim", 256)),

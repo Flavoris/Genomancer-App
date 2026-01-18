@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from amp_utils import create_grad_scaler, get_amp_context
 from dataset import build_dataloaders
-from model import GeneWhispererStage1, create_model_variant
+from model import GeneWhispererStage1Legacy, create_model_variant
 from seed_utils import set_global_seed
 from train_stage1 import calculate_metrics, load_config
 
@@ -173,9 +173,9 @@ def train_variant_sanity(
 
     # Create model
     if variant == "original":
-        model = GeneWhispererStage1(
+        model = GeneWhispererStage1Legacy(
             vocab_size=cfg["vocab_size"],
-            embed_dim=cfg["embedding_dim"],
+            embedding_dim=cfg["embedding_dim"],
             max_seq_len=cfg["max_bp_len"] - cfg["kmer"] + 2,
             num_layers=cfg.get("transformer_layers", 6),
             num_heads=cfg.get("transformer_heads", 6),

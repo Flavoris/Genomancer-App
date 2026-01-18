@@ -33,7 +33,7 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 from amp_utils import get_amp_context, create_grad_scaler
 from dataset import build_dataloaders
 from early_stopping import EarlyStopping
-from model import GeneWhispererStage1, create_model_variant
+from model import GeneWhispererStage1Legacy, create_model_variant
 from seed_utils import set_global_seed
 from train_stage1 import (
     run_epoch,
@@ -71,12 +71,12 @@ def count_parameters(model: nn.Module) -> int:
 
 
 def create_original_model(cfg: dict, device: torch.device) -> nn.Module:
-    """Create the original full GeneWhispererStage1 model."""
+    """Create the legacy full GeneWhispererStage1 model."""
     kmer = int(cfg.get("kmer", 6))
     max_bp_len = int(cfg.get("max_bp_len", 81))
     max_seq_len = max_bp_len - kmer + 1
 
-    return GeneWhispererStage1(
+    return GeneWhispererStage1Legacy(
         vocab_size=int(cfg.get("vocab_size", 4099)),
         embedding_dim=int(cfg.get("embedding_dim", 384)),
         kmer=kmer,

@@ -59,7 +59,7 @@ from dataset import (
     random_base_substitution,
     reverse_complement,
 )
-from model import GeneWhispererStage1, DNAEncoder, create_model_variant
+from model import GeneWhispererStage1Legacy, DNAEncoder, create_model_variant
 from numerics import cap_model_param_norm_
 from seed_utils import set_global_seed
 from stage1_settings import log_stage1_training_configuration, resolve_stage1_lr
@@ -192,7 +192,7 @@ def load_teacher_model(
     transformer_ff_dim = int(cfg.get("transformer_ff_dim", 1024))
     transformer_dropout = float(cfg.get("transformer_dropout", 0.15))
 
-    teacher = GeneWhispererStage1(
+    teacher = GeneWhispererStage1Legacy(
         vocab_size=len(teacher_vocab.itos),
         kmer=teacher_kmer,
         embedding_dim=embedding_dim,
@@ -1007,7 +1007,7 @@ def mixup_batch_embeddings(
     alpha: float,
 ):
     """
-    Proper embedding-space mixup for GeneWhispererStage1.
+    Proper embedding-space mixup for GeneWhispererStage1Legacy.
 
     Returns:
       mixed_embeds: (B, L, D)
@@ -2474,7 +2474,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     stage1_drop_path_rate = get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)
 
     # Model variant configuration
-    # use_simplified_architecture: If False (default), always use original GeneWhispererStage1
+    # use_simplified_architecture: If False (default), always use legacy GeneWhispererStage1
     # If True, use simplified variant based on model_variant setting
     use_simplified_architecture = bool(cfg_run.get("use_simplified_architecture", False))
     model_variant = str(cfg_run.get("model_variant", "")).strip().lower()
@@ -2486,12 +2486,12 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # Only use simplified variant if: use_simplified_architecture=True AND model_variant is a valid simplified variant
     use_variant_model = use_simplified_architecture and model_variant in simplified_variants
 
-    # For "original" variant or when use_simplified_architecture=False, use original GeneWhispererStage1
+    # For "original" variant or when use_simplified_architecture=False, use legacy GeneWhispererStage1
     # This maintains backward compatibility: if use_simplified_architecture is not in config, default to False
     if not use_simplified_architecture and model_variant in simplified_variants:
         LOGGER.warning(
             "model_variant='%s' specified but use_simplified_architecture=False; "
-            "using original GeneWhispererStage1 (set use_simplified_architecture=True to use simplified variant)",
+            "using legacy GeneWhispererStage1 (set use_simplified_architecture=True to use simplified variant)",
             model_variant,
         )
 
@@ -2510,7 +2510,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     if use_variant_model:
         model = create_model_variant(model_variant, variant_config).to(device)
     else:
-        model = GeneWhispererStage1(
+        model = GeneWhispererStage1Legacy(
             vocab_size=vocab_size,
             kmer=kmer,
             embedding_dim=embedding_dim,
@@ -2581,7 +2581,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             )
         LOGGER.info("Classifier: 2-layer head")
     else:
-        LOGGER.info("MODEL VARIANT: original (GeneWhispererStage1)")
+        LOGGER.info("MODEL VARIANT: original (GeneWhispererStage1Legacy)")
         LOGGER.info("Inputs required: tokens + engineered features")
         LOGGER.info("Architecture: Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier")
         if use_tcn:

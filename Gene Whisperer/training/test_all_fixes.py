@@ -146,7 +146,7 @@ def test_model_creation():
     print("=" * 60)
 
     import torch
-    from model import GeneWhispererStage1
+    from model import GeneWhispererStage1Legacy
     from dataset import KmerVocabulary
 
     with open(script_dir / 'config.yaml', 'r') as f:
@@ -155,7 +155,7 @@ def test_model_creation():
     # Build a test vocab
     vocab = KmerVocabulary.build_from_sequences(['ATGC' * 20], k=6)
 
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=len(vocab.itos),
         kmer=6,
         embedding_dim=cfg.get('embedding_dim', 384),

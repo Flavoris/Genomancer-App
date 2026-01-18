@@ -198,17 +198,17 @@ def create_standard_model(
     vocab: "KmerVocabulary",
 ) -> nn.Module:
     """
-    Create standard GeneWhispererStage1 model compatible with ensemble scripts.
+    Create legacy GeneWhispererStage1 model compatible with ensemble scripts.
 
     This model can be used with ensemble_infer.py and eval_stage1_ensemble.py.
     Applies tuned hyperparameters (dropout) to the standard architecture.
     """
-    from model import GeneWhispererStage1
+    from model import GeneWhispererStage1Legacy
 
     kmer = int(cfg.get("kmer", 6))
     max_bp_len = int(cfg.get("max_bp_len", 81))
 
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=len(vocab.itos),
         kmer=kmer,
         embedding_dim=int(cfg.get("embedding_dim", 384)),
@@ -256,7 +256,7 @@ def create_model(
         cfg: Base configuration dictionary
         training_config: Training configuration with tuned hyperparameters
         device: Target device
-        use_standard_model: If True, use GeneWhispererStage1 (compatible with ensemble scripts)
+        use_standard_model: If True, use GeneWhispererStage1Legacy (compatible with ensemble scripts)
         vocab: Required if use_standard_model=True
 
     Returns:
@@ -265,7 +265,7 @@ def create_model(
     if use_standard_model:
         if vocab is None:
             raise ValueError("vocab is required when use_standard_model=True")
-        LOGGER.info("Using standard GeneWhispererStage1 model (ensemble-compatible)")
+        LOGGER.info("Using legacy GeneWhispererStage1 model (ensemble-compatible)")
         return create_standard_model(cfg, training_config, device, vocab)
     else:
         LOGGER.info("Using tunable model variant: %s", variant)
@@ -377,7 +377,7 @@ def train_final_model(
         val_loader: Validation data loader
         device: Target device
         output_dir: Directory to save checkpoints and results
-        use_standard_model: If True, use GeneWhispererStage1 (compatible with ensemble scripts)
+        use_standard_model: If True, use GeneWhispererStage1Legacy (compatible with ensemble scripts)
         vocab: Vocabulary (required if use_standard_model=True)
         load_mlm_weights: Whether to load pretrained MLM weights (default: True)
         mlm_transfer_mode: Transfer mode for MLM weights ("embed_only", "embed_plus_adapter", "none")
@@ -950,7 +950,7 @@ def main():
     parser.add_argument(
         "--use-standard-model",
         action="store_true",
-        help="Use standard GeneWhispererStage1 model (compatible with ensemble scripts)",
+        help="Use legacy GeneWhispererStage1 model (compatible with ensemble scripts)",
     )
     parser.add_argument(
         "--load-mlm-weights",

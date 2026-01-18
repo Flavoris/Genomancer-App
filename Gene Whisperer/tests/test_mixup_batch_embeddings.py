@@ -9,7 +9,7 @@ import torch
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "training"))
 
-from model import GeneWhispererStage1
+from model import GeneWhispererStage1Legacy
 from train_stage1 import mixup_batch_embeddings
 
 
@@ -20,7 +20,7 @@ def test_mixup_batch_embeddings():
     torch.manual_seed(0)
 
     # Build small Stage 1 model as in parity test (dropout=0.0)
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=50,
         kmer=6,
         embedding_dim=16,

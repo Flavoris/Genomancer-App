@@ -13,11 +13,11 @@ import torch
 # Add training directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from model import GeneWhispererStage1
+from model import GeneWhispererStage1Legacy
 
 
 def test_stage1_forward_with_zero_post_cnn_transformer_layers():
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=67,
         kmer=3,
         embedding_dim=32,

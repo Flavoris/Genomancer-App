@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from model import DNAEncoder, GeneWhispererStage1, PostCNNTransformerAdapter
+from model import DNAEncoder, GeneWhispererStage1Legacy, PostCNNTransformerAdapter
 
 
 def create_fake_mlm_checkpoint(
@@ -56,9 +56,9 @@ def create_stage1_model(
     ff_dim: int = 1024,
     pad_token_id: int = 66,
     post_cnn_transformer_layers: int = 3,
-) -> GeneWhispererStage1:
+) -> GeneWhispererStage1Legacy:
     """Create a Stage 1 model with matching dimensions."""
-    return GeneWhispererStage1(
+    return GeneWhispererStage1Legacy(
         vocab_size=vocab_size,
         kmer=6,
         embedding_dim=embedding_dim,

@@ -29,7 +29,7 @@ def main() -> int:
 
     sys.path.insert(0, str(training_dir))
     from dataset import KmerVocabulary, PromoterDatasetStage1  # noqa: E402
-    from model import GeneWhispererStage1  # noqa: E402
+    from model import GeneWhispererStage1Legacy  # noqa: E402
 
     config_path = _resolve_config_path(training_dir)
     cfg = _load_cfg(config_path)
@@ -79,7 +79,7 @@ def main() -> int:
     tokens_batch = torch.stack(tokens_list, dim=0)
     engineered_batch = torch.stack(engineered_list, dim=0)
 
-    model = GeneWhispererStage1(
+    model = GeneWhispererStage1Legacy(
         vocab_size=len(vocab.itos),
         kmer=vocab.k,
         embedding_dim=int(cfg.get("embedding_dim", 256)),

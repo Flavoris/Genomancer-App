@@ -23,7 +23,7 @@ sys.path.insert(0, str(TRAINING_DIR))
 from model import (
     GeneWhispererCombined,
     GeneWhispererFeaturesOnly,
-    GeneWhispererStage1,
+    GeneWhispererStage1Legacy,
     GeneWhispererTransformerOnly,
     create_model_variant,
 )
@@ -152,7 +152,7 @@ def test_checkpoint_variant_metadata():
         assert checkpoint["epoch"] == 1
 
         # Test saving with original model
-        original_model = GeneWhispererStage1(
+        original_model = GeneWhispererStage1Legacy(
             vocab_size=config["vocab_size"],
             kmer=config["kmer"],
             embedding_dim=config["embedding_dim"],
