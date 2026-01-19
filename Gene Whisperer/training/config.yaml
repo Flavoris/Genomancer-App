@@ -49,7 +49,7 @@ model: &model
   transformer_layers: 12
   transformer_heads: 12
   transformer_ff_dim: 1536
-  transformer_dropout: 0.20  # Increased from 0.12 for stronger regularization
+  transformer_dropout: 0.20  # Optimal from regularization experiment (86.55% val acc)
   model_variant: stage1  # options: transformer_only, features_only, combined
   use_glu_ffn: true
   glu_activation: "gelu"
@@ -74,7 +74,7 @@ simplified_model:
 
   # Classifier settings
   classifier_hidden: 256
-  classifier_dropout: 0.25  # Increased from 0.15 for stronger regularization
+  classifier_dropout: 0.20  # Optimal from regularization experiment (86.55% val acc)
 
   # Feature fusion: "concat" (simple concatenation)
   fusion_method: "concat"
@@ -102,7 +102,7 @@ training: &training
   lr: 0.00002  # msBERT-aligned learning rate
   stage1_lr: 0.00002  # Explicit stage 1 learning rate
   stage2_lr: 0.00001  # Stage 2 can use lower LR for fine-tuning
-  weight_decay: 0.05  # Increased from 0.01 for stronger regularization
+  weight_decay: 0.05  # Optimal from regularization experiment (86.55% val acc)
   warmup_ratio: 0.10
   min_lr_ratio: 0.01  # Minimum LR as fraction of peak
   epochs: 100
@@ -121,7 +121,7 @@ loss: &loss
   stage1_use_focal_loss: false
   stage1_focal_alpha: 0.25
   stage1_focal_gamma: 2.0
-  label_smoothing: 0.1  # NEW - prevents overconfident predictions
+  label_smoothing: 0.1  # Optimal from regularization experiment (86.55% val acc)
 
 # == AUGMENTATION ==
 augmentation: &augmentation

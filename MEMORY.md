@@ -77,23 +77,25 @@ Returns dictionary with:
 - WARNING: Triggered when `grad_norm > 100` (exploding gradients)
 - ERROR: Triggered when NaN/Inf gradients are detected
 
-### 2026-01-19: Regularization Experiment Script
-Added `run_regularization_experiment.py` to systematically test different regularization levels.
+### 2026-01-19: Regularization Experiment Results
+Ran `run_regularization_experiment.py` to find optimal regularization settings.
 
-**Experiments Tested:**
-| Name | Trans. Dropout | Class. Dropout | Weight Decay | Label Smooth |
-|------|----------------|----------------|--------------|--------------|
-| baseline | 0.12 | 0.15 | 0.02 | 0.0 |
-| medium_reg | 0.20 | 0.20 | 0.05 | 0.1 |
-| strong_reg | 0.25 | 0.30 | 0.08 | 0.15 |
+**Results:**
+| Name | Val Acc | Val MCC | Best Epoch | Trans. Dropout | Class. Dropout |
+|------|---------|---------|------------|----------------|----------------|
+| baseline | 85.88% | 0.718 | 15 | 0.12 | 0.15 |
+| **medium_reg** | **86.55%** | **0.731** | 20 | 0.20 | 0.20 |
+| strong_reg | 85.29% | 0.706 | 28 | 0.25 | 0.30 |
 
-**Usage:**
-```bash
-cd "Gene Whisperer/training"
-python run_regularization_experiment.py
-```
+**Winner: medium_reg** - Best balance of regularization. Strong_reg was too aggressive.
 
-**Output:** Results saved to `results/reg_experiment/` with summary.json showing best config.
+**Updated config.yaml with optimal settings:**
+| Parameter | Value |
+|-----------|-------|
+| transformer_dropout | 0.20 |
+| classifier_dropout | 0.20 |
+| weight_decay | 0.05 |
+| label_smoothing | 0.1 |
 
 ## Future Considerations
 - If regularization is still insufficient, consider:
