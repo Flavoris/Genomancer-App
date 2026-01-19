@@ -27,20 +27,16 @@ def _write_config(tmp_path: Path) -> tuple[dict, Path]:
         "transformer_heads": 3,
         "transformer_ff_dim": 24,
         "transformer_dropout": 0.1,
-        "use_tcn": True,
-        "tcn_hidden": 8,
-        "tcn_levels": 1,
-        "tcn_kernel": 3,
-        "multiscale_channels": 4,
-        "multiscale_kernels": [3],
-        "lstm_hidden": 8,
-        "post_cnn_transformer_layers": 1,
         "engineered_mlp_hidden": 8,
         "engineered_mlp_output": 4,
-        "fusion_hidden": 8,
         "engineered_dim": 288,
         "stage1_use_engineered_features": True,
-        "use_attention_pool": True,
+        "max_bp_len": 81,
+        "simplified_model": {
+            "pooling_type": "attention",
+            "classifier_hidden": 12,
+            "classifier_dropout": 0.1,
+        },
     }
     config_path = tmp_path / "config.yaml"
     with config_path.open("w", encoding="utf-8") as handle:

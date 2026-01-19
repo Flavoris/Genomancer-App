@@ -11,7 +11,7 @@ import torch
 import yaml
 
 from dataset import KmerVocabulary, compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc
-from model import GeneWhispererStage1Legacy
+from model import GeneWhispererStage1
 
 LOGGER = logging.getLogger("gene_whisperer.ensemble")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -84,6 +84,55 @@ def apply_calibration(
     return probs, threshold
 
 
+LEGACY_STATE_PREFIXES = (
+    "feature_extractor.",
+    "post_cnn_transformer.",
+    "multiscale.",
+    "tcn.",
+    "fusion.",
+)
+
+
+def _extract_state_dict(checkpoint: dict) -> dict:
+    if "model_state" in checkpoint:
+        return checkpoint["model_state"]
+    if "model_state_dict" in checkpoint:
+        return checkpoint["model_state_dict"]
+    if "state_dict" in checkpoint:
+        return checkpoint["state_dict"]
+    return checkpoint
+
+
+def _normalize_state_dict(state: dict) -> dict:
+    if any(key.startswith("module.") for key in state.keys()):
+        return {key.removeprefix("module."): value for key, value in state.items()}
+    return state
+
+
+def _is_legacy_state(state: dict) -> bool:
+    return any(key.startswith(LEGACY_STATE_PREFIXES) for key in state.keys())
+
+
+def _filter_compatible_state(
+    model: torch.nn.Module,
+    state: dict,
+) -> tuple[dict, list[str], list[str]]:
+    model_state = model.state_dict()
+    compatible: dict = {}
+    skipped: list[str] = []
+    for key, value in state.items():
+        target = model_state.get(key)
+        if target is None:
+            skipped.append(key)
+            continue
+        if getattr(target, "shape", None) != getattr(value, "shape", None):
+            skipped.append(key)
+            continue
+        compatible[key] = value
+    missing = [key for key in model_state.keys() if key not in compatible]
+    return compatible, skipped, missing
+
+
 def infer_model_architecture(checkpoint_path: Path) -> dict:
     """
     Infer model architecture parameters from checkpoint state_dict.
@@ -91,7 +140,7 @@ def infer_model_architecture(checkpoint_path: Path) -> dict:
     Returns a dict of config overrides to match the checkpoint's architecture.
     """
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    state = checkpoint.get("model_state", checkpoint)
+    state = _normalize_state_dict(_extract_state_dict(checkpoint))
 
     overrides = {}
 
@@ -101,44 +150,19 @@ def infer_model_architecture(checkpoint_path: Path) -> dict:
         layer_nums = set(int(k.split("layers.")[1].split(".")[0]) for k in encoder_layers)
         overrides["transformer_layers"] = len(layer_nums)
 
-    # Count TCN levels
-    tcn_layers = [k for k in state.keys() if "tcn.network." in k]
-    if tcn_layers:
-        tcn_nums = set(int(k.split("network.")[1].split(".")[0]) for k in tcn_layers)
-        overrides["tcn_levels"] = len(tcn_nums)
-
-    # Count multiscale convs (infer kernel sizes from conv weights)
-    mscale_convs = [k for k in state.keys() if "multiscale.convs." in k and ".weight" in k]
-    if mscale_convs:
-        kernel_sizes = []
-        for k in sorted(mscale_convs):
-            weight = state[k]
-            kernel_sizes.append(weight.shape[2])  # Conv1d weight shape: (out_ch, in_ch, kernel)
-        overrides["multiscale_kernels"] = kernel_sizes
-
-    # Infer post-CNN transformer layers
-    post_cnn_layers = [k for k in state.keys() if "post_cnn_transformer.layers." in k]
-    if post_cnn_layers:
-        layer_nums = set(int(k.split("layers.")[1].split(".")[0]) for k in post_cnn_layers)
-        overrides["post_cnn_transformer_layers"] = len(layer_nums)
-
     # Infer embedding dim from embedding weight
     if "embedding.weight" in state:
         overrides["embedding_dim"] = state["embedding.weight"].shape[1]
+    elif "_full_encoder.embedding.weight" in state:
+        overrides["embedding_dim"] = state["_full_encoder.embedding.weight"].shape[1]
+
+    if "_full_encoder.pos_embedding.weight" in state:
+        overrides["max_seq_len"] = state["_full_encoder.pos_embedding.weight"].shape[0]
 
     # Infer transformer FF dim from FFN weights
     ffn_keys = [k for k in state.keys() if "_full_encoder.layers.0.ffn.0.weight" in k]
     if ffn_keys:
         overrides["transformer_ff_dim"] = state[ffn_keys[0]].shape[0]
-
-    # Infer TCN hidden from TCN output
-    tcn_out_keys = [k for k in state.keys() if "tcn.network.0.conv1.conv.weight" in k]
-    if tcn_out_keys:
-        overrides["tcn_hidden"] = state[tcn_out_keys[0]].shape[0]
-
-    # Infer multiscale channels
-    if mscale_convs:
-        overrides["multiscale_channels"] = state[sorted(mscale_convs)[0]].shape[0]
 
     # Infer engineered MLP dimensions
     eng_mlp_keys = [k for k in state.keys() if "engineered_mlp.mlp." in k and "weight" in k]
@@ -152,34 +176,37 @@ def infer_model_architecture(checkpoint_path: Path) -> dict:
         if last_linear:
             overrides["engineered_mlp_output"] = state[last_linear[0]].shape[0]
 
-    # Infer fusion hidden
-    fusion_keys = [k for k in state.keys() if "fusion.seq_proj.weight" in k]
-    if fusion_keys:
-        overrides["fusion_hidden"] = state[fusion_keys[0]].shape[0]
-
     return overrides
 
 
-def load_checkpoint(model: GeneWhispererStage1Legacy, path: Path, device: torch.device) -> None:
+def load_checkpoint(model: GeneWhispererStage1, path: Path, device: torch.device) -> None:
     checkpoint = torch.load(path, map_location=device, weights_only=False)
-    state_dict = checkpoint.get("model_state", checkpoint)
+    state_dict = _normalize_state_dict(_extract_state_dict(checkpoint))
 
-    # Use strict=True to ensure all weights load correctly
-    # Log any issues for debugging
-    try:
-        incompatible = model.load_state_dict(state_dict, strict=True)
-        if incompatible.missing_keys:
-            LOGGER.warning("Missing keys: %s", incompatible.missing_keys)
-        if incompatible.unexpected_keys:
-            LOGGER.warning("Unexpected keys: %s", incompatible.unexpected_keys)
-    except RuntimeError as e:
-        LOGGER.error("Failed to load checkpoint with strict=True: %s", e)
-        LOGGER.info("Attempting load with strict=False...")
-        incompatible = model.load_state_dict(state_dict, strict=False)
-        if incompatible.missing_keys:
-            LOGGER.warning("Missing keys (not loaded): %s", incompatible.missing_keys[:10])
-        if incompatible.unexpected_keys:
-            LOGGER.warning("Unexpected keys (ignored): %s", incompatible.unexpected_keys[:10])
+    if _is_legacy_state(state_dict):
+        LOGGER.warning(
+            "Legacy Stage 1 checkpoint detected; loading compatible encoder weights only."
+        )
+        legacy_state = {
+            key: value
+            for key, value in state_dict.items()
+            if key.startswith(("_full_encoder.", "embedding."))
+        }
+        state_dict = legacy_state
+
+    compatible, skipped, missing = _filter_compatible_state(model, state_dict)
+    model.load_state_dict(compatible, strict=False)
+    LOGGER.info(
+        "Loaded %d tensors from %s (skipped=%d, missing=%d)",
+        len(compatible),
+        path,
+        len(skipped),
+        len(missing),
+    )
+    if skipped:
+        preview = ", ".join(skipped[:5])
+        suffix = "…" if len(skipped) > 5 else ""
+        LOGGER.warning("Skipped keys (preview): %s%s", preview, suffix)
 
     # Attach best_threshold from checkpoint for deployment-safe inference
     if isinstance(checkpoint, dict) and "best_threshold" in checkpoint:
@@ -198,56 +225,39 @@ def load_vocab(vocab_path: Path) -> KmerVocabulary:
     return KmerVocabulary.load(vocab_path)
 
 
-def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneWhispererStage1Legacy:
-    """Build GeneWhispererStage1 model with V3 architecture parameters."""
-    embedding_dim = int(cfg.get("embedding_dim", 192))
-    transformer_layers = int(cfg.get("transformer_layers", 6))
-    transformer_heads = int(cfg.get("transformer_heads", 8))
-    transformer_ff_dim = int(cfg.get("transformer_ff_dim", 384))
-    transformer_dropout = float(cfg.get("transformer_dropout", 0.2))
-    
-    # TCN parameters
-    use_tcn = bool(cfg.get("use_tcn", True))
-    tcn_hidden = int(cfg.get("tcn_hidden", 256))
-    tcn_levels = int(cfg.get("tcn_levels", 4))
-    tcn_kernel = int(cfg.get("tcn_kernel", 3))
-    multiscale_channels = int(cfg.get("multiscale_channels", 64))
-    multiscale_kernels = tuple(cfg.get("multiscale_kernels", [3, 5, 7, 9, 15]))
-    lstm_hidden = int(cfg.get("lstm_hidden", 192))
-    
-    # New V3 architecture parameters
-    post_cnn_transformer_layers = int(cfg.get("post_cnn_transformer_layers", 3))
-    engineered_mlp_hidden = int(cfg.get("engineered_mlp_hidden", 256))
-    engineered_mlp_output = int(cfg.get("engineered_mlp_output", 128))
-    fusion_hidden = int(cfg.get("fusion_hidden", 256))
-    
-    model = GeneWhispererStage1Legacy(
+def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneWhispererStage1:
+    """Build simplified GeneWhispererStage1 model."""
+    simplified_cfg = cfg.get("simplified_model") if isinstance(cfg.get("simplified_model"), dict) else {}
+    pooling_type = simplified_cfg.get("pooling_type")
+    classifier_hidden = simplified_cfg.get("classifier_hidden")
+    classifier_dropout = simplified_cfg.get("classifier_dropout")
+
+    max_bp_len = int(cfg.get("max_bp_len", 81))
+    max_seq_len = int(cfg.get("max_seq_len", max_bp_len - vocab.k + 1))
+
+    model = GeneWhispererStage1(
         vocab_size=len(vocab.itos),
         kmer=vocab.k,
-        embedding_dim=embedding_dim,
-        num_layers=transformer_layers,
-        num_heads=transformer_heads,
-        ff_dim=transformer_ff_dim,
-        dropout=transformer_dropout,
+        embedding_dim=int(cfg.get("embedding_dim", 384)),
+        num_layers=int(cfg.get("transformer_layers", 12)),
+        num_heads=int(cfg.get("transformer_heads", 12)),
+        ff_dim=int(cfg.get("transformer_ff_dim", 1536)),
+        dropout=float(cfg.get("transformer_dropout", 0.12)),
         pad_token_id=vocab.pad_id,
         engineered_dim=int(cfg.get("engineered_dim", 288)),
         use_engineered_features=bool(cfg.get("stage1_use_engineered_features", True)),
-        use_attention_pool=bool(cfg.get("use_attention_pool", True)),
-        # TCN parameters
-        use_tcn=use_tcn,
-        tcn_hidden=tcn_hidden,
-        tcn_levels=tcn_levels,
-        tcn_kernel=tcn_kernel,
-        multiscale_channels=multiscale_channels,
-        multiscale_kernels=multiscale_kernels,
-        lstm_hidden=lstm_hidden,
-        # V3 architecture parameters
-        post_cnn_transformer_layers=post_cnn_transformer_layers,
-        engineered_mlp_hidden=engineered_mlp_hidden,
-        engineered_mlp_output=engineered_mlp_output,
-        fusion_hidden=fusion_hidden,
-        # Positional embedding max length
-        max_seq_len=int(cfg.get("max_bp_len", 81)) - vocab.k + 1,
+        pooling_type=pooling_type,
+        engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 256)),
+        engineered_mlp_output=int(cfg.get("engineered_mlp_output", 128)),
+        classifier_hidden=classifier_hidden,
+        classifier_dropout=classifier_dropout,
+        drop_path_rate=float(cfg.get("drop_path_rate", 0.1)),
+        max_seq_len=max_seq_len,
+        use_relative_position_bias=bool(cfg.get("use_relative_position_bias", False)),
+        relative_position_num_buckets=int(cfg.get("relative_position_num_buckets", 32)),
+        relative_position_max_distance=int(cfg.get("relative_position_max_distance", 128)),
+        use_glu_ffn=bool(cfg.get("use_glu_ffn", False)),
+        glu_activation=str(cfg.get("glu_activation", "gelu")),
     ).to(device)
     return model
 

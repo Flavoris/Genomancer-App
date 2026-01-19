@@ -32,7 +32,7 @@ sys.path.insert(0, str(TRAINING_DIR))
 import yaml
 
 from dataset import build_dataloaders
-from ensemble_infer import build_model, load_checkpoint
+from ensemble_infer import build_model, infer_model_architecture, load_checkpoint
 
 
 def select_device() -> torch.device:
@@ -42,82 +42,6 @@ def select_device() -> torch.device:
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
-
-
-def infer_model_architecture(checkpoint_path: Path) -> dict:
-    """
-    Infer model architecture parameters from checkpoint state_dict.
-
-    Returns a dict of config overrides to match the checkpoint's architecture.
-    """
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    state = checkpoint.get("model_state", checkpoint)
-
-    overrides = {}
-
-    # Count encoder layers
-    encoder_layers = [k for k in state.keys() if "_full_encoder.layers." in k]
-    if encoder_layers:
-        layer_nums = set(int(k.split("layers.")[1].split(".")[0]) for k in encoder_layers)
-        overrides["transformer_layers"] = len(layer_nums)
-
-    # Count TCN levels
-    tcn_layers = [k for k in state.keys() if "tcn.network." in k]
-    if tcn_layers:
-        tcn_nums = set(int(k.split("network.")[1].split(".")[0]) for k in tcn_layers)
-        overrides["tcn_levels"] = len(tcn_nums)
-
-    # Count multiscale convs (infer kernel sizes from conv weights)
-    mscale_convs = [k for k in state.keys() if "multiscale.convs." in k and ".weight" in k]
-    if mscale_convs:
-        kernel_sizes = []
-        for k in sorted(mscale_convs):
-            weight = state[k]
-            kernel_sizes.append(weight.shape[2])  # Conv1d weight shape: (out_ch, in_ch, kernel)
-        overrides["multiscale_kernels"] = kernel_sizes
-
-    # Infer post-CNN transformer layers
-    post_cnn_layers = [k for k in state.keys() if "post_cnn_transformer.layers." in k]
-    if post_cnn_layers:
-        layer_nums = set(int(k.split("layers.")[1].split(".")[0]) for k in post_cnn_layers)
-        overrides["post_cnn_transformer_layers"] = len(layer_nums)
-
-    # Infer embedding dim from embedding weight
-    if "embedding.weight" in state:
-        overrides["embedding_dim"] = state["embedding.weight"].shape[1]
-
-    # Infer transformer FF dim from FFN weights
-    ffn_keys = [k for k in state.keys() if "_full_encoder.layers.0.ffn.0.weight" in k]
-    if ffn_keys:
-        overrides["transformer_ff_dim"] = state[ffn_keys[0]].shape[0]
-
-    # Infer TCN hidden from TCN output
-    tcn_out_keys = [k for k in state.keys() if "tcn.network.0.conv1.conv.weight" in k]
-    if tcn_out_keys:
-        overrides["tcn_hidden"] = state[tcn_out_keys[0]].shape[0]
-
-    # Infer multiscale channels
-    if mscale_convs:
-        overrides["multiscale_channels"] = state[sorted(mscale_convs)[0]].shape[0]
-
-    # Infer engineered MLP dimensions
-    eng_mlp_keys = [k for k in state.keys() if "engineered_mlp.mlp." in k and "weight" in k]
-    if eng_mlp_keys:
-        # First linear layer: input -> hidden
-        first_linear = [k for k in eng_mlp_keys if "mlp.0.weight" in k]
-        if first_linear:
-            overrides["engineered_mlp_hidden"] = state[first_linear[0]].shape[0]
-        # Last linear layer: hidden -> output
-        last_linear = [k for k in eng_mlp_keys if "mlp.8.weight" in k]
-        if last_linear:
-            overrides["engineered_mlp_output"] = state[last_linear[0]].shape[0]
-
-    # Infer fusion hidden
-    fusion_keys = [k for k in state.keys() if "fusion.seq_proj.weight" in k]
-    if fusion_keys:
-        overrides["fusion_hidden"] = state[fusion_keys[0]].shape[0]
-
-    return overrides
 
 
 class TemperatureScaler(nn.Module):

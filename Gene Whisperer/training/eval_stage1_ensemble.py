@@ -135,10 +135,10 @@ def calculate_metrics(probabilities: np.ndarray, labels: np.ndarray) -> Dict[str
 # Small model architecture parameters (must match train_stage1_k*_small.sh)
 SMALL_MODEL_CONFIG = {
     "embedding_dim": 192,
-    "transformer_layers": 0,
-    "post_cnn_transformer_layers": 1,
-    "tcn_hidden": 192,
-    "multiscale_channels": 48,
+    "transformer_layers": 4,
+    "transformer_heads": 4,
+    "transformer_ff_dim": 768,
+    "transformer_dropout": 0.12,
 }
 
 
@@ -235,8 +235,12 @@ def main() -> None:
     # Merge small model config with base config
     # The small model training scripts use reduced architecture parameters
     model_cfg = {**cfg, **SMALL_MODEL_CONFIG}
-    LOGGER.info("Using small model config: embedding_dim=%d, transformer_layers=%d, tcn_hidden=%d",
-                model_cfg["embedding_dim"], model_cfg["transformer_layers"], model_cfg["tcn_hidden"])
+    LOGGER.info(
+        "Using small model config: embedding_dim=%d, transformer_layers=%d, transformer_heads=%d",
+        model_cfg["embedding_dim"],
+        model_cfg["transformer_layers"],
+        model_cfg["transformer_heads"],
+    )
 
     # Build and load models
     LOGGER.info("Building and loading k=4 model...")

@@ -83,6 +83,9 @@ class KmerVocabulary:
             idx for idx, token in enumerate(self.itos) if token not in {mask_token, unk_token, pad_token}
         ]
 
+    def __len__(self) -> int:
+        return len(self.itos)
+
     @classmethod
     def build_from_sequences(
         cls,

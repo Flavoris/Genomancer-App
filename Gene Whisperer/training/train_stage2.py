@@ -28,7 +28,7 @@ from torch.optim.swa_utils import AveragedModel, SWALR
 
 from amp_utils import get_amp_context, log_amp_status, create_grad_scaler
 from dataset import build_dataloaders
-from model import GeneWhispererStage1Legacy, GeneWhispererStage2
+from model import GeneWhispererStage2
 
 import train_stage1 as stage1
 
@@ -79,59 +79,6 @@ def _resolve_optional_path(value: Any, *, base_dir: Path) -> Optional[Path]:
     if not candidate.is_absolute():
         candidate = (base_dir / candidate).resolve()
     return candidate
-
-
-def _normalize_state_dict(state: dict[str, Any]) -> dict[str, Any]:
-    if not state:
-        return state
-    if any(k.startswith("module.") for k in state):
-        return {k.removeprefix("module."): v for k, v in state.items()}
-    return state
-
-
-def _load_checkpoint_compatible(model: nn.Module, checkpoint_path: Path, *, device: torch.device) -> int:
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    if isinstance(checkpoint, dict) and "model_state" in checkpoint:
-        state = checkpoint["model_state"]
-    elif isinstance(checkpoint, dict):
-        state = checkpoint
-    else:
-        raise ValueError(f"Unsupported checkpoint format: {type(checkpoint)}")
-
-    state = _normalize_state_dict(state)
-    model_state = model.state_dict()
-
-    compatible: dict[str, Any] = {}
-    skipped: list[str] = []
-    for key, value in state.items():
-        target = model_state.get(key)
-        if target is None:
-            skipped.append(key)
-            continue
-        if getattr(target, "shape", None) != getattr(value, "shape", None):
-            skipped.append(key)
-            continue
-        compatible[key] = value
-
-    missing = [k for k in model_state.keys() if k not in compatible]
-    model.load_state_dict(compatible, strict=False)
-
-    loaded = len(compatible)
-    LOGGER.info(
-        "Loaded %d compatible tensors from %s (skipped=%d, missing=%d)",
-        loaded,
-        checkpoint_path,
-        len(skipped),
-        len(missing),
-    )
-    if skipped:
-        preview = ", ".join(skipped[:5])
-        suffix = "…" if len(skipped) > 5 else ""
-        LOGGER.info("Skipped keys (preview): %s%s", preview, suffix)
-    if loaded == 0:
-        LOGGER.warning("No compatible tensors loaded from %s", checkpoint_path)
-
-    return loaded
 
 
 def main() -> None:
@@ -333,11 +280,11 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "ablation_disable_wandb": bool(cfg_run.get("ablation_disable_wandb", False)),
         "stage2_use_engineered_features": bool(cfg_run.get("stage2_use_engineered_features", True)),
         # Model architecture
-        "embedding_dim": int(cfg_run.get("embedding_dim", 256)),
-        "transformer_layers": int(cfg_run.get("transformer_layers", 6)),
-        "transformer_heads": int(cfg_run.get("transformer_heads", 8)),
-        "transformer_ff_dim": int(cfg_run.get("transformer_ff_dim", 1024)),
-        "transformer_dropout": float(cfg_run.get("transformer_dropout", 0.15)),
+        "embedding_dim": int(cfg_run.get("embedding_dim", 384)),
+        "transformer_layers": int(cfg_run.get("transformer_layers", 12)),
+        "transformer_heads": int(cfg_run.get("transformer_heads", 12)),
+        "transformer_ff_dim": int(cfg_run.get("transformer_ff_dim", 1536)),
+        "transformer_dropout": float(cfg_run.get("transformer_dropout", 0.12)),
         # Optimizer
         "lr": float(cfg_run.get("lr", 2e-4)),
         "weight_decay": float(cfg_run.get("weight_decay", 0.02)),
@@ -347,10 +294,9 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "kmer": stage2_kmer,  # Resolved stage2_kmer (from --kmer, stage2_kmer, or kmer fallback)
         # Engineered features
         "engineered_dim": int(cfg_run.get("engineered_dim", 288)),
-        # Architecture toggles
-        "use_attention_pool": bool(cfg_run.get("use_attention_pool", True)),
-        "use_tcn": bool(cfg_run.get("use_tcn", True)),
-        "post_cnn_transformer_layers": int(cfg_run.get("post_cnn_transformer_layers", 3)),
+        "engineered_mlp_hidden": int(cfg_run.get("engineered_mlp_hidden", 256)),
+        "engineered_mlp_output": int(cfg_run.get("engineered_mlp_output", 128)),
+        "fusion_hidden": int(cfg_run.get("fusion_hidden", 256)),
         "stage2_mlm_transfer_mode": str(cfg_run.get("stage2_mlm_transfer_mode", "embed_only")),
         # Stage 2 head configuration
         "stage2_head_type": str(cfg_run.get("stage2_head_type", "transformer")),
@@ -407,27 +353,19 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     if stage_vocab is None:
         raise ValueError("Stage 2 dataset is missing vocabulary")
 
-    vocab_size = len(stage_vocab.itos)
+    vocab_size = len(stage_vocab)
     pad_token_id = stage_vocab.pad_id
     kmer = stage_vocab.k
 
-    embedding_dim = int(cfg_run.get("embedding_dim", 192))
-    transformer_layers = int(cfg_run.get("transformer_layers", 6))
-    transformer_heads = int(cfg_run.get("transformer_heads", 8))
-    transformer_ff_dim = int(cfg_run.get("transformer_ff_dim", 384))
-    transformer_dropout = float(cfg_run.get("transformer_dropout", 0.15))
+    max_bp_len = int(cfg_run.get("max_bp_len", 81))
+    max_seq_len = max_bp_len - kmer + 1
 
-    use_attention_pool = bool(cfg_run.get("use_attention_pool", True))
-    use_tcn = bool(cfg_run.get("use_tcn", True))
-    tcn_hidden = int(cfg_run.get("tcn_hidden", 256))
-    tcn_levels = int(cfg_run.get("tcn_levels", 4))
-    tcn_kernel = int(cfg_run.get("tcn_kernel", 3))
-    multiscale_channels = int(cfg_run.get("multiscale_channels", 64))
-    multiscale_kernels_cfg = cfg_run.get("multiscale_kernels", [3, 5, 7, 9, 15])
-    multiscale_kernels = tuple(multiscale_kernels_cfg)
-    lstm_hidden = int(cfg_run.get("lstm_hidden", 192))
+    embedding_dim = int(cfg_run.get("embedding_dim", 384))
+    transformer_layers = int(cfg_run.get("transformer_layers", 12))
+    transformer_heads = int(cfg_run.get("transformer_heads", 12))
+    transformer_ff_dim = int(cfg_run.get("transformer_ff_dim", 1536))
+    transformer_dropout = float(cfg_run.get("transformer_dropout", 0.12))
 
-    post_cnn_transformer_layers = int(cfg_run.get("post_cnn_transformer_layers", 3))
     engineered_mlp_hidden = int(cfg_run.get("engineered_mlp_hidden", 256))
     engineered_mlp_output = int(cfg_run.get("engineered_mlp_output", 128))
     fusion_hidden = int(cfg_run.get("fusion_hidden", 256))
@@ -458,17 +396,9 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         ff_dim=transformer_ff_dim,
         dropout=transformer_dropout,
         pad_token_id=pad_token_id,
+        max_seq_len=max_seq_len,
         engineered_dim=engineered_dim,
         use_engineered_features=stage2_use_engineered,
-        use_attention_pool=use_attention_pool,
-        use_tcn=use_tcn,
-        tcn_hidden=tcn_hidden,
-        tcn_levels=tcn_levels,
-        tcn_kernel=tcn_kernel,
-        multiscale_channels=multiscale_channels,
-        multiscale_kernels=multiscale_kernels,
-        lstm_hidden=lstm_hidden,
-        post_cnn_transformer_layers=post_cnn_transformer_layers,
         # Stage 2 head configuration
         stage2_head_type=stage2_head_type,
         stage2_transformer_layers=stage2_transformer_layers,
@@ -484,23 +414,28 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         fusion_hidden=fusion_hidden,
         # Stochastic depth (drop path)
         drop_path_rate=stage2_drop_path_rate,
+        use_relative_position_bias=bool(cfg_run.get("use_relative_position_bias", False)),
+        relative_position_num_buckets=int(cfg_run.get("relative_position_num_buckets", 32)),
+        relative_position_max_distance=int(cfg_run.get("relative_position_max_distance", 128)),
+        use_glu_ffn=bool(cfg_run.get("use_glu_ffn", False)),
+        glu_activation=str(cfg_run.get("glu_activation", "gelu")),
     ).to(device)
 
     LOGGER.info("=" * 60)
-    LOGGER.info("MODEL ARCHITECTURE (Stage 2)")
+    LOGGER.info("MODEL ARCHITECTURE (Simplified Stage 2)")
     LOGGER.info("=" * 60)
-    LOGGER.info("Model: GeneWhispererStage2 (dedicated strength head)")
+    LOGGER.info("Model: GeneWhispererStage2 (simplified backbone + strength head)")
     LOGGER.info("Task: strong vs weak promoters (binary)")
-    LOGGER.info("Architecture: Embedding → CNN/TCN → Transformer → StrengthHead → Fusion → Classifier")
-    if use_tcn:
-        LOGGER.info(
-            "CNN/TCN: Multi-scale kernels %s → TCN(%d levels, %d hidden, k=%d)",
-            multiscale_kernels,
-            tcn_levels,
-            tcn_hidden,
-            tcn_kernel,
-        )
-    LOGGER.info("Post-CNN Transformer: %d layers, %d heads", post_cnn_transformer_layers, transformer_heads)
+    LOGGER.info(
+        "Flow: Embedding → Transformer(%d layers) → Strength Head → Classifier",
+        transformer_layers,
+    )
+    LOGGER.info(
+        "Backbone: %d heads, ff_dim=%d, dropout=%.2f",
+        transformer_heads,
+        transformer_ff_dim,
+        transformer_dropout,
+    )
     LOGGER.info("Strength Head Type: %s", stage2_head_type)
     if stage2_head_type in {"transformer", "both"}:
         LOGGER.info(
@@ -579,10 +514,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 checkpoint_path, strict=False, transfer_mode=transfer_mode
             )
             if transfer_mode == "embed_plus_adapter":
-                LOGGER.info(
-                    "Pretrained MLM weights loaded (embedding + %d transformer layers)",
-                    post_cnn_transformer_layers,
-                )
+                LOGGER.info("Pretrained MLM weights loaded (encoder weights)")
             else:
                 LOGGER.info("Pretrained MLM weights loaded (embedding only)")
             mlm_loaded = True

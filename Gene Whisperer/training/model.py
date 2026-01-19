@@ -815,6 +815,7 @@ class GeneWhispererStage1(nn.Module):
         engineered_dim: int = 288,
         use_engineered_features: bool = True,
         use_attention_pool: bool = True,
+        pooling_type: Optional[str] = None,
         engineered_mlp_hidden: int = 512,
         engineered_mlp_output: int = 256,
         engineered_mlp_pre_norm: bool = True,
@@ -836,6 +837,15 @@ class GeneWhispererStage1(nn.Module):
         glu_activation: str = "gelu",
     ):
         super().__init__()
+
+        if pooling_type is not None:
+            normalized_pooling = pooling_type.strip().lower()
+            if normalized_pooling == "attention":
+                use_attention_pool = True
+            elif normalized_pooling == "mean":
+                use_attention_pool = False
+            else:
+                raise ValueError(f"Unsupported pooling_type: {pooling_type}")
 
         self.pad_token_id = pad_token_id
         self.use_attention_pool = use_attention_pool
@@ -1739,13 +1749,8 @@ class GeneWhispererStage2(nn.Module):
     """
     Stage 2 model for strong vs weak promoter classification.
 
-    Reuses the legacy backbone from GeneWhispererStage1Legacy:
-    - Embedding layer
-    - CNN/TCN for local pattern extraction
-    - Post-CNN Transformer for global context
-
-    Instead of immediately pooling, returns token-level features (B, L, D)
-    and applies a configurable "strength head":
+    Reuses the simplified Stage 1 transformer backbone (DNAEncoder) and applies
+    a configurable strength head on token-level features:
     - "transformer": StrengthTransformerHead (2 layers, 4 heads)
     - "bilstm": StrengthBiLSTMHead (BiLSTM hidden=128)
     - "both": CombinedStrengthHead (transformer + BiLSTM)
@@ -1766,19 +1771,7 @@ class GeneWhispererStage2(nn.Module):
         encoder: Optional[DNAEncoder] = None,
         engineered_dim: int = 288,
         use_engineered_features: bool = True,
-        use_attention_pool: bool = True,
-        # TCN parameters
-        use_tcn: bool = True,
-        tcn_hidden: int = 256,
-        tcn_levels: int = 4,
-        tcn_kernel: int = 3,
-        # Multi-scale CNN parameters
-        multiscale_channels: int = 64,
-        multiscale_kernels: Tuple[int, ...] = (3, 5, 7, 9, 15),
-        # LSTM parameters (kept for compatibility)
-        lstm_hidden: int = 192,
-        # Post-CNN transformer parameters
-        post_cnn_transformer_layers: int = 3,
+        max_seq_len: int = 256,
         # Stage 2 head configuration
         stage2_head_type: str = "transformer",  # "transformer", "bilstm", or "both"
         stage2_transformer_layers: int = 2,
@@ -1808,13 +1801,8 @@ class GeneWhispererStage2(nn.Module):
     ):
         super().__init__()
 
-        self.use_tcn = use_tcn
         self.pad_token_id = pad_token_id
         self.stage2_head_type = stage2_head_type
-
-        # Step 1: Embedding layer (from DNAEncoder, but we only use embedding)
-        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_token_id)
-        self.embed_dropout = nn.Dropout(dropout)
 
         # Store the full encoder for MLM weight loading compatibility
         self._full_encoder = encoder or DNAEncoder(
@@ -1826,6 +1814,7 @@ class GeneWhispererStage2(nn.Module):
             ff_dim=ff_dim,
             dropout=dropout,
             pad_token_id=pad_token_id,
+            max_seq_len=max_seq_len,
             drop_path_rate=drop_path_rate,
             use_relative_position_bias=use_relative_position_bias,
             relative_position_num_buckets=relative_position_num_buckets,
@@ -1833,46 +1822,13 @@ class GeneWhispererStage2(nn.Module):
             use_glu_ffn=use_glu_ffn,
             glu_activation=glu_activation,
         )
-        # Copy embedding weights from encoder
-        self.embedding.weight = self._full_encoder.embedding.weight
+        self.embedding = self._full_encoder.embedding
+        encoder_dim = self._full_encoder.embedding_dim
 
-        # Step 2: CNN/TCN for local pattern extraction
-        if use_tcn:
-            self.feature_extractor = MultiScaleTCN(
-                in_channels=embedding_dim,
-                multiscale_out_per_branch=multiscale_channels,
-                multiscale_kernels=multiscale_kernels,
-                tcn_hidden=tcn_hidden,
-                tcn_levels=tcn_levels,
-                tcn_kernel=tcn_kernel,
-                dropout=dropout,
-            )
-            cnn_out_dim = tcn_hidden
-        else:
-            self.conv = nn.Conv1d(embedding_dim, 256, kernel_size=7, padding=3)
-            self.conv_bn = nn.BatchNorm1d(256)
-            self.conv_act = nn.GELU()
-            cnn_out_dim = 256
-
-        # Step 3: Transformer adapter for global contextualization
-        self.post_cnn_transformer = PostCNNTransformerAdapter(
-            input_dim=cnn_out_dim,
-            transformer_dim=embedding_dim,
-            num_layers=post_cnn_transformer_layers,
-            num_heads=num_heads,
-            ff_dim=ff_dim,
-            dropout=dropout,
-            use_glu_ffn=use_glu_ffn,
-            glu_activation=glu_activation,
-        )
-
-        # Token-level feature dimension after backbone
-        self.token_feature_dim = cnn_out_dim
-
-        # Step 4: Stage 2 strength head (configurable)
+        # Stage 2 strength head (configurable)
         if stage2_head_type == "transformer":
             self.strength_head = StrengthTransformerHead(
-                input_dim=cnn_out_dim,
+                input_dim=encoder_dim,
                 n_layers=stage2_transformer_layers,
                 n_heads=stage2_transformer_heads,
                 ff_dim=stage2_transformer_ff_dim,
@@ -1880,14 +1836,14 @@ class GeneWhispererStage2(nn.Module):
             )
         elif stage2_head_type == "bilstm":
             self.strength_head = StrengthBiLSTMHead(
-                input_dim=cnn_out_dim,
+                input_dim=encoder_dim,
                 hidden_dim=stage2_bilstm_hidden,
                 num_layers=stage2_bilstm_layers,
                 dropout=dropout,
             )
         elif stage2_head_type == "both":
             self.strength_head = CombinedStrengthHead(
-                input_dim=cnn_out_dim,
+                input_dim=encoder_dim,
                 transformer_layers=stage2_transformer_layers,
                 transformer_heads=stage2_transformer_heads,
                 transformer_ff_dim=stage2_transformer_ff_dim,
@@ -1902,7 +1858,7 @@ class GeneWhispererStage2(nn.Module):
 
         head_out_dim = self.strength_head.output_dim
 
-        # Step 5: Engineered features processing (optional)
+        # Engineered features processing (optional)
         self.use_engineered_features = use_engineered_features and engineered_dim > 0
         self.engineered_dim = engineered_dim
 
@@ -1928,9 +1884,11 @@ class GeneWhispererStage2(nn.Module):
             )
             classifier_in = self.fusion.output_dim
         else:
+            self.engineered_mlp = None
+            self.fusion = None
             classifier_in = head_out_dim
 
-        # Step 6: Final classifier (small MLP -> logits)
+        # Final classifier (small MLP -> logits)
         classifier_dropout = dropout * 1.2
         self.classifier = nn.Sequential(
             nn.Linear(classifier_in, classifier_in // 2),
@@ -1966,11 +1924,8 @@ class GeneWhispererStage2(nn.Module):
             raise ValueError(f"Unsupported transfer_mode: {transfer_mode}")
 
         self._full_encoder.load_mlm_weights(checkpoint_path, strict=strict)
-
         if transfer_mode == "embed_plus_adapter":
-            num_layers = len(self.post_cnn_transformer.layers)
-            loaded = self.post_cnn_transformer.load_pretrained_layers(self._full_encoder, num_layers)
-            LOGGER.info("Transferred %d transformer layers to post-CNN adapter", loaded)
+            LOGGER.info("Simplified backbone ignores adapter transfer; loaded encoder weights only.")
 
     def load_stage1_weights(
         self,
@@ -1980,8 +1935,8 @@ class GeneWhispererStage2(nn.Module):
         """
         Load Stage 1 checkpoint weights into the backbone.
 
-        Loads compatible backbone weights (embedding, CNN/TCN, post_cnn_transformer)
-        and skips classifier/head weights that don't match.
+        Loads compatible backbone weights (embedding + transformer encoder) and
+        skips classifier/head weights that don't match.
 
         Args:
             checkpoint_path: Path to Stage 1 checkpoint
@@ -2050,42 +2005,21 @@ class GeneWhispererStage2(nn.Module):
             return tokens.eq(self.pad_token_id)
         return None
 
-    def _backbone_forward(
+    def _encode_tokens(
         self,
         tokens: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Process sequence through backbone: embedding → CNN/TCN → Transformer.
-
-        Returns token-level features (B, L, D) instead of pooling.
-
-        Args:
-            tokens: (B, L) token indices
-        Returns:
-            (B, L, D) token-level features
-        """
-        # Step 1: Embedding
-        x = self.embedding(tokens)  # (B, L, embedding_dim)
-        x = self.embed_dropout(x)
-
-        # Step 2: CNN/TCN (transpose for conv: B, L, D -> B, D, L)
-        x = x.transpose(1, 2)
-
-        if self.use_tcn:
-            x = self.feature_extractor(x)  # (B, tcn_hidden, L)
-        else:
-            x = self.conv(x)
-            x = self.conv_bn(x)
-            x = self.conv_act(x)
-
-        # Transpose back: (B, D, L) -> (B, L, D)
-        x = x.transpose(1, 2)
-
-        # Step 3: Post-CNN Transformer for global context
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Encode tokens with the full transformer and return token features + mask."""
+        seq_len = tokens.size(1)
+        max_len = self._full_encoder.pos_embedding.num_embeddings
+        if seq_len > max_len:
+            raise ValueError(
+                f"Sequence length {seq_len} exceeds max_seq_len={max_len}. "
+                "Increase max_seq_len or shorten inputs."
+            )
         padding_mask = self._get_padding_mask(tokens)
-        x = self.post_cnn_transformer(x, key_padding_mask=padding_mask)
-
-        return x  # (B, L, D) token-level features
+        token_features = self._full_encoder(tokens, key_padding_mask=padding_mask)
+        return token_features, padding_mask
 
     def forward(
         self,
@@ -2102,10 +2036,9 @@ class GeneWhispererStage2(nn.Module):
             (B, 1) strength logits (1 = strong, 0 = weak)
         """
         # Get token-level features from backbone
-        token_features = self._backbone_forward(tokens)  # (B, L, D)
+        token_features, padding_mask = self._encode_tokens(tokens)
 
         # Apply strength head
-        padding_mask = self._get_padding_mask(tokens)
         pooled = self.strength_head(token_features, padding_mask)  # (B, head_out_dim)
 
         # Fuse with engineered features if available

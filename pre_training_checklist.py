@@ -55,7 +55,7 @@ CHECKS: Sequence[ConfigCheck] = (
     ConfigCheck(
         label="stage1_use_focal_loss",
         keys=("stage1_use_focal_loss",),
-        expected=True,
+        expected=False,
         operator="==",
         sections=("loss",),
     ),

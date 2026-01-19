@@ -1,2 +1,1 @@
-# Large artifacts are tracked with Git LFS.
-*.pt filter=lfs diff=lfs merge=lfs -text
+# Git LFS filters are disabled for this repo.

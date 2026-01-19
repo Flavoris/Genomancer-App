@@ -72,7 +72,6 @@ def test_stage1_ckpt_skips_mlm_loading():
         pad_token_id=0,
         engineered_dim=128,
         use_engineered_features=True,
-        use_tcn=True,
         stage2_head_type="transformer",
     )
 
@@ -158,7 +157,6 @@ def test_stage1_overwrites_initial_weights():
         pad_token_id=0,
         engineered_dim=128,
         use_engineered_features=True,
-        use_tcn=True,
         stage2_head_type="transformer",
     )
 
