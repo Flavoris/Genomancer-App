@@ -49,34 +49,6 @@ pad_token_id: 66
 vocab_cache_dir: ../artifacts/vocabs
 
 # =============================================================================
-# TCN + MULTI-SCALE CNN (KEY for 90%+ accuracy)
-# =============================================================================
-# Based on iPro-TCN and PROCABLES papers
-# Multi-scale CNN captures different motif lengths (TATA box, -10/-35 elements)
-# TCN provides exponentially growing receptive field via dilated convolutions
-
-use_tcn: true  # Set to false to use original single CNN for comparison
-
-# TCN (Temporal Convolutional Network) settings
-tcn_hidden: 256       # Hidden dimension in TCN blocks
-tcn_levels: 4         # Number of dilated conv levels (dilation: 1,2,4,8)
-tcn_kernel: 3         # Kernel size for dilated convolutions
-
-# Multi-scale CNN settings (parallel convolutions for different motif lengths)
-multiscale_channels: 64           # Channels per kernel size branch
-multiscale_kernels: [3, 5, 7, 9, 15]  # Kernel sizes to capture 3-15bp motifs
-
-# BiLSTM settings
-lstm_hidden: 192      # Hidden size (output will be 2x for bidirectional)
-
-# =============================================================================
-# POST-CNN TRANSFORMER (Global context after local feature extraction)
-# =============================================================================
-# Lightweight transformer applied AFTER CNN/TCN for global contextualization
-# This follows the new architecture order: Embedding → CNN/TCN → Transformer → Pool
-post_cnn_transformer_layers: 3  # Fewer layers since CNN/TCN already extracted features
-
-# =============================================================================
 # ENGINEERED FEATURES (Enhanced with separate MLP branch)
 # =============================================================================
 # TNC(64) + PseEIIP(64) + CKSNAP(96) + PSTNP(64) = 288

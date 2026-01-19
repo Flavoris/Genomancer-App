@@ -72,15 +72,7 @@ multi_scale_kmers:
 - 4
 - 5
 - 6
-multiscale_channels: 64
-multiscale_kernels:
-- 3
-- 5
-- 7
-- 9
-- 15
 pad_token_id: 66
-post_cnn_transformer_layers: 3
 seed: 1337
 stage1_checkpoint_name: null
 stage1_embed_plot_epoch: null
@@ -108,9 +100,6 @@ stage2_val: ../data/stage2_val.tsv
 swa_anneal_epochs: 10
 swa_lr: 5.0e-05
 swa_start_epoch: 60
-tcn_hidden: 256
-tcn_kernel: 3
-tcn_levels: 4
 train_val_split: 0.9
 transformer_dropout: 0.15
 transformer_ff_dim: 1024
@@ -120,7 +109,6 @@ use_attention_pool: true
 use_mixup: true
 use_multi_scale: true
 use_swa: true
-use_tcn: true
 vocab_cache_dir: ../artifacts/vocabs
 vocab_size: 67
 warmup_ratio: 0.15

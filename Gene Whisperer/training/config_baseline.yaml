@@ -43,15 +43,6 @@ vocab_size: 67
 pad_token_id: 66
 vocab_cache_dir: ../artifacts/vocabs
 
-# TCN + Multi-scale CNN
-use_tcn: true
-tcn_hidden: 256
-tcn_levels: 4
-tcn_kernel: 3
-multiscale_channels: 64
-multiscale_kernels: [3, 5, 7, 9, 15]
-lstm_hidden: 192
-post_cnn_transformer_layers: 3
 stage1_use_engineered_features: true
 engineered_dim: 288
 engineered_mlp_hidden: 256

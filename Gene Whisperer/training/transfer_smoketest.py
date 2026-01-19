@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 
 from dataset import build_dataloaders
-from model import GeneWhispererStage1Legacy
+from model import GeneWhispererStage1
 from pretrain_mlm import run_mlm_pretrain
 from train_stage1 import load_config, run_stage1_training
 from train_stage2 import run_stage2_training
@@ -109,13 +109,10 @@ def _load_checkpoint_state(path: Path) -> Dict[str, Any]:
 
 def _build_stage1_model(
     cfg: dict, *, engineered_dim: int, use_engineered: bool
-) -> GeneWhispererStage1Legacy:
-    multiscale_kernels = cfg.get("multiscale_kernels", [3, 5, 7, 9, 15])
-    if not isinstance(multiscale_kernels, (list, tuple)):
-        multiscale_kernels = [3, 5, 7, 9, 15]
+) -> GeneWhispererStage1:
     pad_token_id = cfg.get("pad_token_id")
     pad_token_id = None if pad_token_id is None else int(pad_token_id)
-    return GeneWhispererStage1Legacy(
+    return GeneWhispererStage1(
         vocab_size=int(cfg.get("vocab_size", 67)),
         kmer=int(cfg.get("kmer", 3)),
         embedding_dim=int(cfg.get("embedding_dim", 256)),
@@ -127,17 +124,8 @@ def _build_stage1_model(
         engineered_dim=engineered_dim,
         use_engineered_features=use_engineered,
         use_attention_pool=bool(cfg.get("use_attention_pool", True)),
-        use_tcn=bool(cfg.get("use_tcn", True)),
-        tcn_hidden=int(cfg.get("tcn_hidden", 256)),
-        tcn_levels=int(cfg.get("tcn_levels", 4)),
-        tcn_kernel=int(cfg.get("tcn_kernel", 3)),
-        multiscale_channels=int(cfg.get("multiscale_channels", 64)),
-        multiscale_kernels=tuple(int(x) for x in multiscale_kernels),
-        lstm_hidden=int(cfg.get("lstm_hidden", 192)),
-        post_cnn_transformer_layers=int(cfg.get("post_cnn_transformer_layers", 3)),
         engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 256)),
         engineered_mlp_output=int(cfg.get("engineered_mlp_output", 128)),
-        fusion_hidden=int(cfg.get("fusion_hidden", 256)),
     )
 
 
