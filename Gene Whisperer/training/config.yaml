@@ -104,6 +104,7 @@ training: &training
   stage2_lr: 0.00001  # Stage 2 can use lower LR for fine-tuning
   weight_decay: 0.01
   warmup_ratio: 0.10
+  min_lr_ratio: 0.01  # Minimum LR as fraction of peak
   epochs: 100
   early_stopping_patience: 15
   grad_accum_steps: 4

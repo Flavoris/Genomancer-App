@@ -967,27 +967,25 @@ def get_cosine_schedule_with_warmup(
     optimizer: torch.optim.Optimizer,
     num_warmup_steps: int,
     num_training_steps: int,
-    num_cycles: float = 0.5,
-    min_lr_ratio: float = 0.05,  # Reduced from 0.1
+    min_lr_ratio: float = 0.01,
 ) -> torch.optim.lr_scheduler.LambdaLR:
     """
-    Create a schedule with warmup then cosine decay.
+    Create a schedule with linear warmup followed by cosine decay.
     
-    Warmup helps stabilize early training, cosine decay provides
-    smooth annealing to a minimum learning rate.
+    Warmup stabilizes early training; cosine decay anneals smoothly down
+    to a minimum learning rate ratio.
     """
     def lr_lambda(current_step: int) -> float:
-        # Warmup
+        # Warmup phase: linear increase from 0 to 1.
         if current_step < num_warmup_steps:
             return float(current_step) / float(max(1, num_warmup_steps))
         
-        # Cosine decay
+        # Decay phase: cosine from 1 down to min_lr_ratio.
         progress = float(current_step - num_warmup_steps) / float(
             max(1, num_training_steps - num_warmup_steps)
         )
-        cosine_decay = 0.5 * (1.0 + math.cos(math.pi * num_cycles * 2.0 * progress))
+        cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
         
-        # Don't decay below min_lr_ratio
         return max(min_lr_ratio, cosine_decay)
     
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -1292,6 +1290,9 @@ def run_epoch(
     param_norm_warn: float = 150.0,
     param_norm_cap: float = 200.0,
     eval_checkpoint_path: Optional[Path] = None,
+    total_training_steps: Optional[int] = None,
+    lr_log_interval: int = 100,
+    global_step_offset: int = 0,
     model_variant: str = "original",
 ) -> Dict[str, float]:
     """Run one epoch of training or evaluation.
@@ -1480,6 +1481,17 @@ def run_epoch(
                     
                     if scheduler is not None:
                         scheduler.step()
+
+                        if total_training_steps is not None and lr_log_interval > 0:
+                            global_step = global_step_offset + optimizer_step_count
+                            if global_step % lr_log_interval == 0:
+                                current_lr = scheduler.get_last_lr()[0]
+                                LOGGER.info(
+                                    "Step %d/%d, LR: %.2e",
+                                    global_step,
+                                    total_training_steps,
+                                    current_lr,
+                                )
                     
                     optimizer_step_count += 1
                     if max_optimizer_steps is not None and optimizer_step_count >= max_optimizer_steps:
@@ -1599,6 +1611,9 @@ def run_distillation_epoch(
     scaler: Optional[GradScalerType] = None,
     param_norm_warn: float = 150.0,
     param_norm_cap: float = 200.0,
+    total_training_steps: Optional[int] = None,
+    lr_log_interval: int = 100,
+    global_step_offset: int = 0,
 ) -> Dict[str, float]:
     """
     Run one epoch of distillation training.
@@ -1759,6 +1774,17 @@ def run_distillation_epoch(
 
                     if scheduler is not None:
                         scheduler.step()
+
+                        if total_training_steps is not None and lr_log_interval > 0:
+                            global_step = global_step_offset + optimizer_step_count
+                            if global_step % lr_log_interval == 0:
+                                current_lr = scheduler.get_last_lr()[0]
+                                LOGGER.info(
+                                    "Step %d/%d, LR: %.2e",
+                                    global_step,
+                                    total_training_steps,
+                                    current_lr,
+                                )
 
                     optimizer_step_count += 1
                     if max_optimizer_steps is not None and optimizer_step_count >= max_optimizer_steps:
@@ -2383,6 +2409,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "grad_accum_steps": int(cfg_run.get("grad_accum_steps", 4)),
         "grad_clip_norm": float(cfg_run.get("grad_clip_norm", 1.0)),
         "warmup_ratio": float(cfg_run.get("warmup_ratio", 0.15)),
+        "min_lr_ratio": float(cfg_run.get("min_lr_ratio", 0.01)),
         "early_stopping_patience": int(cfg_run.get("early_stopping_patience", 35)),
         "layer_lr_decay": float(cfg_run.get("layer_lr_decay", 0.8)),
         "stage1_drop_path_rate": float(get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)),
@@ -2677,19 +2704,29 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             foreach=optimizer_foreach,
         )
     
-    # Scheduler with warmup
+    # Scheduler with warmup (optimizer steps account for grad accumulation)
+    grad_accum_steps = max(1, int(cfg_run.get("grad_accum_steps", 2)))
     warmup_ratio = float(cfg_run.get("warmup_ratio", 0.15))
-    steps_per_epoch = len(train_loader)
-    total_steps = epochs * steps_per_epoch
+    steps_per_epoch = len(train_loader) // grad_accum_steps
+    total_steps = steps_per_epoch * epochs
     warmup_steps = int(warmup_ratio * total_steps)
-    
+    min_lr_ratio = float(cfg_run.get("min_lr_ratio", 0.01))
+    lr_log_interval = 100
+
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=warmup_steps,
         num_training_steps=total_steps,
-        min_lr_ratio=0.02,  # Decay to lower minimum
+        min_lr_ratio=min_lr_ratio,
     )
     LOGGER.info("Using cosine schedule with %d warmup steps", warmup_steps)
+    LOGGER.info(
+        "LR schedule: steps_per_epoch=%d total_steps=%d min_lr_ratio=%.3f",
+        steps_per_epoch,
+        total_steps,
+        min_lr_ratio,
+    )
+    LOGGER.info("LR log interval: every %d optimizer steps", lr_log_interval)
 
     # =========================================================================
     # Stage 1 effective hyperparameters (with stage1_ overrides and fallbacks)
@@ -2714,6 +2751,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("  stage1_swa_start_epoch: %d", stage1_swa_start_epoch)
     LOGGER.info("  stage1_swa_lr: %.2e", stage1_swa_lr)
     LOGGER.info("  stage1_drop_path_rate: %.3f", stage1_drop_path_rate)
+    LOGGER.info("  min_lr_ratio: %.3f", min_lr_ratio)
     LOGGER.info("  stage1_use_focal_loss: %s", stage1_use_focal_loss)
     LOGGER.info("=" * 60)
 
@@ -2911,7 +2949,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 LOGGER.info("Distillation setup complete. Training will use CE + KL loss.")
 
     # Training settings
-    grad_accum_steps = int(cfg_run.get("grad_accum_steps", 2))
     grad_clip_norm = float(cfg_run.get("grad_clip_norm", 1.0))
     param_norm_warn = float(cfg_run.get("param_norm_warn", 150.0))
     param_norm_cap = float(cfg_run.get("param_norm_cap", 200.0))
@@ -2978,6 +3015,9 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 scaler=scaler,
                 param_norm_warn=param_norm_warn,
                 param_norm_cap=param_norm_cap,
+                total_training_steps=total_steps,
+                lr_log_interval=lr_log_interval,
+                global_step_offset=global_optimizer_steps,
             )
         else:
             train_metrics = run_epoch(
@@ -2997,6 +3037,9 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 mixup_alpha=stage1_mixup_alpha,
                 amp_ctx=amp_ctx,
                 scaler=scaler,
+                total_training_steps=total_steps,
+                lr_log_interval=lr_log_interval,
+                global_step_offset=global_optimizer_steps,
                 model_variant=effective_variant,
             )
         global_optimizer_steps += int(train_metrics.get("optimizer_steps", 0))

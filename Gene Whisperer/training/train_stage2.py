@@ -288,6 +288,7 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         # Optimizer
         "lr": float(cfg_run.get("lr", 2e-4)),
         "weight_decay": float(cfg_run.get("weight_decay", 0.02)),
+        "min_lr_ratio": float(cfg_run.get("min_lr_ratio", 0.01)),
         # Data
         "batch_size": int(cfg_run.get("batch_size", 32)),
         "max_bp_len": int(cfg_run.get("max_bp_len", 81)),
@@ -593,18 +594,28 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             foreach=optimizer_foreach,
         )
 
+    grad_accum_steps = max(1, int(cfg_run.get("grad_accum_steps", 2)))
     warmup_ratio = float(cfg_run.get("warmup_ratio", 0.15))
-    steps_per_epoch = len(train_loader)
+    steps_per_epoch = len(train_loader) // grad_accum_steps
     total_steps = epochs * steps_per_epoch
     warmup_steps = int(warmup_ratio * total_steps)
+    min_lr_ratio = float(cfg_run.get("min_lr_ratio", 0.01))
+    lr_log_interval = 100
 
     scheduler = stage1.get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=warmup_steps,
         num_training_steps=total_steps,
-        min_lr_ratio=0.02,
+        min_lr_ratio=min_lr_ratio,
     )
     LOGGER.info("Using cosine schedule with %d warmup steps", warmup_steps)
+    LOGGER.info(
+        "LR schedule: steps_per_epoch=%d total_steps=%d min_lr_ratio=%.3f",
+        steps_per_epoch,
+        total_steps,
+        min_lr_ratio,
+    )
+    LOGGER.info("LR log interval: every %d optimizer steps", lr_log_interval)
 
     # Use effective Stage 2 SWA parameters (computed earlier with fallbacks)
     swa_model = None
@@ -704,7 +715,6 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             "best_epoch": 0,
         }
 
-    grad_accum_steps = int(cfg_run.get("grad_accum_steps", 2))
     grad_clip_norm = float(cfg_run.get("grad_clip_norm", 1.0))
     param_norm_warn = float(cfg_run.get("param_norm_warn", 150.0))
     param_norm_cap = float(cfg_run.get("param_norm_cap", 200.0))
@@ -764,6 +774,9 @@ def run_stage2_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             mixup_alpha=stage2_mixup_alpha,
             amp_ctx=amp_ctx,
             scaler=scaler,
+            total_training_steps=total_steps,
+            lr_log_interval=lr_log_interval,
+            global_step_offset=global_optimizer_steps,
         )
         global_optimizer_steps += int(train_metrics.get("optimizer_steps", 0))
         reached_max_steps = ablation_max_steps is not None and global_optimizer_steps >= ablation_max_steps

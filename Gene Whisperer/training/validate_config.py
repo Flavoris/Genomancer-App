@@ -71,6 +71,7 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     "lr": float,
     "weight_decay": float,
     "warmup_ratio": float,
+    "min_lr_ratio": float,
     "epochs": int,
     "early_stopping_patience": int,
     "grad_accum_steps": int,
