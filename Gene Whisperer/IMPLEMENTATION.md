@@ -1,6 +1,37 @@
-# Gene Whisperer Implementation Guide (Transformer, 2-Stage)
+# Gene Whisperer Implementation Guide (Simplified Transformer, 2-Stage)
 
-Step-by-step plan for adding the Gene Whisperer ML feature (PyTorch -> CoreML) to Genomancer with a shared Transformer backbone and two classification stages: (1) promoter detection; (2) strong vs weak promoters. All training code and artifacts live under `Gene Whisperer/`, with only the compiled `.mlmodel/.mlpackage` files and Swift glue added to the iOS app.
+Step-by-step plan for adding the Gene Whisperer ML feature (PyTorch -> CoreML) to Genomancer with a simplified Transformer backbone and two classification stages: (1) promoter detection; (2) strong vs weak promoters. All training code and artifacts live under `Gene Whisperer/`, with only the compiled `.mlmodel/.mlpackage` files and Swift glue added to the iOS app.
+
+## Model Architecture
+
+Gene Whisperer uses a simplified transformer-based architecture:
+
+```
+Input (DNA sequence) → k-mer Tokenization →
+Embedding (384-dim) → 12-Layer Transformer →
+Attention Pooling → [Concat Engineered Features] →
+Classifier → Promoter Prediction
+```
+
+### Why Simplified?
+
+Our ablation studies showed that CNN/TCN layers actually hurt performance:
+
+| Architecture | Accuracy | MCC | Parameters |
+|-------------|----------|-----|------------|
+| With CNN/TCN | 83.3% | 0.667 | 38.4M |
+| Without CNN/TCN | 84.1% | 0.683 | 23.9M |
+
+The transformer alone, combined with engineered features, outperforms the more complex architecture while using **38% fewer parameters**.
+
+## Performance
+
+| Metric | Value |
+|--------|-------|
+| Accuracy | 84.1% |
+| MCC | 0.683 |
+| AUC | 0.899 |
+| Parameters | 23.9M |
 
 ## 0) Prereqs
 - Python 3.10+ with PyTorch (CPU is fine), `coremltools`, `pandas`, `numpy`, `scikit-learn`, `pyyaml`, `tqdm`.
@@ -80,24 +111,30 @@ metrics_stage2: ["accuracy","mcc","roc_auc"]
 
 ## 6) Model
 - Add `Gene Whisperer/training/model.py`:
-  - Shared Transformer encoder (`TransformerBackbone`) with:
-    - 3-mer embedding dim 48.
-    - 4 encoder layers; each: LayerNorm -> Multi-Head Self-Attention (num_heads=4, hidden_dim=48, dropout=0.1) -> residual; LayerNorm -> FFN (64 -> 48) -> residual.
-    - Positional embeddings (learned) sized to `max_tokens`.
-  - Stage 1 head (`PromoterClassifier`):
-    - Input: contextual embeddings.
-    - 1D Conv (in_channels=48, out_channels=128, kernel_size=5, padding=2) + ReLU.
-    - BiLSTM with 128 units per direction.
-    - Global max pool.
-    - Dense 128 + ReLU -> Dropout 0.5 -> Dense 1 (logits).
-  - Stage 2 head (`StrengthClassifier`):
-    - Input: contextual embeddings.
-    - 1D Conv (48 -> 96, kernel_size=5, padding=2) + ReLU.
-    - Uni-directional LSTM 128 units.
-    - Global average pool.
-    - Concatenate with TNC + PseEIIP (64-dim each) to form a single feature vector.
-    - Dense 128 + ReLU -> Dropout 0.5 -> Dense 1 (logits).
-  - `GeneWhispererStage1` and `GeneWhispererStage2` wrappers share the backbone; Stage 2 exposes `freeze_lower_layers()` to freeze bottom half of encoder layers before training.
+  - **Simplified Transformer encoder (`DNAEncoder`)** with:
+    - k-mer embedding dim 384 (default 6-mer for 4099 vocab).
+    - 12 encoder layers with pre-norm architecture for training stability.
+    - Stochastic depth for regularization (linearly increasing drop rate).
+    - Learned positional embeddings sized to `max_seq_len`.
+    - Optional relative position bias (T5/ALiBi style).
+    - Optional GLU FFN for improved expressiveness.
+  - **Stage 1 model (`GeneWhispererStage1`)**:
+    - Input: k-mer token indices.
+    - DNAEncoder for contextual embeddings.
+    - Attention pooling (learned, better than max/mean for position-sensitive tasks).
+    - Engineered features MLP (processes TNC, PseEIIP, CKSaap, PSTNPss).
+    - Concatenate sequence features + engineered features.
+    - Classifier head: Linear + LayerNorm + GELU + Dropout + Linear -> logits.
+  - **Stage 2 model (`GeneWhispererStage2`)**:
+    - Reuses DNAEncoder backbone from Stage 1.
+    - Configurable strength head: Transformer, BiLSTM, or both.
+    - Optional gated attention fusion with engineered features.
+    - Classifier head -> strong/weak logits.
+  - **Variant models available**:
+    - `GeneWhispererTransformerOnly`: Transformer-only (no engineered features).
+    - `GeneWhispererFeaturesOnly`: Engineered features only (no transformer).
+    - `GeneWhispererCombined`: Transformer + engineered features.
+  - Legacy CNN/TCN components preserved in `model_legacy.py` for checkpoint compatibility.
 
 ## 7) Training Stage 1 (Promoter detection)
 - Add `Gene Whisperer/training/train_stage1.py`:
@@ -164,3 +201,36 @@ python export_coreml.py --config config.yaml --stage1_ckpt ../artifacts/checkpoi
 - Artifacts under `Gene Whisperer/artifacts/` (checkpoints + two CoreML models).
 - Swift files: predictor and UI for Gene Whisperer, plus navigation entry.
 - Updated instructions for dataset drop-in locations.
+
+## 15) Migrating from v4.0
+
+If you have checkpoints from the old CNN/TCN architecture (v4.0):
+
+### Automatic Weight Transfer
+1. **Transformer weights transfer automatically**: The `DNAEncoder` weights (embedding, positional encoding, transformer layers) are fully compatible.
+2. **CNN/TCN weights are ignored**: These components were removed after ablation studies showed they hurt performance.
+3. **Engineered features MLP**: If your checkpoint has engineered feature weights, they may transfer if dimensions match.
+
+### Migration Steps
+```bash
+# Load legacy checkpoint into new model
+from model import GeneWhispererStage1
+
+model = GeneWhispererStage1(...)
+loaded = model.load_legacy_checkpoint("path/to/v4_checkpoint.pt")
+print(f"Loaded {loaded} compatible tensors")
+```
+
+### Fine-tuning Recommendation
+After loading legacy weights:
+1. Fine-tune for 10-20 epochs to adapt to the simplified architecture.
+2. Monitor validation MCC - expect improvement after a few epochs.
+3. The simplified model should converge faster than the original.
+
+### Performance Comparison
+| Version | Architecture | Accuracy | MCC | Parameters |
+|---------|-------------|----------|-----|------------|
+| v4.0 | Transformer + CNN + TCN | 83.3% | 0.667 | 38.4M |
+| v5.0 | Transformer only | 84.1% | 0.683 | 23.9M |
+
+The simplified architecture achieves better results with fewer parameters and faster training.
