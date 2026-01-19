@@ -49,7 +49,7 @@ model: &model
   transformer_layers: 12
   transformer_heads: 12
   transformer_ff_dim: 1536
-  transformer_dropout: 0.12
+  transformer_dropout: 0.20  # Increased from 0.12 for stronger regularization
   model_variant: stage1  # options: transformer_only, features_only, combined
   use_glu_ffn: true
   glu_activation: "gelu"
@@ -74,7 +74,7 @@ simplified_model:
 
   # Classifier settings
   classifier_hidden: 256
-  classifier_dropout: 0.15
+  classifier_dropout: 0.25  # Increased from 0.15 for stronger regularization
 
   # Feature fusion: "concat" (simple concatenation)
   fusion_method: "concat"
@@ -102,11 +102,13 @@ training: &training
   lr: 0.00002  # msBERT-aligned learning rate
   stage1_lr: 0.00002  # Explicit stage 1 learning rate
   stage2_lr: 0.00001  # Stage 2 can use lower LR for fine-tuning
-  weight_decay: 0.01
+  weight_decay: 0.05  # Increased from 0.01 for stronger regularization
   warmup_ratio: 0.10
   min_lr_ratio: 0.01  # Minimum LR as fraction of peak
   epochs: 100
-  early_stopping_patience: 15
+  early_stopping_patience: 10  # Reduced from 15 for more aggressive stopping
+  early_stopping_min_delta: 0.001  # Minimum improvement to reset patience
+  early_stopping_restore_best: true  # Always restore best model weights on stop
   grad_accum_steps: 4
   grad_clip_norm: 1.0
   param_norm_warn: 400
@@ -119,12 +121,12 @@ loss: &loss
   stage1_use_focal_loss: false
   stage1_focal_alpha: 0.25
   stage1_focal_gamma: 2.0
-  label_smoothing: 0.0
+  label_smoothing: 0.1  # NEW - prevents overconfident predictions
 
 # == AUGMENTATION ==
 augmentation: &augmentation
   use_mixup: true
-  mixup_alpha: 0.1
+  mixup_alpha: 0.2  # Increased from 0.1 for stronger regularization
   stage1_reverse_complement_prob: 0.5  # DNA is double-stranded
 
 # == STOCHASTIC WEIGHT AVERAGING ==

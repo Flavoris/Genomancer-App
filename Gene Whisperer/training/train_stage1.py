@@ -69,6 +69,150 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
 
 # =============================================================================
+# EARLY STOPPING WITH BEST MODEL RESTORATION
+# =============================================================================
+
+
+class EarlyStopping:
+    """Early stopping with best model restoration.
+
+    Monitors a metric and stops training when no improvement is seen for
+    `patience` epochs. Optionally restores the best model weights when
+    early stopping triggers.
+
+    Args:
+        patience: Number of epochs to wait for improvement before stopping.
+        min_delta: Minimum change to qualify as an improvement.
+        mode: 'max' for metrics where higher is better (accuracy, MCC),
+              'min' for metrics where lower is better (loss).
+        restore_best: Whether to restore best model weights when stopping.
+    """
+
+    def __init__(
+        self,
+        patience: int = 10,
+        min_delta: float = 0.001,
+        mode: str = 'max',
+        restore_best: bool = True
+    ):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.mode = mode
+        self.restore_best = restore_best
+
+        self.best_score: Optional[float] = None
+        self.best_epoch: int = 0
+        self.best_state_dict: Optional[Dict[str, torch.Tensor]] = None
+        self.counter: int = 0
+        self.should_stop: bool = False
+
+    def __call__(self, score: float, epoch: int, model: nn.Module) -> bool:
+        """Check if training should stop and update best model state.
+
+        Args:
+            score: Current metric value to monitor.
+            epoch: Current epoch number.
+            model: Model to save/restore state from.
+
+        Returns:
+            True if training should stop, False otherwise.
+        """
+        if self.best_score is None:
+            self.best_score = score
+            self.best_epoch = epoch
+            self.best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            return False
+
+        improved = (
+            (self.mode == 'max' and score > self.best_score + self.min_delta) or
+            (self.mode == 'min' and score < self.best_score - self.min_delta)
+        )
+
+        if improved:
+            self.best_score = score
+            self.best_epoch = epoch
+            self.best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.should_stop = True
+                if self.restore_best and self.best_state_dict is not None:
+                    LOGGER.info(f"Restoring best model from epoch {self.best_epoch}")
+                    model.load_state_dict(self.best_state_dict)
+
+        return self.should_stop
+
+    def get_best_score(self) -> Optional[float]:
+        """Return the best score seen so far."""
+        return self.best_score
+
+    def restore_best_weights(self, model: nn.Module) -> None:
+        """Manually restore best model weights."""
+        if self.best_state_dict is not None:
+            LOGGER.info(f"Restoring best model from epoch {self.best_epoch}")
+            model.load_state_dict(self.best_state_dict)
+
+
+# =============================================================================
+# GRADIENT MONITORING
+# =============================================================================
+
+
+def compute_gradient_stats(model: nn.Module) -> dict:
+    """Compute gradient statistics for monitoring training stability.
+
+    Analyzes gradients across all model parameters to detect potential
+    training instabilities like exploding/vanishing gradients or NaN values.
+
+    Args:
+        model: The neural network model to analyze.
+
+    Returns:
+        Dictionary containing:
+            - grad_norm: L2 norm of all gradients
+            - max_grad: Maximum absolute gradient value
+            - min_grad: Minimum absolute gradient value
+            - nan_grads: Count of parameters with NaN/Inf gradients
+            - param_count: Number of parameters with valid gradients
+    """
+    total_norm = 0.0
+    param_count = 0
+    max_grad = 0.0
+    min_grad = float('inf')
+    nan_count = 0
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grad = param.grad.data
+
+            # Check for NaN/Inf
+            if torch.isnan(grad).any() or torch.isinf(grad).any():
+                nan_count += 1
+                continue
+
+            param_norm = grad.norm(2).item()
+            total_norm += param_norm ** 2
+            param_count += 1
+            max_grad = max(max_grad, grad.abs().max().item())
+            min_grad = min(min_grad, grad.abs().min().item())
+
+    total_norm = total_norm ** 0.5
+
+    # Handle case where no valid gradients were found
+    if param_count == 0:
+        min_grad = 0.0
+
+    return {
+        'grad_norm': total_norm,
+        'max_grad': max_grad,
+        'min_grad': min_grad,
+        'nan_grads': nan_count,
+        'param_count': param_count
+    }
+
+
+# =============================================================================
 # KNOWLEDGE DISTILLATION UTILITIES
 # =============================================================================
 
@@ -1440,12 +1584,32 @@ def run_epoch(
                         # After clipping, effective norm is min(unclipped, max_norm)
                         clipped_grad_norm = min(unclipped_grad_norm.item(), grad_clip_norm)
                         
-                        # Log gradient norms periodically (every 50 optimizer steps)
+                        # Log gradient statistics periodically (every 50 optimizer steps)
                         if optimizer_step_count % 50 == 0:
-                            LOGGER.debug(
-                                "Step %d: grad_norm (unclipped=%.4f, clipped=%.4f)",
-                                optimizer_step_count, unclipped_grad_norm.item(), clipped_grad_norm
+                            grad_stats = compute_gradient_stats(model)
+                            LOGGER.info(
+                                "Step %d: grad_norm=%.4f, max=%.4f, nan_count=%d",
+                                optimizer_step_count,
+                                grad_stats['grad_norm'],
+                                grad_stats['max_grad'],
+                                grad_stats['nan_grads']
                             )
+
+                            # Warn if gradients are exploding
+                            if grad_stats['grad_norm'] > 100:
+                                LOGGER.warning(
+                                    "Large gradient norm at step %d: %.2f",
+                                    optimizer_step_count,
+                                    grad_stats['grad_norm']
+                                )
+
+                            # Error if NaN gradients detected
+                            if grad_stats['nan_grads'] > 0:
+                                LOGGER.error(
+                                    "NaN gradients in %d parameters at step %d!",
+                                    grad_stats['nan_grads'],
+                                    optimizer_step_count
+                                )
                     
                     if use_cuda_scaler:
                         scaler.step(optimizer)
@@ -1749,6 +1913,31 @@ def run_distillation_epoch(
                         if use_cuda_scaler:
                             scaler.unscale_(optimizer)
                         torch.nn.utils.clip_grad_norm_(student_model.parameters(), grad_clip_norm)
+
+                        # Log gradient statistics periodically (every 50 optimizer steps)
+                        if optimizer_step_count % 50 == 0:
+                            grad_stats = compute_gradient_stats(student_model)
+                            LOGGER.info(
+                                "Distill Step %d: grad_norm=%.4f, max=%.4f, nan_count=%d",
+                                optimizer_step_count,
+                                grad_stats['grad_norm'],
+                                grad_stats['max_grad'],
+                                grad_stats['nan_grads']
+                            )
+
+                            if grad_stats['grad_norm'] > 100:
+                                LOGGER.warning(
+                                    "Large gradient norm at distill step %d: %.2f",
+                                    optimizer_step_count,
+                                    grad_stats['grad_norm']
+                                )
+
+                            if grad_stats['nan_grads'] > 0:
+                                LOGGER.error(
+                                    "NaN gradients in %d parameters at distill step %d!",
+                                    grad_stats['nan_grads'],
+                                    optimizer_step_count
+                                )
 
                     if use_cuda_scaler:
                         scaler.step(optimizer)
@@ -2111,19 +2300,28 @@ def run_overfit_debug_stage1(
         # Gradient clipping with norm logging
         unclipped_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         clipped_grad_norm = min(unclipped_grad_norm.item(), 1.0)
-        
+
+        # Compute gradient stats before optimizer step
+        grad_stats = compute_gradient_stats(model)
+
         optimizer.step()
-        
+
         # Compute accuracy
         probs = torch.sigmoid(logits.detach())
         preds = (probs >= 0.5).float()
         acc = (preds == labels).float().mean().item()
-        
+
         losses.append(loss.item())
         accuracies.append(acc)
-        
+
         if step % 20 == 0 or step == num_steps - 1:
-            print(f"Step {step:>3}: Loss={loss.item():.4f}, Acc={acc*100:.1f}%")
+            print(f"Step {step:>3}: Loss={loss.item():.4f}, Acc={acc*100:.1f}%, "
+                  f"grad_norm={grad_stats['grad_norm']:.4f}, max_grad={grad_stats['max_grad']:.4f}")
+
+            if grad_stats['grad_norm'] > 100:
+                print(f"  WARNING: Large gradient norm: {grad_stats['grad_norm']:.2f}")
+            if grad_stats['nan_grads'] > 0:
+                print(f"  ERROR: NaN gradients in {grad_stats['nan_grads']} parameters!")
     
     print()
     print("-" * 70)
@@ -2953,7 +3151,23 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     param_norm_warn = float(cfg_run.get("param_norm_warn", 150.0))
     param_norm_cap = float(cfg_run.get("param_norm_cap", 200.0))
     # Note: stage1_use_mixup and stage1_mixup_alpha are computed earlier with fallbacks
-    patience = int(cfg_run.get("early_stopping_patience", 15))
+
+    # Early stopping configuration
+    patience = int(cfg_run.get("early_stopping_patience", 10))
+    early_stopping_min_delta = float(cfg_run.get("early_stopping_min_delta", 0.001))
+    early_stopping_restore_best = bool(cfg_run.get("early_stopping_restore_best", True))
+
+    # Initialize early stopping with best model restoration
+    early_stopping = EarlyStopping(
+        patience=patience,
+        min_delta=early_stopping_min_delta,
+        mode='max',  # Monitoring MCC (higher is better)
+        restore_best=early_stopping_restore_best
+    )
+    LOGGER.info(
+        "Early stopping: patience=%d, min_delta=%.4f, restore_best=%s",
+        patience, early_stopping_min_delta, early_stopping_restore_best
+    )
 
     global_optimizer_steps = 0
 
@@ -2977,7 +3191,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     best_epoch = 0
     best_train_metrics = None
     best_val_metrics = None
-    patience_counter = 0
     swa_started = False
     
     for epoch in range(1, epochs + 1):
@@ -3146,21 +3359,24 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         # Check for improvement using best-threshold metrics (MCC@best primary, Acc@best tiebreaker)
         eval_mcc_best = eval_metrics.get("mcc_best", eval_metrics["mcc"])
         eval_acc_best = eval_metrics.get("acc_best", eval_metrics["accuracy"])
-        improved = False
-        if eval_mcc_best > best_val_mcc + 1e-4:
-            improved = True
-        elif abs(eval_mcc_best - best_val_mcc) < 1e-4 and eval_acc_best > best_val_acc:
-            improved = True
+
+        # Use EarlyStopping class to track improvement and save best model state
+        # The class handles: tracking best score, saving best state_dict, counting patience
+        should_stop = early_stopping(eval_mcc_best, epoch, model)
+
+        # Check if this is an improvement (for logging and checkpoint saving)
+        improved = early_stopping.counter == 0 and epoch > 1 or (
+            early_stopping.best_epoch == epoch
+        )
 
         if improved:
-            patience_counter = 0
             best_val_mcc = eval_mcc_best
             best_val_acc = eval_acc_best
             best_epoch = epoch
             best_train_metrics = train_metrics
             best_val_metrics = eval_metrics
 
-            # Save either SWA model or regular model
+            # Save either SWA model or regular model to disk
             # Include variant metadata for checkpoint loading
             if swa_val_metrics and swa_mcc_best > val_mcc_best:
                 save_checkpoint(
@@ -3180,12 +3396,21 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 eval_metrics.get("best_threshold", 0.5),
             )
         else:
-            patience_counter += 1
             # In SWA phase, be more patient as averaging takes time
             effective_patience = patience + 10 if in_swa_phase else patience
-            LOGGER.info("No improvement. Patience %d/%d", patience_counter, effective_patience)
-            if patience_counter >= effective_patience:
+            LOGGER.info("No improvement. Patience %d/%d", early_stopping.counter, effective_patience)
+
+            # Check if we should stop (considering SWA phase extended patience)
+            if early_stopping.counter >= effective_patience:
                 LOGGER.info("Early stopping triggered at epoch %d", epoch)
+                LOGGER.info(
+                    "Best MCC@best: %.4f at epoch %d",
+                    early_stopping.get_best_score(), early_stopping.best_epoch
+                )
+                # Restore best model weights if configured (handled by EarlyStopping class)
+                if early_stopping_restore_best and early_stopping.best_state_dict is not None:
+                    LOGGER.info("Restoring best model from epoch %d", early_stopping.best_epoch)
+                    model.load_state_dict(early_stopping.best_state_dict)
                 break
 
         if reached_max_steps:
