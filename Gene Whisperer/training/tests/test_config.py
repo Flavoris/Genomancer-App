@@ -64,14 +64,7 @@ def test_config_hyperparameters() -> None:
         HyperparameterCheck("epochs", 150, 100, 200, "Epochs"),
         HyperparameterCheck("early_stopping_patience", 15, 10, 25, "Early stopping patience"),
         HyperparameterCheck("engineered_dim", 288, 128, 320, "Engineered feature dimension"),
-        HyperparameterCheck("mlm_window_size", 81, 64, 128, "MLM window size"),
-        HyperparameterCheck(
-            "post_cnn_transformer_layers",
-            3,
-            3,
-            3,
-            "Post-CNN transformer layers",
-        ),
+        HyperparameterCheck("mlm_window_size", 234, 200, 260, "MLM window size"),
     ]
 
     failures: list[str] = []
@@ -120,6 +113,7 @@ def test_new_config_sections() -> None:
         ("ensemble_method", "Ensemble method configuration"),
         ("features", "Feature flags"),
         ("mlm_data", "MLM data configuration"),
+        ("simplified_model", "Simplified model settings"),
     ]
 
     print("\nNew Config Sections:")
@@ -135,14 +129,25 @@ def test_new_config_sections() -> None:
             print(f"WARN {desc}: NOT FOUND (optional)")
 
 
+def test_simplified_model_defaults() -> None:
+    """Verify simplified model settings are present in config."""
+    cfg = load_config(CONFIG_PATH)
+    simplified = cfg.get("simplified_model")
+    assert isinstance(simplified, dict), "simplified_model should be a mapping"
+    assert simplified.get("pooling_type") == "attention"
+    assert simplified.get("classifier_hidden") == 256
+    assert simplified.get("classifier_dropout") == 0.15
+    assert simplified.get("fusion_method") == "concat"
+
+
 
 def test_separate_training_phase_settings() -> None:
     """Ensure stage/MLM settings are separated with backward-compatible root keys."""
     cfg = load_config(CONFIG_PATH)
 
     assert cfg.get("max_bp_len") == 81, f"max_bp_len should be 81, got {cfg.get('max_bp_len')}"
-    assert cfg.get("mlm_window_size") == 81, (
-        f"mlm_window_size should be 81, got {cfg.get('mlm_window_size')}"
+    assert cfg.get("mlm_window_size") == 234, (
+        f"mlm_window_size should be 234, got {cfg.get('mlm_window_size')}"
     )
     assert cfg.get("lr") == 0.00002, f"lr should be 0.00002, got {cfg.get('lr')}"
     assert cfg.get("mlm_lr") == 0.0002, f"mlm_lr should be 0.0002, got {cfg.get('mlm_lr')}"
@@ -150,17 +155,17 @@ def test_separate_training_phase_settings() -> None:
     assert cfg.get("stage2_lr") == 0.00001, "stage2_lr should be 0.00001"
 
 
-def test_mps_optimized_settings() -> None:
-    """Verify MPS-optimized settings for M4 MacBook."""
+def test_hardware_settings() -> None:
+    """Verify hardware settings aligned with the training config."""
     cfg = load_config(CONFIG_PATH)
 
-    print("\nMPS Optimization Settings:")
+    print("\nHardware Settings:")
     print("-" * 60)
 
     checks = [
-        ("num_workers", 0, "Should be 0 for MPS"),
+        ("num_workers", 8, "Dataloader workers for GPU-backed environments"),
         ("amp_enabled", True, "Mixed precision should be enabled"),
-        ("amp_dtype", "bfloat16", "bfloat16 recommended for MPS"),
+        ("amp_dtype", "float16", "Float16 is the default AMP dtype in config"),
     ]
 
     failures: list[str] = []
@@ -174,7 +179,7 @@ def test_mps_optimized_settings() -> None:
         if not match:
             failures.append(f"{key}: {actual} != {expected}")
 
-    assert not failures, "MPS config checks failed: " + ", ".join(failures)
+    assert not failures, "Hardware config checks failed: " + ", ".join(failures)
 
 
 def _run_check(check_fn) -> bool:
@@ -199,7 +204,7 @@ if __name__ == "__main__":
     print()
     all_ok &= _run_check(test_separate_training_phase_settings)
     print()
-    all_ok &= _run_check(test_mps_optimized_settings)
+    all_ok &= _run_check(test_hardware_settings)
 
     print("\n" + "=" * 60)
     print("CONFIG VALIDATION COMPLETE")

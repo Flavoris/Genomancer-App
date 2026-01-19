@@ -23,6 +23,7 @@ import math
 import os
 import random
 import time
+import warnings
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -59,7 +60,7 @@ from dataset import (
     random_base_substitution,
     reverse_complement,
 )
-from model import GeneWhispererStage1Legacy, DNAEncoder, create_model_variant
+from model import GeneWhispererStage1, GeneWhispererStage1Legacy, DNAEncoder, create_model_variant
 from numerics import cap_model_param_norm_
 from seed_utils import set_global_seed
 from stage1_settings import log_stage1_training_configuration, resolve_stage1_lr
@@ -434,7 +435,55 @@ def load_config(path: Path) -> Dict:
     """Load YAML configuration."""
     with path.open("r", encoding="utf-8") as handle:
         cfg = yaml.safe_load(handle)
-    return cfg or {}
+    cfg = cfg or {}
+    if not isinstance(cfg, dict):
+        raise ValueError("config.yaml must parse to a mapping")
+    _apply_simplified_model_defaults(cfg)
+    _warn_legacy_tcn_options(cfg)
+    cfg.setdefault("use_simplified_architecture", True)
+    return cfg
+
+
+LEGACY_TCN_KEYS = {
+    "use_tcn",
+    "tcn_hidden",
+    "tcn_levels",
+    "tcn_kernel",
+    "multiscale_channels",
+    "multiscale_kernels",
+    "post_cnn_transformer_layers",
+}
+
+
+def _warn_legacy_tcn_options(cfg: dict) -> None:
+    """Warn when legacy CNN/TCN options are present in a config."""
+    legacy_keys_present = any(key in cfg for key in LEGACY_TCN_KEYS)
+    model_section = cfg.get("model")
+    if isinstance(model_section, dict):
+        legacy_keys_present = legacy_keys_present or any(
+            key in model_section for key in LEGACY_TCN_KEYS
+        )
+    if legacy_keys_present:
+        warnings.warn(
+            "Config contains legacy CNN/TCN options which are ignored. "
+            "The simplified architecture is now used by default.",
+            stacklevel=2,
+        )
+
+
+def _apply_simplified_model_defaults(cfg: dict) -> dict:
+    """Ensure simplified_model settings are present with defaults."""
+    simplified = cfg.get("simplified_model")
+    if simplified is None:
+        simplified = {}
+    if not isinstance(simplified, dict):
+        raise ValueError("simplified_model must be a mapping")
+    simplified.setdefault("pooling_type", "attention")
+    simplified.setdefault("classifier_hidden", 256)
+    simplified.setdefault("classifier_dropout", 0.15)
+    simplified.setdefault("fusion_method", "concat")
+    cfg["simplified_model"] = simplified
+    return simplified
 
 
 def get_with_fallback(cfg: dict, stage_key: str, global_key: str, default: Any) -> Any:
@@ -1924,7 +1973,7 @@ def save_checkpoint(
     epoch: int,
     metrics: Dict[str, float],
     model_variant: str = "original",
-    use_simplified_architecture: bool = False,
+    use_simplified_architecture: bool = True,
 ) -> None:
     """Save training checkpoint with variant metadata.
 
@@ -2249,6 +2298,12 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     cfg_run = copy.copy(cfg) if isinstance(cfg, dict) else dict(cfg or {})
     if overrides:
         cfg_run.update(overrides)
+    cfg_run.setdefault("use_simplified_architecture", True)
+    simplified_model_cfg = _apply_simplified_model_defaults(cfg_run)
+    simplified_pooling_type = str(simplified_model_cfg.get("pooling_type", "attention")).strip().lower()
+    simplified_classifier_hidden = int(simplified_model_cfg.get("classifier_hidden", 256))
+    simplified_classifier_dropout = float(simplified_model_cfg.get("classifier_dropout", 0.15))
+    simplified_fusion_method = str(simplified_model_cfg.get("fusion_method", "concat")).strip().lower()
 
     if bool(cfg_run.get("ablation_disable_wandb", False)):
         os.environ["WANDB_MODE"] = "disabled"
@@ -2351,13 +2406,15 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "reverse_complement_prob": float(cfg_run.get("stage1_reverse_complement_prob", 0.5)),
         "stage1_use_mixup": bool(get_with_fallback(cfg_run, "stage1_use_mixup", "use_mixup", True)),
         "stage1_mixup_alpha": float(get_with_fallback(cfg_run, "stage1_mixup_alpha", "mixup_alpha", 0.2)),
-        # TCN
-        "use_tcn": bool(cfg_run.get("use_tcn", True)),
-        "tcn_hidden": int(cfg_run.get("tcn_hidden", 256)),
-        "tcn_levels": int(cfg_run.get("tcn_levels", 4)),
-        "tcn_kernel": int(cfg_run.get("tcn_kernel", 3)),
-        "multiscale_channels": int(cfg_run.get("multiscale_channels", 64)),
-        "multiscale_kernels": cfg_run.get("multiscale_kernels", [3, 5, 7, 9, 15]),
+        # Simplified architecture
+        "use_simplified_architecture": bool(cfg_run.get("use_simplified_architecture", True)),
+        "model_variant": str(cfg_run.get("model_variant", "")).strip().lower(),
+        "simplified_model": {
+            "pooling_type": simplified_pooling_type,
+            "classifier_hidden": simplified_classifier_hidden,
+            "classifier_dropout": simplified_classifier_dropout,
+            "fusion_method": simplified_fusion_method,
+        },
         "lstm_hidden": int(cfg_run.get("lstm_hidden", 192)),
         # Training
         "epochs": int(epochs),
@@ -2378,7 +2435,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "stage1_swa_lr": float(get_with_fallback(cfg_run, "stage1_swa_lr", "swa_lr", 5e-5)),
         # Model options
         "use_attention_pool": bool(cfg_run.get("use_attention_pool", True)),
-        "post_cnn_transformer_layers": int(cfg_run.get("post_cnn_transformer_layers", 3)),
         "fusion_hidden": int(cfg_run.get("fusion_hidden", 256)),
         # Pretrained weights
         "stage1_load_mlm_weights": bool(cfg_run.get("stage1_load_mlm_weights", True)),
@@ -2450,33 +2506,20 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     pad_token_id = stage1_vocab.pad_id
     kmer = stage1_vocab.k
     
-    use_attention_pool = bool(cfg_run.get("use_attention_pool", True))
     use_engineered_features = bool(cfg_run.get("stage1_use_engineered_features", True))
     engineered_dim = int(cfg_run.get("engineered_dim", 288))
-    
-    # TCN configuration
-    use_tcn = bool(cfg_run.get("use_tcn", True))
-    tcn_hidden = int(cfg_run.get("tcn_hidden", 256))
-    tcn_levels = int(cfg_run.get("tcn_levels", 4))
-    tcn_kernel = int(cfg_run.get("tcn_kernel", 3))
-    multiscale_channels = int(cfg_run.get("multiscale_channels", 64))
-    multiscale_kernels_cfg = cfg_run.get("multiscale_kernels", [3, 5, 7, 9, 15])
-    multiscale_kernels = tuple(multiscale_kernels_cfg)
-    lstm_hidden = int(cfg_run.get("lstm_hidden", 192))
-    
-    # New architecture parameters: post-CNN transformer, engineered MLP, fusion
-    post_cnn_transformer_layers = int(cfg_run.get("post_cnn_transformer_layers", 3))
     engineered_mlp_hidden = int(cfg_run.get("engineered_mlp_hidden", 256))
     engineered_mlp_output = int(cfg_run.get("engineered_mlp_output", 128))
     fusion_hidden = int(cfg_run.get("fusion_hidden", 256))
+    lstm_hidden = int(cfg_run.get("lstm_hidden", 192))
 
     # Compute stage1_drop_path_rate with fallback (needed before model creation)
     stage1_drop_path_rate = get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)
 
     # Model variant configuration
-    # use_simplified_architecture: If False (default), always use legacy GeneWhispererStage1
-    # If True, use simplified variant based on model_variant setting
-    use_simplified_architecture = bool(cfg_run.get("use_simplified_architecture", False))
+    # use_simplified_architecture: If True (default), use simplified architecture
+    # If False, fall back to legacy GeneWhispererStage1Legacy
+    use_simplified_architecture = bool(cfg_run.get("use_simplified_architecture", True))
     model_variant = str(cfg_run.get("model_variant", "")).strip().lower()
 
     # Supported simplified variants
@@ -2485,15 +2528,62 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # Determine if we should use a simplified variant model
     # Only use simplified variant if: use_simplified_architecture=True AND model_variant is a valid simplified variant
     use_variant_model = use_simplified_architecture and model_variant in simplified_variants
-
+    
     # For "original" variant or when use_simplified_architecture=False, use legacy GeneWhispererStage1
-    # This maintains backward compatibility: if use_simplified_architecture is not in config, default to False
     if not use_simplified_architecture and model_variant in simplified_variants:
         LOGGER.warning(
             "model_variant='%s' specified but use_simplified_architecture=False; "
             "using legacy GeneWhispererStage1 (set use_simplified_architecture=True to use simplified variant)",
             model_variant,
         )
+    if use_simplified_architecture and model_variant and model_variant not in simplified_variants:
+        LOGGER.info(
+            "model_variant='%s' not recognized; using base simplified architecture",
+            model_variant,
+        )
+
+    use_attention_pool = bool(cfg_run.get("use_attention_pool", True))
+    if use_simplified_architecture:
+        if simplified_pooling_type == "attention":
+            use_attention_pool = True
+        elif simplified_pooling_type == "mean":
+            use_attention_pool = False
+        elif simplified_pooling_type in {"cls", "max"}:
+            LOGGER.warning(
+                "pooling_type '%s' is not supported; using mean pooling",
+                simplified_pooling_type,
+            )
+            use_attention_pool = False
+        else:
+            LOGGER.warning(
+                "pooling_type '%s' is not recognized; using attention pooling",
+                simplified_pooling_type,
+            )
+            use_attention_pool = True
+        if simplified_fusion_method != "concat":
+            LOGGER.warning(
+                "fusion_method '%s' is not supported; using 'concat'",
+                simplified_fusion_method,
+            )
+            simplified_fusion_method = "concat"
+        resolved_config["use_attention_pool"] = use_attention_pool
+        resolved_config["simplified_model"] = {
+            "pooling_type": simplified_pooling_type,
+            "classifier_hidden": simplified_classifier_hidden,
+            "classifier_dropout": simplified_classifier_dropout,
+            "fusion_method": simplified_fusion_method,
+        }
+
+    # Legacy TCN configuration (used only when simplified architecture is disabled)
+    if not use_simplified_architecture:
+        use_tcn = bool(cfg_run.get("use_tcn", True))
+        tcn_hidden = int(cfg_run.get("tcn_hidden", 256))
+        tcn_levels = int(cfg_run.get("tcn_levels", 4))
+        tcn_kernel = int(cfg_run.get("tcn_kernel", 3))
+        multiscale_channels = int(cfg_run.get("multiscale_channels", 64))
+        multiscale_kernels_cfg = cfg_run.get("multiscale_kernels", [3, 5, 7, 9, 15])
+        multiscale_kernels = tuple(multiscale_kernels_cfg)
+        post_cnn_transformer_layers = int(cfg_run.get("post_cnn_transformer_layers", 3))
 
     variant_config = dict(cfg_run)
     variant_config.update({
@@ -2505,10 +2595,37 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         "engineered_mlp_output": engineered_mlp_output,
         "max_seq_len": max_bp_len - kmer + 1,
         "drop_path_rate": stage1_drop_path_rate,
+        "classifier_hidden": simplified_classifier_hidden,
+        "classifier_dropout": simplified_classifier_dropout,
     })
 
     if use_variant_model:
         model = create_model_variant(model_variant, variant_config).to(device)
+    elif use_simplified_architecture:
+        model = GeneWhispererStage1(
+            vocab_size=vocab_size,
+            kmer=kmer,
+            embedding_dim=embedding_dim,
+            num_layers=transformer_layers,
+            num_heads=transformer_heads,
+            ff_dim=transformer_ff_dim,
+            dropout=transformer_dropout,
+            pad_token_id=pad_token_id,
+            engineered_dim=engineered_dim,
+            use_engineered_features=use_engineered_features,
+            use_attention_pool=use_attention_pool,
+            engineered_mlp_hidden=engineered_mlp_hidden,
+            engineered_mlp_output=engineered_mlp_output,
+            drop_path_rate=stage1_drop_path_rate,
+            max_seq_len=max_bp_len - kmer + 1,
+            use_relative_position_bias=bool(cfg_run.get("use_relative_position_bias", False)),
+            relative_position_num_buckets=int(cfg_run.get("relative_position_num_buckets", 32)),
+            relative_position_max_distance=int(cfg_run.get("relative_position_max_distance", 128)),
+            use_glu_ffn=bool(cfg_run.get("use_glu_ffn", False)),
+            glu_activation=str(cfg_run.get("glu_activation", "gelu")),
+            classifier_hidden=simplified_classifier_hidden,
+            classifier_dropout=simplified_classifier_dropout,
+        ).to(device)
     else:
         model = GeneWhispererStage1Legacy(
             vocab_size=vocab_size,
@@ -2544,27 +2661,54 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # Log architecture configuration
     LOGGER.info("=" * 60)
     LOGGER.info("use_simplified_architecture: %s", use_simplified_architecture)
-    if use_variant_model:
-        LOGGER.info("MODEL VARIANT: %s (simplified)", model_variant)
-        # Log inputs required for this variant
-        if model_variant == "transformer_only":
-            LOGGER.info("Inputs required: tokens only (engineered features ignored)")
-            LOGGER.info(
-                "Transformer: %d layers, %d heads, dim=%d",
-                transformer_layers,
-                transformer_heads,
-                embedding_dim,
-            )
-            LOGGER.info("Pooling: mean")
-        elif model_variant == "features_only":
-            LOGGER.info("Inputs required: engineered features only (tokens ignored)")
-            LOGGER.info(
-                "Engineered MLP: %d → %d → %d",
-                engineered_dim,
-                engineered_mlp_hidden,
-                engineered_mlp_output,
-            )
-        elif model_variant == "combined":
+    if use_simplified_architecture:
+        LOGGER.info("Architecture: Simplified (no CNN/TCN)")
+        LOGGER.info(
+            "Simplified settings: pooling=%s, classifier_hidden=%d, "
+            "classifier_dropout=%.2f, fusion=%s",
+            simplified_pooling_type,
+            simplified_classifier_hidden,
+            simplified_classifier_dropout,
+            simplified_fusion_method,
+        )
+        if use_variant_model:
+            LOGGER.info("MODEL VARIANT: %s (simplified)", model_variant)
+            # Log inputs required for this variant
+            if model_variant == "transformer_only":
+                LOGGER.info("Inputs required: tokens only (engineered features ignored)")
+                LOGGER.info(
+                    "Transformer: %d layers, %d heads, dim=%d",
+                    transformer_layers,
+                    transformer_heads,
+                    embedding_dim,
+                )
+                LOGGER.info("Pooling: mean (variant default)")
+            elif model_variant == "features_only":
+                LOGGER.info("Inputs required: engineered features only (tokens ignored)")
+                LOGGER.info(
+                    "Engineered MLP: %d -> %d -> %d",
+                    engineered_dim,
+                    engineered_mlp_hidden,
+                    engineered_mlp_output,
+                )
+            elif model_variant == "combined":
+                LOGGER.info("Inputs required: tokens + engineered features")
+                LOGGER.info(
+                    "Transformer: %d layers, %d heads, dim=%d",
+                    transformer_layers,
+                    transformer_heads,
+                    embedding_dim,
+                )
+                LOGGER.info("Pooling: mean (variant default)")
+                LOGGER.info(
+                    "Engineered MLP: %d -> %d -> %d",
+                    engineered_dim,
+                    engineered_mlp_hidden,
+                    engineered_mlp_output,
+                )
+            LOGGER.info("Classifier: 2-layer head")
+        else:
+            LOGGER.info("MODEL VARIANT: base (GeneWhispererStage1)")
             LOGGER.info("Inputs required: tokens + engineered features")
             LOGGER.info(
                 "Transformer: %d layers, %d heads, dim=%d",
@@ -2572,21 +2716,26 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 transformer_heads,
                 embedding_dim,
             )
-            LOGGER.info("Pooling: mean")
+            LOGGER.info("Pooling: %s", simplified_pooling_type)
+            if use_engineered_features:
+                LOGGER.info(
+                    "Engineered Features MLP: %d -> %d -> %d",
+                    engineered_dim,
+                    engineered_mlp_hidden,
+                    engineered_mlp_output,
+                )
             LOGGER.info(
-                "Engineered MLP: %d → %d → %d",
-                engineered_dim,
-                engineered_mlp_hidden,
-                engineered_mlp_output,
+                "Classifier: 2-layer head (hidden=%d, dropout=%.2f)",
+                simplified_classifier_hidden,
+                simplified_classifier_dropout,
             )
-        LOGGER.info("Classifier: 2-layer head")
     else:
-        LOGGER.info("MODEL VARIANT: original (GeneWhispererStage1Legacy)")
+        LOGGER.info("MODEL VARIANT: legacy (GeneWhispererStage1Legacy)")
         LOGGER.info("Inputs required: tokens + engineered features")
-        LOGGER.info("Architecture: Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier")
+        LOGGER.info("Architecture: Embedding -> CNN/TCN -> Transformer -> Pool -> Fusion -> Classifier")
         if use_tcn:
             LOGGER.info(
-                "CNN/TCN: Multi-scale kernels %s → TCN(%d levels, %d hidden, k=%d)",
+                "CNN/TCN: Multi-scale kernels %s -> TCN(%d levels, %d hidden, k=%d)",
                 multiscale_kernels,
                 tcn_levels,
                 tcn_hidden,
@@ -2595,7 +2744,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         LOGGER.info("Post-CNN Transformer: %d layers, %d heads", post_cnn_transformer_layers, transformer_heads)
         if use_engineered_features:
             LOGGER.info(
-                "Engineered Features MLP: %d → %d → %d",
+                "Engineered Features MLP: %d -> %d -> %d",
                 engineered_dim,
                 engineered_mlp_hidden,
                 engineered_mlp_output,
@@ -3230,16 +3379,17 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             "kmer": kmer,
         },
         "architecture_v4": {
-            "order": "Embedding → CNN/TCN → Transformer → Pool → Fusion → Classifier" if not use_variant_model else f"{effective_variant} simplified",
-            "use_tcn": use_tcn if not use_variant_model else False,
-            "tcn_hidden": tcn_hidden if not use_variant_model else None,
-            "tcn_levels": tcn_levels if not use_variant_model else None,
-            "multiscale_kernels": list(multiscale_kernels) if not use_variant_model else None,
-            "post_cnn_transformer_layers": post_cnn_transformer_layers if not use_variant_model else None,
+            "order": "Embedding -> Transformer -> Pool -> Fusion -> Classifier",
+            "mode": "simplified" if use_simplified_architecture else "legacy",
+            "model_variant": effective_variant,
+            "pooling_type": simplified_pooling_type if use_simplified_architecture else "attention" if use_attention_pool else "mean",
+            "fusion_method": simplified_fusion_method if use_simplified_architecture else "gated_attention",
+            "classifier_hidden": simplified_classifier_hidden if use_simplified_architecture else None,
+            "classifier_dropout": simplified_classifier_dropout if use_simplified_architecture else None,
             "engineered_mlp_hidden": engineered_mlp_hidden,
             "engineered_mlp_output": engineered_mlp_output,
-            "fusion_hidden": fusion_hidden if not use_variant_model else None,
-            "use_attention_fusion": use_engineered_features if not use_variant_model else False,
+            "use_attention_pool": use_attention_pool,
+            "use_engineered_features": use_engineered_features,
         },
         "training_enhancements": {
             "layer_wise_lr_decay": layer_lr_decay,

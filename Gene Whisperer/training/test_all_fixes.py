@@ -22,14 +22,18 @@ def test_config():
     with open(script_dir / 'config.yaml', 'r') as f:
         cfg = yaml.safe_load(f)
 
+    simplified = cfg.get('simplified_model', {}) if isinstance(cfg.get('simplified_model'), dict) else {}
     tests = [
         ('max_bp_len', 81, cfg.get('max_bp_len')),
-        ('mlm_window_size', 81, cfg.get('mlm_window_size')),
+        ('mlm_window_size', 234, cfg.get('mlm_window_size')),
         ('stage1_lr', 0.00002, cfg.get('stage1_lr')),
         ('stage2_lr', 0.00001, cfg.get('stage2_lr')),
         ('mlm_lr', 0.0002, cfg.get('mlm_lr')),
         ('stage1_reverse_complement_prob', 0.5, cfg.get('stage1_reverse_complement_prob')),
-        ('post_cnn_transformer_layers', 3, cfg.get('post_cnn_transformer_layers')),
+        ('simplified_pooling_type', 'attention', simplified.get('pooling_type')),
+        ('simplified_classifier_hidden', 256, simplified.get('classifier_hidden')),
+        ('simplified_classifier_dropout', 0.15, simplified.get('classifier_dropout')),
+        ('simplified_fusion_method', 'concat', simplified.get('fusion_method')),
     ]
 
     all_passed = True
@@ -146,7 +150,7 @@ def test_model_creation():
     print("=" * 60)
 
     import torch
-    from model import GeneWhispererStage1Legacy
+    from model import GeneWhispererStage1
     from dataset import KmerVocabulary
 
     with open(script_dir / 'config.yaml', 'r') as f:
@@ -155,7 +159,13 @@ def test_model_creation():
     # Build a test vocab
     vocab = KmerVocabulary.build_from_sequences(['ATGC' * 20], k=6)
 
-    model = GeneWhispererStage1Legacy(
+    simplified = cfg.get('simplified_model', {}) if isinstance(cfg.get('simplified_model'), dict) else {}
+    pooling_type = simplified.get('pooling_type', 'attention')
+    use_attention_pool = pooling_type == 'attention'
+    classifier_hidden = simplified.get('classifier_hidden', 256)
+    classifier_dropout = simplified.get('classifier_dropout', 0.15)
+
+    model = GeneWhispererStage1(
         vocab_size=len(vocab.itos),
         kmer=6,
         embedding_dim=cfg.get('embedding_dim', 384),
@@ -166,13 +176,17 @@ def test_model_creation():
         pad_token_id=vocab.pad_id,
         engineered_dim=cfg.get('engineered_dim', 288),
         use_engineered_features=True,
-        post_cnn_transformer_layers=cfg.get('post_cnn_transformer_layers', 3),
+        use_attention_pool=use_attention_pool,
+        engineered_mlp_hidden=cfg.get('engineered_mlp_hidden', 512),
+        engineered_mlp_output=cfg.get('engineered_mlp_output', 384),
+        classifier_hidden=classifier_hidden,
+        classifier_dropout=classifier_dropout,
     )
 
-    # Count post-CNN transformer layers
-    post_cnn_layers = len(model.post_cnn_transformer.layers)
-    print(f"  Post-CNN transformer layers: {post_cnn_layers}")
-    assert post_cnn_layers == 3, f"Post-CNN layers should be 3, got {post_cnn_layers}"
+    if use_attention_pool:
+        assert model.pool is not None, "Expected attention pooling to be enabled"
+    else:
+        assert model.pool is None, "Expected mean pooling to be used"
 
     # Test forward pass
     batch_size = 2

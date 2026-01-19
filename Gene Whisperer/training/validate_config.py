@@ -42,6 +42,9 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     "transformer_ff_dim": int,
     "transformer_dropout": float,
     "use_attention_pool": bool,
+    "use_simplified_architecture": bool,
+    "model_variant": str,
+    "simplified_model": dict,
     
     # K-mer tokenization
     "kmer": int,
@@ -49,17 +52,8 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     "pad_token_id": int,
     "vocab_cache_dir": str,
     
-    # TCN + Multi-scale CNN
-    "use_tcn": bool,
-    "tcn_hidden": int,
-    "tcn_levels": int,
-    "tcn_kernel": int,
-    "multiscale_channels": int,
-    "multiscale_kernels": list,
+    # Legacy sequence encoder settings
     "lstm_hidden": int,
-    
-    # Post-CNN transformer
-    "post_cnn_transformer_layers": int,
     
     # Engineered features
     "stage1_use_engineered_features": bool,
@@ -158,6 +152,22 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     "multi_scale_kmers": list,
 }
 
+LEGACY_TCN_KEYS = {
+    "use_tcn",
+    "tcn_hidden",
+    "tcn_levels",
+    "tcn_kernel",
+    "multiscale_channels",
+    "multiscale_kernels",
+    "post_cnn_transformer_layers",
+}
+
+OPTIONAL_KEYS = {
+    "simplified_model",
+    "use_simplified_architecture",
+    "model_variant",
+}
+
 
 def get_type_name(expected_type: Union[Type, tuple]) -> str:
     """Get human-readable type name."""
@@ -216,13 +226,13 @@ def validate_config(config_path: Path) -> Dict[str, Any]:
     errors: List[str] = []
     
     # Check for unknown keys
-    unknown_keys = set(config.keys()) - set(CONFIG_SCHEMA.keys())
+    unknown_keys = set(config.keys()) - set(CONFIG_SCHEMA.keys()) - LEGACY_TCN_KEYS
     if unknown_keys:
         for key in sorted(unknown_keys):
             errors.append(f"Unknown key: '{key}'")
     
     # Check for missing keys
-    missing_keys = set(CONFIG_SCHEMA.keys()) - set(config.keys())
+    missing_keys = set(CONFIG_SCHEMA.keys()) - set(config.keys()) - OPTIONAL_KEYS
     if missing_keys:
         for key in sorted(missing_keys):
             errors.append(f"Missing required key: '{key}'")

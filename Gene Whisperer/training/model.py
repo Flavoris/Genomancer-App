@@ -821,6 +821,8 @@ class GeneWhispererStage1(nn.Module):
         engineered_mlp_input_dropout: float = 0.05,
         engineered_mlp_use_gated: bool = True,
         engineered_mlp_use_residual: bool = True,
+        classifier_hidden: Optional[int] = None,
+        classifier_dropout: Optional[float] = None,
         # Stochastic depth (drop path) rate for encoder
         drop_path_rate: float = 0.1,
         # Maximum sequence length for positional embeddings
@@ -885,13 +887,14 @@ class GeneWhispererStage1(nn.Module):
             self.engineered_mlp = None
             classifier_in = encoder_dim
 
-        classifier_hidden = encoder_dim
+        hidden_dim = classifier_hidden or encoder_dim
+        classifier_drop = dropout if classifier_dropout is None else classifier_dropout
         self.classifier = nn.Sequential(
-            nn.Linear(classifier_in, classifier_hidden),
-            nn.LayerNorm(classifier_hidden),
+            nn.Linear(classifier_in, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(classifier_hidden, 1),
+            nn.Dropout(classifier_drop),
+            nn.Linear(hidden_dim, 1),
         )
 
     @property
@@ -1478,6 +1481,12 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
     engineered_dim = int(config.get("engineered_dim", 288))
     engineered_mlp_hidden = int(config.get("engineered_mlp_hidden", 256))
     engineered_mlp_output = int(config.get("engineered_mlp_output", 128))
+    classifier_hidden = config.get("classifier_hidden")
+    if classifier_hidden is not None:
+        classifier_hidden = int(classifier_hidden)
+    classifier_dropout = config.get("classifier_dropout")
+    if classifier_dropout is not None:
+        classifier_dropout = float(classifier_dropout)
 
     drop_path_rate = float(config.get("drop_path_rate", 0.1))
     use_relative_position_bias = bool(config.get("use_relative_position_bias", False))
@@ -1497,6 +1506,8 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
             dropout=dropout,
             pad_token_id=pad_token_id,
             max_seq_len=max_seq_len,
+            classifier_hidden=classifier_hidden,
+            classifier_dropout=classifier_dropout,
             drop_path_rate=drop_path_rate,
             use_relative_position_bias=use_relative_position_bias,
             relative_position_num_buckets=relative_position_num_buckets,
@@ -1524,6 +1535,8 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
         engineered_dim=engineered_dim,
         engineered_mlp_hidden=engineered_mlp_hidden,
         engineered_mlp_output=engineered_mlp_output,
+        classifier_hidden=classifier_hidden,
+        classifier_dropout=classifier_dropout,
         drop_path_rate=drop_path_rate,
         use_relative_position_bias=use_relative_position_bias,
         relative_position_num_buckets=relative_position_num_buckets,

@@ -1,5 +1,12 @@
-# Gene Whisperer Configuration v4.0
-# Includes all optimizations for 90%+ accuracy target
+# Gene Whisperer Configuration v5.0 (Simplified Architecture)
+#
+# Architecture: Embedding -> 12-Layer Transformer -> Attention Pool ->
+#               [Concat Engineered Features] -> Classifier
+#
+# This simplified architecture achieves:
+# - 84.1% accuracy (vs 83.3% with CNN/TCN)
+# - 23.9M parameters (vs 38.4M - 38% reduction)
+# - Faster training (best at epoch 12 vs ~30-40)
 # NOTE: Section maps are merged into the root for backward compatibility.
 
 # == RANDOM SEED ==
@@ -50,19 +57,27 @@ model: &model
   relative_position_num_buckets: 32
   relative_position_max_distance: 128
   use_attention_pool: true
-  use_tcn: true
-  tcn_hidden: 384
-  tcn_levels: 5
-  tcn_kernel: 3
-  multiscale_channels: 64  # Per-kernel channels
-  multiscale_kernels: [3, 5, 7, 9, 15]
   lstm_hidden: 192
-  post_cnn_transformer_layers: 3  # Reduced from 6 to keep CNN/TCN features prominent
   kmer: 6
   stage2_kmer: 6
   vocab_size: 4099  # 4096 + 3 special tokens
   pad_token_id: 4098
   vocab_cache_dir: ../artifacts/vocabs
+
+# == SIMPLIFIED MODEL SETTINGS ==
+# The simplified architecture removes CNN/TCN layers which were shown
+# to hurt performance in ablation studies. This achieves 84.1% accuracy
+# (up from 83.3%) with 38% fewer parameters.
+simplified_model:
+  # Pooling strategy: "mean", "attention", "cls", "max"
+  pooling_type: "attention"
+
+  # Classifier settings
+  classifier_hidden: 256
+  classifier_dropout: 0.15
+
+  # Feature fusion: "concat" (simple concatenation)
+  fusion_method: "concat"
 
 # == ENGINEERED FEATURES ==
 features: &features
