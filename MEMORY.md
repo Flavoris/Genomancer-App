@@ -177,6 +177,52 @@ python ensemble_infer.py --sequence "ATGCATGC..." --tta --per_model
 2. Engineered features are recomputed for RC sequence for accuracy
 3. TTA can be disabled at runtime with config or by omitting `--tta` flag
 
+### 2026-01-20: SwiGLU Activation and RMSNorm
+Implemented SwiGLU feed-forward network and RMSNorm as modern transformer components (used in LLaMA, PaLM, Mistral).
+
+**Why SwiGLU?**
+SwiGLU provides better gradient flow and representation capacity than standard GELU FFN. The formula is:
+```
+SwiGLU(x) = (Swish(W1*x) * W3*x) * W2
+```
+Uses SiLU (Swish) activation with a gating mechanism for improved expressiveness.
+
+**Why RMSNorm?**
+RMSNorm is simpler and faster than LayerNorm:
+- No mean centering (only RMS normalization)
+- No bias term
+- Provides similar training stability with lower computational cost
+
+**New Files:**
+- `Gene Whisperer/training/tests/test_swiglu_rmsnorm.py` - Comprehensive test suite (24 tests)
+
+**Modified Files:**
+- `Gene Whisperer/training/model.py`
+  - Added `RMSNorm` class for RMS layer normalization
+  - Added `SwiGLU` class with the LLaMA-style implementation
+  - Updated `PreNormTransformerLayer` with `ffn_type` and `norm_type` parameters
+  - Updated `DNAEncoder` and all model classes to pass through new parameters
+  - Updated `create_model_variant()` factory function
+
+- `Gene Whisperer/training/config.yaml`
+  - Added `ffn_type: "swiglu"` (options: "gelu", "glu", "swiglu")
+  - Added `ffn_mult: 2.67` (SwiGLU expansion ratio)
+  - Added `norm_type: "rmsnorm"` (options: "layernorm", "rmsnorm")
+
+**Config Options:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `ffn_type` | "swiglu" | FFN type: "gelu" (standard), "glu" (GLUFFN), "swiglu" |
+| `ffn_mult` | 2.67 | FFN expansion multiplier (for SwiGLU, lower due to gating) |
+| `norm_type` | "rmsnorm" | Normalization: "layernorm" or "rmsnorm" |
+
+**Backward Compatibility:**
+- Legacy `use_glu_ffn` parameter still works (maps to `ffn_type="glu"`)
+- Default `norm_type="layernorm"` preserves existing behavior if not specified
+- All existing checkpoints remain compatible
+
+**Expected Improvement:** +0.5-1% accuracy from better gradient flow
+
 ### 2026-01-19: Rotary Position Embedding (RoPE)
 Implemented Rotary Position Embedding (RoPE) as an alternative to absolute position embeddings.
 

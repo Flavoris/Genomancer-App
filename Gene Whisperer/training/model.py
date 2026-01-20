@@ -197,10 +197,13 @@ class DNAEncoder(nn.Module):
         use_relative_position_bias: bool = False,
         relative_position_num_buckets: int = 32,
         relative_position_max_distance: int = 128,
-        use_glu_ffn: bool = False,  # Use GLU-style FFN
+        use_glu_ffn: bool = False,  # Use GLU-style FFN (legacy)
         glu_activation: str = "gelu",  # Activation for GLU: "gelu" or "silu"
         use_rope: bool = False,  # Use Rotary Position Embedding
         rope_base: float = 10000.0,  # Base for RoPE frequency computation
+        ffn_type: str = None,  # FFN type: "gelu", "glu", "swiglu"
+        norm_type: str = "layernorm",  # Normalization: "layernorm" or "rmsnorm"
+        ffn_mult: float = None,  # FFN expansion multiplier (for SwiGLU)
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
@@ -261,6 +264,9 @@ class DNAEncoder(nn.Module):
                 use_rope=use_rope,
                 rope_base=rope_base,
                 max_seq_len=max_seq_len,
+                ffn_type=ffn_type,
+                norm_type=norm_type,
+                ffn_mult=ffn_mult,
             )
             for i in range(num_layers)
         ])
@@ -396,6 +402,66 @@ class StochasticDepth(nn.Module):
 
         # Scale residual to compensate for dropped layers
         return x + residual / keep_prob
+
+
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization.
+
+    Simpler and faster than LayerNorm:
+    - No mean centering
+    - No bias term
+    Used in LLaMA, Mistral, and other modern LLMs.
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # RMS normalization
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        x_normed = x / rms
+        return x_normed * self.weight
+
+
+class SwiGLU(nn.Module):
+    """SwiGLU Feed-Forward Network.
+
+    SwiGLU(x) = (Swish(W1·x) ⊙ W3·x) · W2
+
+    Used in LLaMA, PaLM, and other modern LLMs.
+    Better gradient flow than GELU.
+
+    Args:
+        in_features: Input dimension
+        hidden_features: Hidden dimension (default: 8/3 * in_features, rounded to 64)
+        out_features: Output dimension (default: in_features)
+        bias: Whether to use bias in linear layers (default: False)
+        dropout: Dropout probability (default: 0.0)
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        hidden_features: int = None,
+        out_features: int = None,
+        bias: bool = False,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or int(in_features * 8 / 3)
+        # Round to multiple of 64 for efficiency
+        hidden_features = ((hidden_features + 63) // 64) * 64
+
+        self.w1 = nn.Linear(in_features, hidden_features, bias=bias)
+        self.w2 = nn.Linear(hidden_features, out_features, bias=bias)
+        self.w3 = nn.Linear(in_features, hidden_features, bias=bias)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
 
 
 class GLUFFN(nn.Module):
@@ -579,6 +645,8 @@ class PreNormTransformerLayer(nn.Module):
 
     Supports optional GLU FFN (Gated Linear Unit) for improved expressiveness.
     Supports optional RoPE (Rotary Position Embedding) for better relative position understanding.
+    Supports SwiGLU FFN (used in LLaMA/PaLM) for better gradient flow.
+    Supports RMSNorm (used in LLaMA/Mistral) for faster, simpler normalization.
     """
 
     def __init__(
@@ -588,11 +656,14 @@ class PreNormTransformerLayer(nn.Module):
         dim_feedforward: int,
         dropout: float = 0.1,
         drop_path: float = 0.0,  # Stochastic depth probability
-        use_glu_ffn: bool = False,  # Use GLU-style FFN
+        use_glu_ffn: bool = False,  # Use GLU-style FFN (legacy param)
         glu_activation: str = "gelu",  # Activation for GLU: "gelu" or "silu"
         use_rope: bool = False,  # Use Rotary Position Embedding
         rope_base: float = 10000.0,  # Base for RoPE frequency computation
         max_seq_len: int = 512,  # Maximum sequence length for RoPE cache
+        ffn_type: str = None,  # FFN type: "gelu", "glu", "swiglu" (overrides use_glu_ffn)
+        norm_type: str = "layernorm",  # Normalization: "layernorm" or "rmsnorm"
+        ffn_mult: float = None,  # FFN expansion multiplier (for SwiGLU, default 2.67)
     ):
         super().__init__()
         self.d_model = d_model
@@ -600,8 +671,13 @@ class PreNormTransformerLayer(nn.Module):
         self.head_dim = d_model // nhead
         self.use_rope = use_rope
 
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+        # Normalization layers
+        if norm_type == "rmsnorm":
+            self.norm1 = RMSNorm(d_model)
+            self.norm2 = RMSNorm(d_model)
+        else:
+            self.norm1 = nn.LayerNorm(d_model)
+            self.norm2 = nn.LayerNorm(d_model)
 
         # Initialize RoPE if enabled
         if use_rope:
@@ -618,8 +694,25 @@ class PreNormTransformerLayer(nn.Module):
         self.attn_dropout = nn.Dropout(dropout)
         self.resid_dropout = nn.Dropout(dropout)
 
-        # FFN: either standard or GLU-style
-        if use_glu_ffn:
+        # Determine FFN type (new param takes precedence over legacy)
+        if ffn_type is None:
+            if use_glu_ffn:
+                ffn_type = "glu"
+            else:
+                ffn_type = "gelu"
+
+        # FFN: standard GELU, GLU-style, or SwiGLU
+        if ffn_type == "swiglu":
+            # SwiGLU uses smaller expansion due to gating (2.67x vs 4x)
+            swiglu_mult = ffn_mult if ffn_mult is not None else 2.67
+            self.ffn = SwiGLU(
+                in_features=d_model,
+                hidden_features=int(d_model * swiglu_mult),
+                out_features=d_model,
+                bias=False,
+                dropout=dropout,
+            )
+        elif ffn_type == "glu":
             self.ffn = GLUFFN(
                 d_model=d_model,
                 ff_dim=dim_feedforward,
@@ -627,7 +720,7 @@ class PreNormTransformerLayer(nn.Module):
                 activation=glu_activation,
             )
         else:
-            # Standard FFN
+            # Standard FFN with GELU
             self.ffn = nn.Sequential(
                 nn.Linear(d_model, dim_feedforward),
                 nn.GELU(),
@@ -887,6 +980,10 @@ class GeneWhispererStage1(nn.Module):
         # RoPE parameters
         use_rope: bool = False,
         rope_base: float = 10000.0,
+        # SwiGLU and RMSNorm parameters
+        ffn_type: str = None,
+        norm_type: str = "layernorm",
+        ffn_mult: float = None,
     ):
         super().__init__()
 
@@ -922,6 +1019,9 @@ class GeneWhispererStage1(nn.Module):
             glu_activation=glu_activation,
             use_rope=use_rope,
             rope_base=rope_base,
+            ffn_type=ffn_type,
+            norm_type=norm_type,
+            ffn_mult=ffn_mult,
         )
         self.embedding = self._full_encoder.embedding
         encoder_dim = self._full_encoder.embedding_dim
@@ -1218,6 +1318,9 @@ class GeneWhispererTransformerOnly(nn.Module):
         glu_activation: str = "gelu",
         use_rope: bool = False,
         rope_base: float = 10000.0,
+        ffn_type: str = None,
+        norm_type: str = "layernorm",
+        ffn_mult: float = None,
     ):
         super().__init__()
         self.pad_token_id = pad_token_id
@@ -1240,6 +1343,9 @@ class GeneWhispererTransformerOnly(nn.Module):
             glu_activation=glu_activation,
             use_rope=use_rope,
             rope_base=rope_base,
+            ffn_type=ffn_type,
+            norm_type=norm_type,
+            ffn_mult=ffn_mult,
         )
         self.embedding = self._full_encoder.embedding
 
@@ -1407,6 +1513,9 @@ class GeneWhispererCombined(nn.Module):
         glu_activation: str = "gelu",
         use_rope: bool = False,
         rope_base: float = 10000.0,
+        ffn_type: str = None,
+        norm_type: str = "layernorm",
+        ffn_mult: float = None,
     ):
         super().__init__()
         self.pad_token_id = pad_token_id
@@ -1430,6 +1539,9 @@ class GeneWhispererCombined(nn.Module):
             glu_activation=glu_activation,
             use_rope=use_rope,
             rope_base=rope_base,
+            ffn_type=ffn_type,
+            norm_type=norm_type,
+            ffn_mult=ffn_mult,
         )
         self.embedding = self._full_encoder.embedding
 
@@ -1568,6 +1680,11 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
     glu_activation = str(config.get("glu_activation", "gelu"))
     use_rope = bool(config.get("use_rope", False))
     rope_base = float(config.get("rope_base", 10000.0))
+    ffn_type = config.get("ffn_type")
+    norm_type = str(config.get("norm_type", "layernorm"))
+    ffn_mult = config.get("ffn_mult")
+    if ffn_mult is not None:
+        ffn_mult = float(ffn_mult)
 
     if normalized == "transformer_only":
         return GeneWhispererTransformerOnly(
@@ -1590,6 +1707,9 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
             glu_activation=glu_activation,
             use_rope=use_rope,
             rope_base=rope_base,
+            ffn_type=ffn_type,
+            norm_type=norm_type,
+            ffn_mult=ffn_mult,
         )
     if normalized == "features_only":
         return GeneWhispererFeaturesOnly(
@@ -1621,6 +1741,9 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
         glu_activation=glu_activation,
         use_rope=use_rope,
         rope_base=rope_base,
+        ffn_type=ffn_type,
+        norm_type=norm_type,
+        ffn_mult=ffn_mult,
     )
 
 
@@ -1869,6 +1992,10 @@ class GeneWhispererStage2(nn.Module):
         # RoPE parameters
         use_rope: bool = False,
         rope_base: float = 10000.0,
+        # SwiGLU and RMSNorm parameters
+        ffn_type: str = None,
+        norm_type: str = "layernorm",
+        ffn_mult: float = None,
     ):
         super().__init__()
 
@@ -1894,6 +2021,9 @@ class GeneWhispererStage2(nn.Module):
             glu_activation=glu_activation,
             use_rope=use_rope,
             rope_base=rope_base,
+            ffn_type=ffn_type,
+            norm_type=norm_type,
+            ffn_mult=ffn_mult,
         )
         self.embedding = self._full_encoder.embedding
         encoder_dim = self._full_encoder.embedding_dim

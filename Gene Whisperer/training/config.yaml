@@ -51,8 +51,12 @@ model: &model
   transformer_ff_dim: 1536
   transformer_dropout: 0.20  # Optimal from regularization experiment (86.55% val acc)
   model_variant: stage1  # options: transformer_only, features_only, combined
-  use_glu_ffn: true
-  glu_activation: "gelu"
+  use_glu_ffn: false  # Legacy param, use ffn_type instead
+  glu_activation: "gelu"  # Legacy param for GLU FFN
+  # SwiGLU and RMSNorm settings (modern LLM architecture from LLaMA/PaLM)
+  ffn_type: "swiglu"  # Options: "gelu" (standard), "glu" (GLUFFN), "swiglu" (LLaMA/PaLM style)
+  ffn_mult: 2.67  # SwiGLU expansion ratio (2.67x instead of 4x due to gating)
+  norm_type: "rmsnorm"  # Options: "layernorm", "rmsnorm" (LLaMA/Mistral style)
   use_relative_position_bias: false  # Disabled when using RoPE
   relative_position_num_buckets: 32
   relative_position_max_distance: 128
