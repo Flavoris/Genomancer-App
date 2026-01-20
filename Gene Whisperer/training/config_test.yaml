@@ -27,6 +27,11 @@ metrics_stage2:
 - mcc
 - roc_auc
 mixup_alpha: 0.2
+ensemble:
+  optimize_weights: false
+  optimization_metric: "mcc"
+  min_weight: 0.05
+  weights_path: ../artifacts/ensemble_weights.json
 mlm_batch_size: 128
 mlm_embedding_dim: 256
 mlm_encoder_checkpoint: ../artifacts/mlm_encoder_k3.pt

@@ -147,6 +147,9 @@ CONFIG_SCHEMA: Dict[str, Union[Type, tuple]] = {
     # Metrics
     "metrics_stage1": list,
     "metrics_stage2": list,
+
+    # Ensemble weighting
+    "ensemble": dict,
     
     # Multi-scale ensemble
     "use_multi_scale": bool,

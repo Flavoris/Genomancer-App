@@ -10,7 +10,13 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import yaml
 
-from dataset import KmerVocabulary, compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc
+from dataset import KmerVocabulary, compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc, reverse_complement
+from tta import get_reverse_complement_tokens, predict_with_tta, TTAWrapper
+from ensemble_weights import (
+    align_weights_to_kmers as _align_weights_to_kmers,
+    load_ensemble_weights as _load_ensemble_weights,
+    optimize_ensemble_weights as _optimize_ensemble_weights,
+)
 from model import GeneWhispererStage1
 
 LOGGER = logging.getLogger("gene_whisperer.ensemble")
@@ -18,6 +24,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
 # Default calibration file path (relative to training directory)
 DEFAULT_CALIBRATION_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "calibration_stage1.json"
+DEFAULT_ENSEMBLE_WEIGHTS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "ensemble_weights.json"
 
 
 def load_calibration(calibration_path: Optional[Path] = None) -> Optional[Dict]:
@@ -53,6 +60,22 @@ def load_calibration(calibration_path: Optional[Path] = None) -> Optional[Dict]:
     except (json.JSONDecodeError, IOError) as e:
         LOGGER.warning("Failed to load calibration from %s: %s", path, e)
         return None
+
+
+def optimize_ensemble_weights(
+    val_probs: Dict,
+    val_labels: torch.Tensor,
+    metric: str = "accuracy",
+    min_weight: float = 0.01,
+) -> Dict:
+    """Find optimal ensemble weights using validation set."""
+    labels_np = val_labels.detach().cpu().numpy() if isinstance(val_labels, torch.Tensor) else val_labels
+    return _optimize_ensemble_weights(
+        val_probs=val_probs,
+        val_labels=labels_np,
+        metric=metric,
+        min_weight=min_weight,
+    )
 
 
 def apply_calibration(
@@ -335,6 +358,33 @@ def resolve_ensemble_weights(kmers: List[int], artifacts_dir: Path) -> Optional[
     return [weight / weight_sum for weight in weights]
 
 
+def resolve_optimized_weights(
+    kmers: List[int],
+    weights_path: Path,
+) -> Optional[List[float]]:
+    """Load optimized weights from disk and align with requested k-mers."""
+    if not weights_path.exists():
+        LOGGER.warning("Optimized ensemble weights not found at %s", weights_path)
+        return None
+    try:
+        weights, metadata = _load_ensemble_weights(weights_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        LOGGER.warning("Failed to load optimized weights from %s: %s", weights_path, exc)
+        return None
+
+    aligned = _align_weights_to_kmers(weights, kmers)
+    if aligned is None:
+        LOGGER.warning("Optimized weights did not match requested k-mers")
+        return None
+
+    if metadata:
+        summary = ", ".join(f"{k}={v}" for k, v in metadata.items() if k != "weights")
+        if summary:
+            LOGGER.info("Loaded optimized weight metadata: %s", summary)
+
+    return aligned
+
+
 def select_device() -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -369,6 +419,24 @@ def main() -> None:
         "--weighted",
         action="store_true",
         help="Weight ensemble outputs using validation metrics from artifacts/stage1_report_k{k}.json.",
+    )
+    parser.add_argument(
+        "--optimized-weights",
+        type=str,
+        default=None,
+        help="Path to optimized ensemble weights JSON (overrides config).",
+    )
+    parser.add_argument(
+        "--tta",
+        action="store_true",
+        help="Enable test-time augmentation using reverse complement.",
+    )
+    parser.add_argument(
+        "--tta-aggregation",
+        type=str,
+        choices=["mean", "geometric_mean"],
+        default="mean",
+        help="TTA aggregation method (default: mean).",
     )
     args = parser.parse_args()
 
@@ -415,6 +483,7 @@ def main() -> None:
 
     models = []
     batch_inputs = {}
+    vocabs = {}  # Store vocabs for TTA
     for k_str, paths in kmer_config.items():
         try:
             k = int(k_str)
@@ -427,6 +496,7 @@ def main() -> None:
             LOGGER.warning("Skipping k=%s (missing vocab or checkpoint)", k_str)
             continue
         vocab = load_vocab(vocab_path)
+        vocabs[k] = vocab  # Store vocab for TTA
         # Infer architecture from checkpoint to handle config mismatches
         arch_overrides = infer_model_architecture(checkpoint_path)
         model_cfg = {**cfg, **arch_overrides}
@@ -443,9 +513,31 @@ def main() -> None:
 
     ensemble_weights = None
     use_weighted = False
-    if args.weighted:
+    ensemble_cfg = cfg.get("ensemble") if isinstance(cfg.get("ensemble"), dict) else {}
+    optimize_weights = bool(ensemble_cfg.get("optimize_weights", False))
+    weights_path_value = args.optimized_weights or ensemble_cfg.get("weights_path")
+    weights_path = None
+    if weights_path_value:
+        weights_path = Path(weights_path_value)
+        if not weights_path.is_absolute():
+            weights_path = (script_dir / weights_path).resolve()
+    elif optimize_weights:
+        weights_path = DEFAULT_ENSEMBLE_WEIGHTS_PATH
+
+    kmers = [k for k, _ in models]
+    if weights_path is not None and (optimize_weights or args.optimized_weights):
+        ensemble_weights = resolve_optimized_weights(kmers, weights_path)
+        if ensemble_weights is not None:
+            use_weighted = True
+            weight_summary = ", ".join(
+                f"k{k}={weight:.4f}" for k, weight in zip(kmers, ensemble_weights)
+            )
+            LOGGER.info("Using optimized ensemble weights (%s)", weight_summary)
+        else:
+            LOGGER.warning("Optimized weights requested but unavailable; falling back")
+
+    if not use_weighted and args.weighted:
         artifacts_dir = script_dir.parent / "artifacts"
-        kmers = [k for k, _ in models]
         ensemble_weights = resolve_ensemble_weights(kmers, artifacts_dir)
         if ensemble_weights is None:
             LOGGER.warning("Weighted ensemble requested but weights unavailable; using unweighted averaging")
@@ -462,10 +554,19 @@ def main() -> None:
         calibration_path = Path(args.calibration) if args.calibration else None
         calibration = load_calibration(calibration_path)
 
-    # Perform inference with calibration support
+    # Check TTA settings from config or CLI
+    inference_cfg = cfg.get("inference") if isinstance(cfg.get("inference"), dict) else {}
+    use_tta = args.tta or bool(inference_cfg.get("use_tta", False))
+    tta_aggregation = args.tta_aggregation or inference_cfg.get("tta_aggregation", "mean")
+
+    if use_tta:
+        LOGGER.info("TTA enabled with %s aggregation", tta_aggregation)
+
+    # Perform inference with calibration and TTA support
     with torch.no_grad():
         per_model_probs = []
         all_probs = []
+        tta_details = []  # Store TTA details if requested
         if calibration is None:
             # Original behavior: use ensemble without calibration
             # Determine decision threshold: use average of model thresholds or fallback
@@ -482,11 +583,52 @@ def main() -> None:
             tokens, engineered = batch_inputs.get(k, (None, None))
             if tokens is None:
                 continue
-            logits = model(tokens, engineered_features=engineered)
-            if calibration is not None:
-                probs, _ = apply_calibration(logits, calibration)
+
+            if use_tta:
+                # TTA: average predictions over forward and reverse complement
+                vocab = vocabs.get(k)
+                if vocab is None:
+                    LOGGER.warning("Vocab not found for k=%s, skipping TTA", k)
+                    logits = model(tokens, engineered_features=engineered)
+                    probs = torch.sigmoid(logits)
+                else:
+                    probs = predict_with_tta(
+                        model=model,
+                        tokens=tokens,
+                        engineered_features=engineered,
+                        vocab=vocab,
+                        max_bp_len=max_bp_len,
+                        compute_features_fn=lambda seq: compute_engineered_features(seq, cfg),
+                        aggregation=tta_aggregation,
+                    )
+                    # Store TTA details for per_model output
+                    if args.per_model:
+                        # Get individual forward/RC predictions for reporting
+                        logits_fwd = model(tokens, engineered_features=engineered)
+                        prob_fwd = torch.sigmoid(logits_fwd).squeeze().item()
+                        # Get RC prediction
+                        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_bp_len)
+                        rc_tokens = rc_tokens.to(tokens.device)
+                        rc_seq = vocab.decode(rc_tokens.squeeze().tolist())
+                        rc_features = compute_engineered_features(rc_seq, cfg).unsqueeze(0).to(tokens.device)
+                        logits_rc = model(rc_tokens, engineered_features=rc_features)
+                        prob_rc = torch.sigmoid(logits_rc).squeeze().item()
+                        tta_details.append({
+                            "k": k,
+                            "forward": prob_fwd,
+                            "reverse_complement": prob_rc,
+                        })
             else:
+                logits = model(tokens, engineered_features=engineered)
                 probs = torch.sigmoid(logits)
+
+            if calibration is not None:
+                # Apply calibration temperature scaling to probabilities
+                # Convert back to logits, scale, then to probs
+                eps = 1e-7
+                logits_from_probs = torch.log(probs / (1 - probs + eps) + eps)
+                probs, _ = apply_calibration(logits_from_probs, calibration)
+
             all_probs.append(probs)
             per_model_probs.append((k, probs.squeeze().item()))
 
@@ -514,8 +656,17 @@ def main() -> None:
     if calibration is not None:
         result["calibrated"] = True
         result["temperature"] = calibration["temperature"]
+    if use_tta:
+        result["tta_enabled"] = True
+        result["tta_aggregation"] = tta_aggregation
     if args.per_model:
-        result["per_model"] = [{"k": k, "probability": p} for k, p in per_model_probs]
+        if use_tta and tta_details:
+            result["per_model"] = [
+                {"k": d["k"], "probability": per_model_probs[i][1], "forward": d["forward"], "reverse_complement": d["reverse_complement"]}
+                for i, d in enumerate(tta_details)
+            ]
+        else:
+            result["per_model"] = [{"k": k, "probability": p} for k, p in per_model_probs]
     print(json.dumps(result))
 
 

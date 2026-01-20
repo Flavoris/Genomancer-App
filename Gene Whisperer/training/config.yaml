@@ -264,6 +264,21 @@ metrics: &metrics
   metrics_stage1: ["accuracy", "precision", "recall", "f1", "mcc", "specificity"]
   metrics_stage2: ["accuracy", "mcc", "roc_auc"]
 
+# == ENSEMBLE WEIGHTS ==
+ensemble:
+  optimize_weights: true
+  optimization_metric: "mcc"
+  min_weight: 0.05
+  weights_path: ../artifacts/ensemble_weights.json
+
+# == INFERENCE SETTINGS ==
+# Test-time augmentation (TTA) using reverse complement
+inference:
+  use_tta: true
+  tta_aggregation: "mean"  # Options: "mean", "geometric_mean"
+  # TTA uses DNA reverse complement to average predictions over both strands
+  # Expected improvement: +0.3-0.5% accuracy
+
 # == TRANSFER SMOKETEST ==
 smoketest: &smoketest
   smoketest_steps_pretrain: 300

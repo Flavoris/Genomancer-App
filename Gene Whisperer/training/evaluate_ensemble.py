@@ -30,6 +30,7 @@ from dataset import (
     _sanitize_sequence,
 )
 from ensemble_infer import build_model, load_checkpoint, infer_model_architecture
+from ensemble_weights import optimize_ensemble_weights, save_ensemble_weights
 
 LOGGER = logging.getLogger("gene_whisperer.evaluate_ensemble")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -248,18 +249,23 @@ def evaluate_soft_voting_ensemble(
     # Load validation data
     df = load_validation_data(cfg, script_dir)
 
-    # Compute weights
+    # Compute baseline weights
     if weights is None:
-        # Use config weights or equal weights
-        config_weights = cfg.get("ensemble_weights", {})
+        ensemble_cfg = cfg.get("ensemble") if isinstance(cfg.get("ensemble"), dict) else {}
+        config_weights = ensemble_cfg.get("weights")
+        if not isinstance(config_weights, dict):
+            config_weights = cfg.get("ensemble_weights", {})
+        if not isinstance(config_weights, dict):
+            config_weights = {}
         weights = {}
         for kmer in kmers:
             weights[kmer] = float(config_weights.get(str(kmer), config_weights.get(kmer, 1.0 / len(kmers))))
-        # Normalize weights
         total_weight = sum(weights.values())
-        weights = {k: v / total_weight for k, v in weights.items()}
+        weights = {k: v / total_weight for k, v in weights.items()} if total_weight else {
+            k: 1.0 / len(kmers) for k in kmers
+        }
 
-    LOGGER.info("Ensemble weights: %s", weights)
+    LOGGER.info("Baseline ensemble weights: %s", weights)
 
     # Evaluate each model
     max_bp_len = int(cfg.get("max_bp_len", 81))
@@ -280,8 +286,8 @@ def evaluate_soft_voting_ensemble(
                 tokens = tokens.to(device)
                 engineered = engineered.to(device)
 
-                prob = model(tokens, engineered)
-                prob = prob.squeeze().cpu().item()
+                logits = model(tokens, engineered)
+                prob = torch.sigmoid(logits).squeeze().cpu().item()
                 all_probs[kmer].append(prob)
 
     # Convert to numpy
@@ -298,30 +304,101 @@ def evaluate_soft_voting_ensemble(
             kmer, metrics["accuracy"], metrics["mcc"], metrics["auc"]
         )
 
-    # Compute ensemble probabilities (soft voting)
-    ensemble_probs = np.zeros(len(labels_np))
-    for kmer in kmers:
-        probs_np = np.array(all_probs[kmer])
-        ensemble_probs += weights[kmer] * probs_np
+    def compute_ensemble_probs(weight_map: Dict[int, float]) -> np.ndarray:
+        """Compute weighted ensemble probabilities."""
+        probs = np.zeros(len(labels_np), dtype=np.float64)
+        for kmer in kmers:
+            probs += weight_map[kmer] * np.asarray(all_probs[kmer], dtype=np.float64)
+        return probs
 
-    # Compute ensemble metrics
-    ensemble_metrics = calculate_metrics(ensemble_probs, labels_np)
-
+    baseline_probs = compute_ensemble_probs(weights)
+    baseline_metrics = calculate_metrics(baseline_probs, labels_np)
     LOGGER.info(
-        "Ensemble: Acc=%.4f (%.2f%%), MCC=%.4f, AUC=%.4f",
-        ensemble_metrics["accuracy"],
-        ensemble_metrics["accuracy"] * 100,
-        ensemble_metrics["mcc"],
-        ensemble_metrics["auc"],
+        "Baseline ensemble: Acc=%.4f (%.2f%%), MCC=%.4f, AUC=%.4f",
+        baseline_metrics["accuracy"],
+        baseline_metrics["accuracy"] * 100,
+        baseline_metrics["mcc"],
+        baseline_metrics["auc"],
     )
 
-    return {
-        **ensemble_metrics,
+    ensemble_cfg = cfg.get("ensemble") if isinstance(cfg.get("ensemble"), dict) else {}
+    optimize_weights = bool(ensemble_cfg.get("optimize_weights", False))
+    optimization_metric = str(ensemble_cfg.get("optimization_metric", "mcc"))
+    min_weight = float(ensemble_cfg.get("min_weight", 0.01))
+    grid_step = float(ensemble_cfg.get("grid_step", 0.02))
+    max_candidates = int(ensemble_cfg.get("max_candidates", 50000))
+    random_seed = int(ensemble_cfg.get("random_seed", 13))
+
+    final_weights = dict(weights)
+    final_metrics = baseline_metrics
+    optimization_metadata = None
+
+    if optimize_weights:
+        try:
+            optimized_weights, optimization_metadata = optimize_ensemble_weights(
+                val_probs={k: np.asarray(all_probs[k], dtype=np.float64) for k in kmers},
+                val_labels=labels_np,
+                metric=optimization_metric,
+                min_weight=min_weight,
+                grid_step=grid_step,
+                max_candidates=max_candidates,
+                random_seed=random_seed,
+                return_metadata=True,
+            )
+        except ValueError as exc:
+            LOGGER.warning("Weight optimization failed: %s", exc)
+        else:
+            optimized_probs = compute_ensemble_probs(optimized_weights)
+            optimized_metrics = calculate_metrics(optimized_probs, labels_np)
+            final_weights = optimized_weights
+            final_metrics = optimized_metrics
+
+            LOGGER.info(
+                "Optimized ensemble: Acc=%.4f (%.2f%%), MCC=%.4f, AUC=%.4f",
+                optimized_metrics["accuracy"],
+                optimized_metrics["accuracy"] * 100,
+                optimized_metrics["mcc"],
+                optimized_metrics["auc"],
+            )
+
+            weights_path_value = ensemble_cfg.get("weights_path")
+            if weights_path_value:
+                weights_path = Path(weights_path_value)
+                if not weights_path.is_absolute():
+                    weights_path = (script_dir / weights_path).resolve()
+            else:
+                weights_path = (script_dir / "../artifacts/ensemble_weights.json").resolve()
+
+            metadata = dict(optimization_metadata or {})
+            metadata.update(
+                {
+                    "kmers": kmers,
+                    "num_samples": int(len(labels_np)),
+                }
+            )
+            save_ensemble_weights(weights_path, optimized_weights, metadata)
+            LOGGER.info("Saved optimized weights to %s", weights_path)
+
+    results = {
+        **final_metrics,
         "individual_metrics": individual_metrics,
-        "weights": weights,
+        "weights": final_weights,
         "kmers": kmers,
         "num_samples": len(labels_np),
     }
+
+    if optimize_weights and optimization_metadata:
+        results.update(
+            {
+                "baseline_weights": weights,
+                "baseline_metrics": baseline_metrics,
+                "optimized_weights": final_weights,
+                "optimized_metrics": final_metrics,
+                "optimization": optimization_metadata,
+            }
+        )
+
+    return results
 
 
 def main() -> None:
@@ -398,14 +475,35 @@ def main() -> None:
         m = results["individual_metrics"][kmer]
         print(f"  k={kmer}: Acc={m['accuracy']*100:.2f}%, MCC={m['mcc']:.4f}, AUC={m['auc']:.4f}")
 
-    print(f"\nEnsemble Results (weights={results['weights']}):")
-    print(f"  Accuracy:    {results['accuracy']:.4f} ({results['accuracy']*100:.2f}%)")
-    print(f"  Precision:   {results['precision']:.4f}")
-    print(f"  Recall:      {results['recall']:.4f}")
-    print(f"  F1:          {results['f1']:.4f}")
-    print(f"  MCC:         {results['mcc']:.4f}")
-    print(f"  AUC:         {results['auc']:.4f}")
-    print(f"  Specificity: {results['specificity']:.4f}")
+    if "baseline_metrics" in results and "optimized_metrics" in results:
+        baseline = results["baseline_metrics"]
+        optimized = results["optimized_metrics"]
+        print(f"\nBaseline Ensemble (weights={results['baseline_weights']}):")
+        print(f"  Accuracy:    {baseline['accuracy']:.4f} ({baseline['accuracy']*100:.2f}%)")
+        print(f"  Precision:   {baseline['precision']:.4f}")
+        print(f"  Recall:      {baseline['recall']:.4f}")
+        print(f"  F1:          {baseline['f1']:.4f}")
+        print(f"  MCC:         {baseline['mcc']:.4f}")
+        print(f"  AUC:         {baseline['auc']:.4f}")
+        print(f"  Specificity: {baseline['specificity']:.4f}")
+
+        print(f"\nOptimized Ensemble (weights={results['optimized_weights']}):")
+        print(f"  Accuracy:    {optimized['accuracy']:.4f} ({optimized['accuracy']*100:.2f}%)")
+        print(f"  Precision:   {optimized['precision']:.4f}")
+        print(f"  Recall:      {optimized['recall']:.4f}")
+        print(f"  F1:          {optimized['f1']:.4f}")
+        print(f"  MCC:         {optimized['mcc']:.4f}")
+        print(f"  AUC:         {optimized['auc']:.4f}")
+        print(f"  Specificity: {optimized['specificity']:.4f}")
+    else:
+        print(f"\nEnsemble Results (weights={results['weights']}):")
+        print(f"  Accuracy:    {results['accuracy']:.4f} ({results['accuracy']*100:.2f}%)")
+        print(f"  Precision:   {results['precision']:.4f}")
+        print(f"  Recall:      {results['recall']:.4f}")
+        print(f"  F1:          {results['f1']:.4f}")
+        print(f"  MCC:         {results['mcc']:.4f}")
+        print(f"  AUC:         {results['auc']:.4f}")
+        print(f"  Specificity: {results['specificity']:.4f}")
     print("=" * 70)
 
     # Save results if output path specified

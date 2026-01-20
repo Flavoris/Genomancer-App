@@ -56,13 +56,13 @@ def test_config_hyperparameters() -> None:
         HyperparameterCheck("lr", 0.00002, 0.00001, 0.00005, "Learning rate"),
         HyperparameterCheck("stage1_lr", 0.00002, 0.00001, 0.00005, "Stage 1 learning rate"),
         HyperparameterCheck("stage2_lr", 0.00001, 0.000005, 0.00002, "Stage 2 learning rate"),
-        HyperparameterCheck("label_smoothing", 0.0, 0.0, 0.01, "Label smoothing"),
-        HyperparameterCheck("mixup_alpha", 0.1, 0.05, 0.2, "Mixup alpha"),
+        HyperparameterCheck("label_smoothing", 0.1, 0.05, 0.15, "Label smoothing"),
+        HyperparameterCheck("mixup_alpha", 0.2, 0.1, 0.3, "Mixup alpha"),
         HyperparameterCheck("warmup_ratio", 0.10, 0.05, 0.15, "Warmup ratio"),
-        HyperparameterCheck("weight_decay", 0.01, 0.005, 0.02, "Weight decay"),
+        HyperparameterCheck("weight_decay", 0.05, 0.01, 0.1, "Weight decay"),
         HyperparameterCheck("grad_accum_steps", 4, 2, 8, "Gradient accumulation"),
-        HyperparameterCheck("epochs", 150, 100, 200, "Epochs"),
-        HyperparameterCheck("early_stopping_patience", 15, 10, 25, "Early stopping patience"),
+        HyperparameterCheck("epochs", 100, 50, 150, "Epochs"),
+        HyperparameterCheck("early_stopping_patience", 10, 5, 20, "Early stopping patience"),
         HyperparameterCheck("engineered_dim", 288, 128, 320, "Engineered feature dimension"),
         HyperparameterCheck("mlm_window_size", 234, 200, 260, "MLM window size"),
     ]
@@ -111,6 +111,7 @@ def test_new_config_sections() -> None:
 
     new_sections = [
         ("ensemble_method", "Ensemble method configuration"),
+        ("ensemble", "Ensemble weighting configuration"),
         ("features", "Feature flags"),
         ("mlm_data", "MLM data configuration"),
         ("simplified_model", "Simplified model settings"),
@@ -136,7 +137,7 @@ def test_simplified_model_defaults() -> None:
     assert isinstance(simplified, dict), "simplified_model should be a mapping"
     assert simplified.get("pooling_type") == "attention"
     assert simplified.get("classifier_hidden") == 256
-    assert simplified.get("classifier_dropout") == 0.15
+    assert simplified.get("classifier_dropout") == 0.20
     assert simplified.get("fusion_method") == "concat"
 
 

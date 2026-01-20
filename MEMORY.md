@@ -102,3 +102,77 @@ Ran `run_regularization_experiment.py` to find optimal regularization settings.
   - Adding feature dropout before classifier (FeatureDropout layer)
   - Increasing drop_path_rate (currently 0.1)
   - Reducing model capacity (fewer transformer layers)
+
+### 2026-01-20: Optimized Ensemble Weights
+Implemented optimized soft-voting weights for multi-kmer Stage 1 ensembles.
+
+**What changed:**
+- Added `ensemble_weights.py` with grid/random search optimization, weight persistence, and load helpers.
+- `evaluate_ensemble.py` now applies sigmoid to logits, compares baseline vs optimized weights, and writes weights to `artifacts/ensemble_weights.json`.
+- `ensemble_infer.py` can load optimized weights via config or CLI (`--optimized-weights`).
+- Added `ensemble` config block (`optimize_weights`, `optimization_metric`, `min_weight`, `weights_path`).
+- Updated config-related tests to reflect current regularization settings and added tests for weight optimization utilities.
+
+### 2026-01-20: Test-Time Augmentation (TTA) with Reverse Complement
+Implemented TTA to average predictions over forward and reverse complement DNA strands.
+
+**Why TTA?**
+DNA is double-stranded, so a sequence and its reverse complement encode the same biological information. By averaging predictions from both orientations, we improve model robustness. Expected improvement: +0.3-0.5% accuracy.
+
+**New Files:**
+- `Gene Whisperer/training/tta.py` - Core TTA implementation
+  - `get_reverse_complement_tokens()` - Converts tokenized sequence to its reverse complement
+  - `predict_with_tta()` - Single prediction with TTA
+  - `predict_batch_with_tta()` - Batch prediction returning forward, RC, and averaged probs
+  - `TTAWrapper` - Convenient wrapper class for TTA-enabled models
+
+- `Gene Whisperer/training/tests/test_tta.py` - Comprehensive test suite (18 tests)
+
+**Modified Files:**
+- `Gene Whisperer/training/ensemble_infer.py`
+  - Added `--tta` and `--tta-aggregation` CLI flags
+  - Reads TTA settings from config `inference.use_tta`
+  - Stores vocab for each model to enable TTA tokenization
+  - TTA details included in `--per_model` output (forward/RC probabilities)
+
+- `Gene Whisperer/training/config.yaml`
+  - Added `inference` section with TTA settings:
+    ```yaml
+    inference:
+      use_tta: true
+      tta_aggregation: "mean"  # or "geometric_mean"
+    ```
+
+**Usage:**
+```bash
+# Via CLI flag
+python ensemble_infer.py --sequence "ATGCATGC..." --tta
+
+# Via config (inference.use_tta: true)
+python ensemble_infer.py --sequence "ATGCATGC..."
+
+# With geometric mean aggregation
+python ensemble_infer.py --sequence "ATGCATGC..." --tta --tta-aggregation geometric_mean
+
+# See per-model TTA details
+python ensemble_infer.py --sequence "ATGCATGC..." --tta --per_model
+```
+
+**Output with TTA:**
+```json
+{
+  "probability": 0.85,
+  "label": "promoter",
+  "threshold": 0.5,
+  "tta_enabled": true,
+  "tta_aggregation": "mean",
+  "per_model": [
+    {"k": 6, "probability": 0.85, "forward": 0.87, "reverse_complement": 0.83}
+  ]
+}
+```
+
+**Key Properties:**
+1. Double reverse complement returns original sequence (verified by tests)
+2. Engineered features are recomputed for RC sequence for accuracy
+3. TTA can be disabled at runtime with config or by omitting `--tta` flag

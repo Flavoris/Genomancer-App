@@ -38,9 +38,9 @@ CONFIG_CHECKS: Sequence[ConfigCheck] = (
     ConfigCheck("stage1_use_focal_loss", False, ("loss",)),
     ConfigCheck("stage1_focal_alpha", 0.25, ("loss",)),
     ConfigCheck("stage1_focal_gamma", 2.0, ("loss",)),
-    ConfigCheck("label_smoothing", 0.0, ("loss",)),
+    ConfigCheck("label_smoothing", 0.1, ("loss",)),
     ConfigCheck("warmup_ratio", 0.10, ("training",)),
-    ConfigCheck("early_stopping_patience", 15, ("training",)),
+    ConfigCheck("early_stopping_patience", 10, ("training",)),
     ConfigCheck("mlm_max_bp_len", 234, ("mlm_data", "mlm")),
     ConfigCheck("mlm_window_size", 234, ("mlm_data", "mlm")),
 )

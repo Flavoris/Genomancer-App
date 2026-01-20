@@ -207,6 +207,15 @@ metrics_stage1: ["accuracy", "precision", "recall", "f1", "mcc", "specificity"]
 metrics_stage2: ["accuracy", "mcc", "roc_auc"]
 
 # =============================================================================
+# ENSEMBLE WEIGHTS
+# =============================================================================
+ensemble:
+  optimize_weights: false
+  optimization_metric: "mcc"
+  min_weight: 0.05
+  weights_path: ../artifacts/ensemble_weights.json
+
+# =============================================================================
 # MULTI-SCALE ENSEMBLE (Advanced - for >92% accuracy)
 # =============================================================================
 # Enable to train multiple k-mer models and ensemble
