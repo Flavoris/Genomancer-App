@@ -176,3 +176,46 @@ python ensemble_infer.py --sequence "ATGCATGC..." --tta --per_model
 1. Double reverse complement returns original sequence (verified by tests)
 2. Engineered features are recomputed for RC sequence for accuracy
 3. TTA can be disabled at runtime with config or by omitting `--tta` flag
+
+### 2026-01-19: Rotary Position Embedding (RoPE)
+Implemented Rotary Position Embedding (RoPE) as an alternative to absolute position embeddings.
+
+**Why RoPE?**
+RoPE from RoFormer/LLaMA rotates query and key vectors based on their positions instead of adding position embeddings. This captures relative positions better than absolute embeddings, which is important for DNA motif detection where the relative distance between bases matters more than their absolute position.
+
+**New Files:**
+- `Gene Whisperer/training/rope.py` - Core RoPE implementation
+  - `RotaryEmbedding` class - Precomputes and caches cos/sin for position rotation
+  - `rotate_half()` - Helper function to rotate half the hidden dimensions
+  - `apply_rotary_emb()` - Applies rotation to query and key tensors
+  - `RoPEAttention` - Standalone attention module with RoPE (for reference)
+
+**Modified Files:**
+- `Gene Whisperer/training/model.py`
+  - Added `use_rope` and `rope_base` parameters to `DNAEncoder`
+  - Added RoPE support to `PreNormTransformerLayer`
+  - Updated all model classes (`GeneWhispererStage1`, `GeneWhispererTransformerOnly`, `GeneWhispererCombined`, `GeneWhispererStage2`) to pass RoPE parameters
+  - Updated `create_model_variant()` factory function
+
+- `Gene Whisperer/training/config.yaml`
+  - Added `use_rope: true` (enables RoPE)
+  - Added `rope_base: 10000.0` (frequency base)
+  - Set `use_relative_position_bias: false` (disabled when using RoPE)
+
+**Config Options:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `use_rope` | true | Enable Rotary Position Embedding |
+| `rope_base` | 10000.0 | Base for frequency computation |
+
+**How it Works:**
+1. When `use_rope=True`, position embeddings are NOT added to input embeddings
+2. Instead, RoPE rotates Q and K vectors in each attention layer based on position
+3. The rotation encodes relative position information directly in the attention computation
+4. RoPE is applied before computing attention scores: `attn = softmax((RoPE(Q) @ RoPE(K)^T) / sqrt(d))`
+
+**Expected Improvement:** +1-2% accuracy due to better relative position understanding
+
+**Compatibility:**
+- RoPE is mutually exclusive with `use_relative_position_bias` - when RoPE is enabled, relative position bias is ignored
+- Checkpoints are backward compatible (position embeddings are still created but not used when RoPE is enabled)

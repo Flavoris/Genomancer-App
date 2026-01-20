@@ -23,6 +23,8 @@ import torch  # pyright: ignore[reportMissingImports]
 import torch.nn as nn  # pyright: ignore[reportMissingImports]
 import torch.nn.functional as F  # pyright: ignore[reportMissingImports]
 
+from rope import RotaryEmbedding, apply_rotary_emb
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -197,6 +199,8 @@ class DNAEncoder(nn.Module):
         relative_position_max_distance: int = 128,
         use_glu_ffn: bool = False,  # Use GLU-style FFN
         glu_activation: str = "gelu",  # Activation for GLU: "gelu" or "silu"
+        use_rope: bool = False,  # Use Rotary Position Embedding
+        rope_base: float = 10000.0,  # Base for RoPE frequency computation
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
@@ -205,6 +209,7 @@ class DNAEncoder(nn.Module):
         self.pad_token_id = pad_token_id
         self.num_heads = num_heads
         self.use_relative_position_bias = use_relative_position_bias
+        self.use_rope = use_rope
 
         # Embedding with scaled initialization (BERT-style)
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_token_id)
@@ -215,11 +220,20 @@ class DNAEncoder(nn.Module):
         # Embedding layer norm for stability (like BERT)
         self.embed_norm = nn.LayerNorm(embedding_dim)
 
-        # Positional encoding - ALWAYS use position embeddings for input
-        # This is critical for MLM: when all tokens are [MASK], the model needs
-        # positional information in the embeddings themselves, not just in attention.
-        self.pos_embedding = nn.Embedding(max_seq_len, embedding_dim)
-        nn.init.normal_(self.pos_embedding.weight, std=0.02)
+        # Positional encoding - use position embeddings unless RoPE is enabled
+        # When using RoPE, position information is encoded in the attention layers
+        # through rotation of query and key vectors, so we don't need separate
+        # position embeddings added to the input.
+        # Note: For MLM pretraining with masked tokens, RoPE provides position
+        # info through attention rather than input embeddings.
+        if not use_rope:
+            self.pos_embedding = nn.Embedding(max_seq_len, embedding_dim)
+            nn.init.normal_(self.pos_embedding.weight, std=0.02)
+        else:
+            # Create a dummy embedding to maintain checkpoint compatibility
+            # but it won't be used in forward pass
+            self.pos_embedding = nn.Embedding(max_seq_len, embedding_dim)
+            nn.init.normal_(self.pos_embedding.weight, std=0.02)
 
         # Relative position bias (T5/ALiBi style) - shared across all layers
         if use_relative_position_bias:
@@ -244,6 +258,9 @@ class DNAEncoder(nn.Module):
                 drop_path=dpr[i],
                 use_glu_ffn=use_glu_ffn,
                 glu_activation=glu_activation,
+                use_rope=use_rope,
+                rope_base=rope_base,
+                max_seq_len=max_seq_len,
             )
             for i in range(num_layers)
         ])
@@ -315,15 +332,16 @@ class DNAEncoder(nn.Module):
             (B, L, D) encoded representations, optionally with hidden states
         """
         B, L = token_ids.shape
-        
+
         x = self.embedding(token_ids)
-        
-        # ALWAYS add positional embeddings to input
-        # This is critical for MLM: when inputs are [MASK], positions must be encoded
-        # in the embeddings, not just in attention.
-        positions = torch.arange(L, device=token_ids.device)
-        x = x + self.pos_embedding(positions).unsqueeze(0)
-        
+
+        # Add positional embeddings only if NOT using RoPE
+        # When using RoPE, position information is encoded through rotation
+        # of query and key vectors in attention layers instead.
+        if not self.use_rope:
+            positions = torch.arange(L, device=token_ids.device)
+            x = x + self.pos_embedding(positions).unsqueeze(0)
+
         # Apply embedding layer norm for stability
         x = self.embed_norm(x)
         x = self.embed_dropout(x)
@@ -560,6 +578,7 @@ class PreNormTransformerLayer(nn.Module):
     Now properly handles padding masks without interfering with attention computation.
 
     Supports optional GLU FFN (Gated Linear Unit) for improved expressiveness.
+    Supports optional RoPE (Rotary Position Embedding) for better relative position understanding.
     """
 
     def __init__(
@@ -571,14 +590,24 @@ class PreNormTransformerLayer(nn.Module):
         drop_path: float = 0.0,  # Stochastic depth probability
         use_glu_ffn: bool = False,  # Use GLU-style FFN
         glu_activation: str = "gelu",  # Activation for GLU: "gelu" or "silu"
+        use_rope: bool = False,  # Use Rotary Position Embedding
+        rope_base: float = 10000.0,  # Base for RoPE frequency computation
+        max_seq_len: int = 512,  # Maximum sequence length for RoPE cache
     ):
         super().__init__()
         self.d_model = d_model
         self.nhead = nhead
         self.head_dim = d_model // nhead
+        self.use_rope = use_rope
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
+
+        # Initialize RoPE if enabled
+        if use_rope:
+            self.rotary = RotaryEmbedding(self.head_dim, max_seq_len, rope_base)
+        else:
+            self.rotary = None
 
         # Use custom attention for tighter control over masking behavior
         self.q_proj = nn.Linear(d_model, d_model)
@@ -639,11 +668,17 @@ class PreNormTransformerLayer(nn.Module):
         k = self.k_proj(normed).view(B, L, self.nhead, self.head_dim).transpose(1, 2)
         v = self.v_proj(normed).view(B, L, self.nhead, self.head_dim).transpose(1, 2)
 
+        # Apply RoPE if enabled (rotates Q and K based on position)
+        if self.use_rope and self.rotary is not None:
+            cos, sin = self.rotary(L)
+            q, k = apply_rotary_emb(q, k, cos, sin)
+
         # Scaled dot-product attention
         attn_weights = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, L, L)
 
         # Add relative position bias BEFORE softmax (T5/ALiBi style)
-        if position_bias is not None:
+        # Note: position_bias is ignored when using RoPE
+        if position_bias is not None and not self.use_rope:
             attn_weights = attn_weights + position_bias
 
         # Apply padding mask
@@ -656,18 +691,18 @@ class PreNormTransformerLayer(nn.Module):
 
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_weights = self.attn_dropout(attn_weights)
-        
+
         # Apply attention to values
         attn_out = (attn_weights @ v).transpose(1, 2).reshape(B, L, D)
         attn_out = self.out_proj(attn_out)
-        
+
         # Stochastic depth on attention residual
         x = self.drop_path_attn(x, self.resid_dropout(attn_out))
-        
+
         # Pre-norm FFN with residual + stochastic depth
         ffn_out = self.ffn(self.norm2(x))
         x = self.drop_path_ffn(x, ffn_out)
-        
+
         return x
 
 
@@ -849,6 +884,9 @@ class GeneWhispererStage1(nn.Module):
         # GLU FFN parameters
         use_glu_ffn: bool = False,
         glu_activation: str = "gelu",
+        # RoPE parameters
+        use_rope: bool = False,
+        rope_base: float = 10000.0,
     ):
         super().__init__()
 
@@ -882,6 +920,8 @@ class GeneWhispererStage1(nn.Module):
             relative_position_max_distance=relative_position_max_distance,
             use_glu_ffn=use_glu_ffn,
             glu_activation=glu_activation,
+            use_rope=use_rope,
+            rope_base=rope_base,
         )
         self.embedding = self._full_encoder.embedding
         encoder_dim = self._full_encoder.embedding_dim
@@ -1176,6 +1216,8 @@ class GeneWhispererTransformerOnly(nn.Module):
         relative_position_max_distance: int = 128,
         use_glu_ffn: bool = False,
         glu_activation: str = "gelu",
+        use_rope: bool = False,
+        rope_base: float = 10000.0,
     ):
         super().__init__()
         self.pad_token_id = pad_token_id
@@ -1196,6 +1238,8 @@ class GeneWhispererTransformerOnly(nn.Module):
             relative_position_max_distance=relative_position_max_distance,
             use_glu_ffn=use_glu_ffn,
             glu_activation=glu_activation,
+            use_rope=use_rope,
+            rope_base=rope_base,
         )
         self.embedding = self._full_encoder.embedding
 
@@ -1361,6 +1405,8 @@ class GeneWhispererCombined(nn.Module):
         relative_position_max_distance: int = 128,
         use_glu_ffn: bool = False,
         glu_activation: str = "gelu",
+        use_rope: bool = False,
+        rope_base: float = 10000.0,
     ):
         super().__init__()
         self.pad_token_id = pad_token_id
@@ -1382,6 +1428,8 @@ class GeneWhispererCombined(nn.Module):
             relative_position_max_distance=relative_position_max_distance,
             use_glu_ffn=use_glu_ffn,
             glu_activation=glu_activation,
+            use_rope=use_rope,
+            rope_base=rope_base,
         )
         self.embedding = self._full_encoder.embedding
 
@@ -1518,6 +1566,8 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
     relative_position_max_distance = int(config.get("relative_position_max_distance", 128))
     use_glu_ffn = bool(config.get("use_glu_ffn", False))
     glu_activation = str(config.get("glu_activation", "gelu"))
+    use_rope = bool(config.get("use_rope", False))
+    rope_base = float(config.get("rope_base", 10000.0))
 
     if normalized == "transformer_only":
         return GeneWhispererTransformerOnly(
@@ -1538,6 +1588,8 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
             relative_position_max_distance=relative_position_max_distance,
             use_glu_ffn=use_glu_ffn,
             glu_activation=glu_activation,
+            use_rope=use_rope,
+            rope_base=rope_base,
         )
     if normalized == "features_only":
         return GeneWhispererFeaturesOnly(
@@ -1567,6 +1619,8 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
         relative_position_max_distance=relative_position_max_distance,
         use_glu_ffn=use_glu_ffn,
         glu_activation=glu_activation,
+        use_rope=use_rope,
+        rope_base=rope_base,
     )
 
 
@@ -1812,6 +1866,9 @@ class GeneWhispererStage2(nn.Module):
         # GLU FFN parameters
         use_glu_ffn: bool = False,
         glu_activation: str = "gelu",
+        # RoPE parameters
+        use_rope: bool = False,
+        rope_base: float = 10000.0,
     ):
         super().__init__()
 
@@ -1835,6 +1892,8 @@ class GeneWhispererStage2(nn.Module):
             relative_position_max_distance=relative_position_max_distance,
             use_glu_ffn=use_glu_ffn,
             glu_activation=glu_activation,
+            use_rope=use_rope,
+            rope_base=rope_base,
         )
         self.embedding = self._full_encoder.embedding
         encoder_dim = self._full_encoder.embedding_dim

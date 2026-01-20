@@ -53,9 +53,12 @@ model: &model
   model_variant: stage1  # options: transformer_only, features_only, combined
   use_glu_ffn: true
   glu_activation: "gelu"
-  use_relative_position_bias: true
+  use_relative_position_bias: false  # Disabled when using RoPE
   relative_position_num_buckets: 32
   relative_position_max_distance: 128
+  # Rotary Position Embedding (RoPE) - better relative position understanding
+  use_rope: true
+  rope_base: 10000.0
   use_attention_pool: true
   lstm_hidden: 192
   kmer: 6
