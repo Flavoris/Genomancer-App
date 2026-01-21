@@ -443,3 +443,23 @@ model:
 With GQA (num_kv_heads=4, transformer_heads=12), KV projection parameters are reduced by ~67%, resulting in ~10-15% total parameter reduction with minimal accuracy impact.
 
 **Expected Total Improvement from V6:** +2-4% accuracy over baseline transformer
+
+### 2026-01-21: V6 load_pretrained_weights Bug Fix
+Fixed TypeError when running Stage 1 training with V6 architecture.
+
+**Issue:**
+```
+TypeError: GeneWhispererV6.load_pretrained_weights() got an unexpected keyword argument 'transfer_mode'
+```
+
+**Root Cause:**
+The `GeneWhispererV6.load_pretrained_weights()` method in `model_v6.py` was missing the `transfer_mode` parameter that other model classes support. The training code in `train_stage1.py:3176` passes this parameter when loading MLM encoder weights.
+
+**Fix:**
+Updated `GeneWhispererV6.load_pretrained_weights()` to accept `transfer_mode` parameter with the same signature as other models:
+- Added `transfer_mode: str = "embed_only"` parameter
+- Added validation for supported modes: "embed_only", "embed_plus_adapter", "none"
+- Added early return when `transfer_mode="none"`
+
+**Files Modified:**
+- `Gene Whisperer/training/model_v6.py` - Added transfer_mode parameter to load_pretrained_weights()

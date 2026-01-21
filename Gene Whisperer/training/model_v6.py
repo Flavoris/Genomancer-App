@@ -404,8 +404,28 @@ class GeneWhispererV6(nn.Module):
 
         return logits
 
-    def load_pretrained_weights(self, checkpoint_path: str, strict: bool = False):
-        """Load pretrained weights, handling architecture differences."""
+    def load_pretrained_weights(
+        self,
+        checkpoint_path: str,
+        strict: bool = False,
+        transfer_mode: str = "embed_only",
+    ):
+        """Load pretrained weights, handling architecture differences.
+
+        Args:
+            checkpoint_path: Path to pretrained checkpoint file
+            strict: Whether to require exact weight match (default False)
+            transfer_mode: One of ["embed_only", "embed_plus_adapter", "none"]
+                          Controls which weights to load. For V6, both embed modes
+                          load all compatible weights.
+        """
+        if transfer_mode == "none":
+            print("Skipping weight loading (transfer_mode=none)")
+            return
+
+        if transfer_mode not in {"embed_only", "embed_plus_adapter"}:
+            raise ValueError(f"Unsupported transfer_mode: {transfer_mode}")
+
         state_dict = torch.load(checkpoint_path, map_location='cpu')
         if 'model_state_dict' in state_dict:
             state_dict = state_dict['model_state_dict']
@@ -419,6 +439,8 @@ class GeneWhispererV6(nn.Module):
         self.load_state_dict(model_dict, strict=False)
 
         print(f"Loaded {len(compatible)}/{len(state_dict)} weights from checkpoint")
+        if transfer_mode == "embed_plus_adapter":
+            print("V6 architecture: loaded all compatible encoder weights")
 
     @property
     def encoder(self):
