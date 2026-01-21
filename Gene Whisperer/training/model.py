@@ -972,6 +972,9 @@ from model_legacy import (
     TCNEncoder,
 )
 
+# V6 Modern Architecture import
+from model_v6 import GeneWhispererV6, ModernTransformerBlock, create_v6_model
+
 # =============================================================================
 # Simplified Stage 1: Transformer-Only Backbone
 # =============================================================================
@@ -1696,15 +1699,25 @@ class GeneWhispererCombined(nn.Module):
 
 def create_model_variant(variant: str, config: dict) -> nn.Module:
     """
-    Factory for transformer-only, features-only, or combined model variants.
+    Factory for transformer-only, features-only, combined, or v6 model variants.
+
+    Supported variants:
+    - "transformer_only": Transformer encoder with mean pooling
+    - "features_only": Engineered features only (no transformer)
+    - "combined": Transformer + engineered features
+    - "v6": Modern LLM architecture (RoPE, SwiGLU, RMSNorm, optional GQA)
     """
     if not isinstance(config, dict):
         raise ValueError("config must be a dict")
 
     normalized = variant.strip().lower()
-    supported = {"transformer_only", "features_only", "combined"}
+    supported = {"transformer_only", "features_only", "combined", "v6"}
     if normalized not in supported:
         raise ValueError(f"Unsupported model variant: {variant}")
+
+    # V6 modern architecture - use dedicated factory
+    if normalized == "v6":
+        return create_v6_model(config)
 
     vocab_size = int(config.get("vocab_size", 67))
     kmer = int(config.get("kmer", 3))

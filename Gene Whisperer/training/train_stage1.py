@@ -3054,7 +3054,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         use_simplified_architecture = True
 
     model_variant = str(cfg_run.get("model_variant", "")).strip().lower()
-    simplified_variants = {"transformer_only", "features_only", "combined"}
+    simplified_variants = {"transformer_only", "features_only", "combined", "v6"}
     use_variant_model = model_variant in simplified_variants
     if model_variant and not use_variant_model:
         LOGGER.info(

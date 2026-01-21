@@ -45,12 +45,15 @@ hardware: &hardware
 
 # == MODEL ARCHITECTURE ==
 model: &model
+  # Model version: "v5" (simplified), "v6" (modern LLM), or legacy variants
+  # v6 integrates all modern improvements: RoPE, SwiGLU, RMSNorm, optional GQA
+  model_version: "v6"  # options: v5, v6
   embedding_dim: 384
   transformer_layers: 12
   transformer_heads: 12
   transformer_ff_dim: 1536
   transformer_dropout: 0.20  # Optimal from regularization experiment (86.55% val acc)
-  model_variant: stage1  # options: transformer_only, features_only, combined
+  model_variant: v6  # options: transformer_only, features_only, combined, v6
   use_glu_ffn: false  # Legacy param, use ffn_type instead
   glu_activation: "gelu"  # Legacy param for GLU FFN
   # SwiGLU and RMSNorm settings (modern LLM architecture from LLaMA/PaLM)
@@ -70,6 +73,14 @@ model: &model
     tata_box: [45, 55]      # TATA box region (-35 to -25 bp from TSS)
     minus_10_box: [64, 74]  # -10 box region (-15 to -5 bp from TSS)
     tss: [75, 81]           # Transcription start site (most important)
+  # Grouped Query Attention (GQA) - reduces parameters by sharing KV heads
+  # Only used when model_variant: "v6" and use_gqa: true
+  use_gqa: false
+  num_kv_heads: 4  # Number of KV heads (must divide transformer_heads evenly)
+  # Convenience flags for v6 architecture (can override ffn_type/norm_type)
+  use_swiglu: true  # Use SwiGLU FFN (sets ffn_type: "swiglu" for v6)
+  use_rmsnorm: true  # Use RMSNorm (sets norm_type: "rmsnorm" for v6)
+  use_positional_bias: true  # Use positional motif bias in v6 (alias for use_positional_motif_bias)
   use_attention_pool: true
   lstm_hidden: 192
   kmer: 6

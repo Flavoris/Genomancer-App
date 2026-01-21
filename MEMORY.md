@@ -379,3 +379,67 @@ model:
 ```
 
 **Expected Improvement:** +0.5-1% accuracy from position-aware attention
+
+### 2026-01-20: GeneWhispererV6 Modern Architecture
+Implemented GeneWhispererV6, a modern LLM-style architecture that integrates all improvements into a clean, unified model.
+
+**Why V6?**
+V6 combines all the modern transformer improvements (RoPE, SwiGLU, RMSNorm, positional motif bias) with optional Grouped Query Attention (GQA) in a simplified, efficient architecture following the patterns used in LLaMA, Mistral, and PaLM.
+
+**New Files:**
+- `Gene Whisperer/training/model_v6.py` - Core V6 implementation
+  - `ModernTransformerBlock` - Unified block with all modern features
+  - `GeneWhispererV6` - Main model class
+  - `create_v6_model()` - Factory function
+
+- `Gene Whisperer/training/tests/test_model_v6.py` - Comprehensive test suite (30 tests)
+
+**Modified Files:**
+- `Gene Whisperer/training/model.py`
+  - Added import for V6 model components
+  - Updated `create_model_variant()` to support "v6" variant
+
+- `Gene Whisperer/training/config.yaml`
+  - Added `model_version: "v5"` option (v5 or v6)
+  - Added `use_gqa: false` for Grouped Query Attention
+  - Added `num_kv_heads: 4` for GQA configuration
+  - Added convenience flags: `use_swiglu`, `use_rmsnorm`, `use_positional_bias`
+
+**Architecture:**
+```
+Input -> Embedding -> [ModernTransformerBlock x N] -> Pool -> [+Features] -> Classifier
+```
+
+Each ModernTransformerBlock contains:
+- Pre-norm with RMSNorm (or LayerNorm)
+- RoPE-enhanced multi-head attention (or GQA)
+- Optional positional motif bias (first layer only)
+- SwiGLU FFN (or standard GELU)
+
+**Config Options:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `model_version` | "v5" | Model version: "v5" (simplified) or "v6" (modern) |
+| `model_variant` | "stage1" | Model variant: transformer_only, features_only, combined, v6 |
+| `use_gqa` | false | Enable Grouped Query Attention |
+| `num_kv_heads` | 4 | Number of KV heads for GQA (must divide transformer_heads) |
+| `use_swiglu` | true | Use SwiGLU FFN in V6 |
+| `use_rmsnorm` | true | Use RMSNorm in V6 |
+| `use_positional_bias` | true | Use positional motif bias in V6 |
+
+**Usage:**
+```yaml
+model:
+  model_variant: "v6"  # Use V6 modern architecture
+  use_rope: true
+  use_swiglu: true
+  use_rmsnorm: true
+  use_positional_bias: true
+  use_gqa: false  # Optional: enable for parameter reduction
+  num_kv_heads: 4  # Only used if use_gqa: true
+```
+
+**GQA Parameter Reduction:**
+With GQA (num_kv_heads=4, transformer_heads=12), KV projection parameters are reduced by ~67%, resulting in ~10-15% total parameter reduction with minimal accuracy impact.
+
+**Expected Total Improvement from V6:** +2-4% accuracy over baseline transformer
