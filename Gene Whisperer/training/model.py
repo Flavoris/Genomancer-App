@@ -24,6 +24,7 @@ import torch.nn as nn  # pyright: ignore[reportMissingImports]
 import torch.nn.functional as F  # pyright: ignore[reportMissingImports]
 
 from rope import RotaryEmbedding, apply_rotary_emb
+from positional_motif_bias import PositionalMotifBias, DEFAULT_PROMOTER_PRIORS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -204,6 +205,8 @@ class DNAEncoder(nn.Module):
         ffn_type: str = None,  # FFN type: "gelu", "glu", "swiglu"
         norm_type: str = "layernorm",  # Normalization: "layernorm" or "rmsnorm"
         ffn_mult: float = None,  # FFN expansion multiplier (for SwiGLU)
+        use_positional_motif_bias: bool = False,  # Bias attention toward promoter motifs
+        motif_regions: Optional[dict] = None,  # Custom motif regions {name: [start, end]}
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
@@ -213,6 +216,7 @@ class DNAEncoder(nn.Module):
         self.num_heads = num_heads
         self.use_relative_position_bias = use_relative_position_bias
         self.use_rope = use_rope
+        self.use_positional_motif_bias = use_positional_motif_bias
 
         # Embedding with scaled initialization (BERT-style)
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=pad_token_id)
@@ -248,6 +252,30 @@ class DNAEncoder(nn.Module):
             )
         else:
             self.relative_position_bias = None
+
+        # Positional motif bias for promoter-specific attention patterns
+        # This biases attention toward known regulatory regions (TATA box, -10 box, TSS)
+        if use_positional_motif_bias:
+            # Convert config format {name: [start, end]} to expected {(start, end): bias}
+            motif_priors = None
+            if motif_regions:
+                motif_priors = {}
+                for name, (start, end) in motif_regions.items():
+                    # Use higher bias for TSS region
+                    bias_val = 0.15 if "tss" in name.lower() else 0.1
+                    motif_priors[(start, end)] = bias_val
+            else:
+                # Use defaults for 81bp promoter sequences
+                motif_priors = DEFAULT_PROMOTER_PRIORS
+
+            self.positional_motif_bias = PositionalMotifBias(
+                num_heads=num_heads,
+                max_seq_len=max_seq_len,
+                init_bias_positions=motif_priors,
+                learnable=True,
+            )
+        else:
+            self.positional_motif_bias = None
 
         # Pre-norm transformer layers with linearly increasing stochastic depth
         # This drops more aggressively in later layers (which are more task-specific)
@@ -361,12 +389,24 @@ class DNAEncoder(nn.Module):
         if self.relative_position_bias is not None:
             position_bias = self.relative_position_bias(L, token_ids.device)
 
+        # Compute positional motif bias once (shared across all layers)
+        # This biases attention toward known promoter motif positions
+        motif_bias = None
+        if self.positional_motif_bias is not None:
+            # Get bias slice for current sequence length, add batch dimension
+            motif_bias = self.positional_motif_bias.bias[:, :L, :L].unsqueeze(0)
+
         # Process through layers
         hidden_states = [] if return_all_hidden_states else None
         for layer in self.layers:
             if return_all_hidden_states:
                 hidden_states.append(x)
-            x = layer(x, key_padding_mask=key_padding_mask, position_bias=position_bias)
+            x = layer(
+                x,
+                key_padding_mask=key_padding_mask,
+                position_bias=position_bias,
+                motif_bias=motif_bias,
+            )
         
         output = self.final_norm(x)
         
@@ -750,6 +790,7 @@ class PreNormTransformerLayer(nn.Module):
         x: torch.Tensor,
         key_padding_mask: Optional[torch.Tensor] = None,
         position_bias: Optional[torch.Tensor] = None,
+        motif_bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         B, L, D = x.shape
 
@@ -773,6 +814,12 @@ class PreNormTransformerLayer(nn.Module):
         # Note: position_bias is ignored when using RoPE
         if position_bias is not None and not self.use_rope:
             attn_weights = attn_weights + position_bias
+
+        # Add positional motif bias (biological priors for promoter regions)
+        # This is applied regardless of RoPE since it's about absolute biological
+        # positions (TATA box, -10 box, TSS) not relative position encoding
+        if motif_bias is not None:
+            attn_weights = attn_weights + motif_bias
 
         # Apply padding mask
         if key_padding_mask is not None:
@@ -984,6 +1031,9 @@ class GeneWhispererStage1(nn.Module):
         ffn_type: str = None,
         norm_type: str = "layernorm",
         ffn_mult: float = None,
+        # Positional motif bias parameters
+        use_positional_motif_bias: bool = False,
+        motif_regions: Optional[dict] = None,
     ):
         super().__init__()
 
@@ -1022,6 +1072,8 @@ class GeneWhispererStage1(nn.Module):
             ffn_type=ffn_type,
             norm_type=norm_type,
             ffn_mult=ffn_mult,
+            use_positional_motif_bias=use_positional_motif_bias,
+            motif_regions=motif_regions,
         )
         self.embedding = self._full_encoder.embedding
         encoder_dim = self._full_encoder.embedding_dim
@@ -1321,6 +1373,8 @@ class GeneWhispererTransformerOnly(nn.Module):
         ffn_type: str = None,
         norm_type: str = "layernorm",
         ffn_mult: float = None,
+        use_positional_motif_bias: bool = False,
+        motif_regions: Optional[dict] = None,
     ):
         super().__init__()
         self.pad_token_id = pad_token_id
@@ -1346,6 +1400,8 @@ class GeneWhispererTransformerOnly(nn.Module):
             ffn_type=ffn_type,
             norm_type=norm_type,
             ffn_mult=ffn_mult,
+            use_positional_motif_bias=use_positional_motif_bias,
+            motif_regions=motif_regions,
         )
         self.embedding = self._full_encoder.embedding
 
@@ -1516,6 +1572,8 @@ class GeneWhispererCombined(nn.Module):
         ffn_type: str = None,
         norm_type: str = "layernorm",
         ffn_mult: float = None,
+        use_positional_motif_bias: bool = False,
+        motif_regions: Optional[dict] = None,
     ):
         super().__init__()
         self.pad_token_id = pad_token_id
@@ -1542,6 +1600,8 @@ class GeneWhispererCombined(nn.Module):
             ffn_type=ffn_type,
             norm_type=norm_type,
             ffn_mult=ffn_mult,
+            use_positional_motif_bias=use_positional_motif_bias,
+            motif_regions=motif_regions,
         )
         self.embedding = self._full_encoder.embedding
 
@@ -1685,6 +1745,8 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
     ffn_mult = config.get("ffn_mult")
     if ffn_mult is not None:
         ffn_mult = float(ffn_mult)
+    use_positional_motif_bias = bool(config.get("use_positional_motif_bias", False))
+    motif_regions = config.get("motif_regions")
 
     if normalized == "transformer_only":
         return GeneWhispererTransformerOnly(
@@ -1710,6 +1772,8 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
             ffn_type=ffn_type,
             norm_type=norm_type,
             ffn_mult=ffn_mult,
+            use_positional_motif_bias=use_positional_motif_bias,
+            motif_regions=motif_regions,
         )
     if normalized == "features_only":
         return GeneWhispererFeaturesOnly(
@@ -1744,6 +1808,8 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
         ffn_type=ffn_type,
         norm_type=norm_type,
         ffn_mult=ffn_mult,
+        use_positional_motif_bias=use_positional_motif_bias,
+        motif_regions=motif_regions,
     )
 
 
@@ -1996,6 +2062,9 @@ class GeneWhispererStage2(nn.Module):
         ffn_type: str = None,
         norm_type: str = "layernorm",
         ffn_mult: float = None,
+        # Positional motif bias parameters
+        use_positional_motif_bias: bool = False,
+        motif_regions: Optional[dict] = None,
     ):
         super().__init__()
 
@@ -2024,6 +2093,8 @@ class GeneWhispererStage2(nn.Module):
             ffn_type=ffn_type,
             norm_type=norm_type,
             ffn_mult=ffn_mult,
+            use_positional_motif_bias=use_positional_motif_bias,
+            motif_regions=motif_regions,
         )
         self.embedding = self._full_encoder.embedding
         encoder_dim = self._full_encoder.embedding_dim

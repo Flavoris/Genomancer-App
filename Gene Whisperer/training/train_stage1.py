@@ -749,6 +749,116 @@ class FocalLossWithSmoothing(nn.Module):
         return loss.mean()
 
 
+def get_reverse_complement_tokens_for_training(
+    tokens: torch.Tensor,
+    vocab: KmerVocabulary,
+    max_bp_len: int,
+) -> torch.Tensor:
+    """Compute reverse complement tokens for training consistency loss.
+
+    Args:
+        tokens: Tokenized sequences of shape (batch_size, seq_len)
+        vocab: KmerVocabulary instance for encoding/decoding
+        max_bp_len: Maximum base pair length for tokenization
+
+    Returns:
+        Reverse complement tokens with same shape as input
+    """
+    batch_rc_tokens = []
+
+    for seq_tokens in tokens:
+        # Decode tokens back to DNA sequence
+        token_list = seq_tokens.tolist()
+        seq = vocab.decode(token_list)
+
+        # Compute reverse complement
+        rc_seq = reverse_complement(seq)
+
+        # Re-tokenize
+        rc_tokens = vocab.tokenize(rc_seq, max_bp_len)
+        batch_rc_tokens.append(rc_tokens)
+
+    return torch.stack(batch_rc_tokens, dim=0).to(tokens.device)
+
+
+class BidirectionalConsistencyLoss(nn.Module):
+    """Combined classification + bidirectional consistency loss.
+
+    DNA is double-stranded, so predictions for a sequence and its reverse
+    complement should agree. This loss enforces consistency between forward
+    and reverse complement predictions during training.
+
+    Total loss = classification_loss + alpha * consistency_loss
+
+    Where:
+        - classification_loss: Average BCE of forward and RC predictions
+        - consistency_loss: MSE between forward and RC probability predictions
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.3,
+        label_smoothing: float = 0.0,
+    ):
+        """Initialize bidirectional consistency loss.
+
+        Args:
+            alpha: Weight for consistency loss term (0.0-1.0)
+            label_smoothing: Label smoothing factor for classification loss
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.label_smoothing = label_smoothing
+
+    def forward(
+        self,
+        logits_fwd: torch.Tensor,
+        logits_rc: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """Compute combined loss.
+
+        Args:
+            logits_fwd: Forward strand logits (batch_size, 1)
+            logits_rc: Reverse complement logits (batch_size, 1)
+            labels: Ground truth labels (batch_size, 1)
+
+        Returns:
+            Tuple of (total_loss, metrics_dict) where metrics_dict contains
+            cls_loss, consistency_loss, and total_loss values
+        """
+        # Apply label smoothing if enabled
+        if self.label_smoothing > 0:
+            labels_smooth = labels * (1 - self.label_smoothing) + 0.5 * self.label_smoothing
+        else:
+            labels_smooth = labels
+
+        # Classification loss (average of both strands)
+        cls_loss_fwd = F.binary_cross_entropy_with_logits(
+            logits_fwd, labels_smooth, reduction='mean'
+        )
+        cls_loss_rc = F.binary_cross_entropy_with_logits(
+            logits_rc, labels_smooth, reduction='mean'
+        )
+        cls_loss = (cls_loss_fwd + cls_loss_rc) / 2
+
+        # Consistency loss: predictions should agree
+        probs_fwd = torch.sigmoid(logits_fwd)
+        probs_rc = torch.sigmoid(logits_rc)
+        consistency_loss = F.mse_loss(probs_fwd, probs_rc)
+
+        # Combined loss
+        total_loss = cls_loss + self.alpha * consistency_loss
+
+        metrics = {
+            'cls_loss': cls_loss.item(),
+            'consistency_loss': consistency_loss.item(),
+            'total_loss': total_loss.item(),
+        }
+
+        return total_loss, metrics
+
+
 # =============================================================================
 def make_weighted_sampler(
     labels: List[float],
@@ -1754,6 +1864,243 @@ def run_epoch(
         else:
             LOGGER.info("logit min/mean/max: n/a")
     
+    return metrics
+
+
+def run_consistency_epoch(
+    loader: torch.utils.data.DataLoader,
+    model: nn.Module,
+    consistency_criterion: BidirectionalConsistencyLoss,
+    vocab: KmerVocabulary,
+    max_bp_len: int,
+    device: torch.device,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+    desc: str = "Train-Consistency",
+    grad_accum_steps: int = 1,
+    max_optimizer_steps: Optional[int] = None,
+    grad_clip_norm: float = 1.0,
+    amp_ctx: Optional[AMPContext] = None,
+    scaler: Optional[GradScalerType] = None,
+    param_norm_warn: float = 150.0,
+    param_norm_cap: float = 200.0,
+    total_training_steps: Optional[int] = None,
+    lr_log_interval: int = 100,
+    global_step_offset: int = 0,
+    compute_rc_features: bool = True,
+) -> Dict[str, float]:
+    """Run one epoch with bidirectional consistency training.
+
+    This function enforces consistency between forward and reverse complement
+    predictions during training, improving model robustness for double-stranded DNA.
+
+    Args:
+        loader: Training data loader
+        model: The classification model
+        consistency_criterion: BidirectionalConsistencyLoss instance
+        vocab: KmerVocabulary for tokenization
+        max_bp_len: Maximum base pair length for tokenization
+        device: Target device (cuda/mps/cpu)
+        optimizer: Optimizer (None for evaluation)
+        scheduler: Learning rate scheduler
+        desc: Description for progress bar
+        grad_accum_steps: Gradient accumulation steps
+        max_optimizer_steps: Maximum optimizer steps
+        grad_clip_norm: Gradient clipping norm
+        amp_ctx: AMP context for mixed precision
+        scaler: Gradient scaler for CUDA fp16
+        param_norm_warn: Parameter norm warning threshold
+        param_norm_cap: Parameter norm cap
+        total_training_steps: Total training steps for LR logging
+        lr_log_interval: LR logging interval
+        global_step_offset: Global step offset for logging
+        compute_rc_features: Whether to recompute engineered features for RC
+
+    Returns:
+        Dictionary of metrics including loss components
+    """
+    is_train = optimizer is not None
+    model.train(is_train)
+
+    # AMP setup
+    use_autocast = amp_ctx is not None and amp_ctx.enabled
+    use_cuda_scaler = scaler is not None and device.type == "cuda"
+    force_fp32_loss = amp_ctx.force_fp32_loss if amp_ctx else True
+
+    total_loss = 0.0
+    total_cls_loss = 0.0
+    total_consistency_loss = 0.0
+    total_samples = 0
+    all_probs = []
+    all_labels = []
+
+    optimizer_step_count = 0
+    accumulated_loss = 0.0
+    prev_param_norm: Optional[float] = None
+    hit_max_steps = False
+
+    iterable = tqdm(loader, desc=desc, leave=False)
+    for batch_idx, (tokens, engineered, labels) in enumerate(iterable):
+        tokens = tokens.to(device)
+        engineered = engineered.to(device)
+        labels = labels.to(device).unsqueeze(1)
+
+        # Compute reverse complement tokens
+        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_bp_len)
+
+        # Optionally recompute engineered features for RC sequence
+        if compute_rc_features:
+            # Decode, compute RC, re-extract features
+            rc_features_list = []
+            for seq_tokens in rc_tokens:
+                seq = vocab.decode(seq_tokens.tolist())
+                # Compute all engineered features
+                tnc = compute_tnc(seq)
+                pseeiip = compute_pseeiip(seq)
+                cksnap = compute_cksnap(seq)
+                pstnp = compute_pstnp(seq)
+                rc_feat = torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
+                rc_features_list.append(rc_feat)
+            rc_engineered = torch.stack(rc_features_list, dim=0).to(device)
+        else:
+            # Most features are symmetric, so can reuse
+            rc_engineered = engineered
+
+        # Forward pass
+        with torch.set_grad_enabled(is_train):
+            if use_autocast and amp_ctx is not None:
+                with amp_ctx.autocast():
+                    logits_fwd = model(tokens, rc_engineered)
+                    logits_rc = model(rc_tokens, rc_engineered)
+            else:
+                logits_fwd = model(tokens, engineered)
+                logits_rc = model(rc_tokens, rc_engineered)
+
+            # Ensure fp32 for loss computation
+            if force_fp32_loss:
+                logits_fwd = logits_fwd.float()
+                logits_rc = logits_rc.float()
+
+            # Compute consistency loss
+            loss, loss_metrics = consistency_criterion(logits_fwd, logits_rc, labels)
+
+            # Backward pass with gradient accumulation
+            if is_train:
+                loss_scaled = loss / grad_accum_steps
+
+                if use_cuda_scaler:
+                    scaler.scale(loss_scaled).backward()
+                else:
+                    loss_scaled.backward()
+
+                accumulated_loss += loss.item()
+
+                # Optimizer step every grad_accum_steps
+                if (batch_idx + 1) % grad_accum_steps == 0:
+                    if grad_clip_norm > 0:
+                        if use_cuda_scaler:
+                            scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+
+                        # Log gradient statistics periodically
+                        if optimizer_step_count % 50 == 0:
+                            grad_stats = compute_gradient_stats(model)
+                            LOGGER.info(
+                                "Step %d: grad_norm=%.4f, max=%.4f, nan_count=%d",
+                                optimizer_step_count,
+                                grad_stats['grad_norm'],
+                                grad_stats['max_grad'],
+                                grad_stats['nan_grads']
+                            )
+
+                    if use_cuda_scaler:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+
+                    total_norm, scale = cap_model_param_norm_(model, max_norm=param_norm_cap)
+                    if scale < 1.0:
+                        LOGGER.warning(
+                            "Step %d: param_norm=%.2f exceeded cap=%.2f; scaled by %.6f",
+                            optimizer_step_count, total_norm, param_norm_cap, scale
+                        )
+                        prev_param_norm = param_norm_cap
+                    else:
+                        if param_norm_warn > 0 and prev_param_norm is not None:
+                            if prev_param_norm <= param_norm_warn and total_norm > param_norm_warn:
+                                LOGGER.warning(
+                                    "Step %d: param_norm=%.2f exceeded warn=%.2f",
+                                    optimizer_step_count, total_norm, param_norm_warn
+                                )
+                        prev_param_norm = total_norm
+
+                    optimizer.zero_grad()
+
+                    if scheduler is not None:
+                        scheduler.step()
+
+                        if total_training_steps is not None and lr_log_interval > 0:
+                            global_step = global_step_offset + optimizer_step_count
+                            if global_step % lr_log_interval == 0:
+                                current_lr = scheduler.get_last_lr()[0]
+                                LOGGER.info(
+                                    "Step %d/%d, LR: %.2e",
+                                    global_step, total_training_steps, current_lr
+                                )
+
+                    optimizer_step_count += 1
+                    if max_optimizer_steps is not None and optimizer_step_count >= max_optimizer_steps:
+                        hit_max_steps = True
+
+        batch_size = labels.size(0)
+        total_loss += loss.item() * batch_size
+        total_cls_loss += loss_metrics['cls_loss'] * batch_size
+        total_consistency_loss += loss_metrics['consistency_loss'] * batch_size
+        total_samples += batch_size
+
+        # Use forward probabilities for metrics (could also use averaged)
+        probs = torch.sigmoid(logits_fwd.detach().float())
+        all_probs.append(probs.cpu())
+        all_labels.append(labels.detach().cpu())
+
+        iterable.set_postfix(
+            loss=loss.item(),
+            cls=loss_metrics['cls_loss'],
+            cons=loss_metrics['consistency_loss']
+        )
+
+        if hit_max_steps:
+            LOGGER.info("%s: reached max optimizer steps (%d); stopping", desc, max_optimizer_steps)
+            break
+
+    avg_loss = total_loss / total_samples if total_samples else 0.0
+    avg_cls_loss = total_cls_loss / total_samples if total_samples else 0.0
+    avg_consistency_loss = total_consistency_loss / total_samples if total_samples else 0.0
+
+    if total_samples == 0 or not all_probs:
+        return {
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "mcc": 0.0,
+            "roc_auc": 0.5,
+            "specificity": 0.0,
+            "loss": float(avg_loss),
+            "cls_loss": float(avg_cls_loss),
+            "consistency_loss": float(avg_consistency_loss),
+            "optimizer_steps": int(optimizer_step_count),
+        }
+
+    probs_tensor = torch.cat(all_probs, dim=0)
+    labels_tensor = torch.cat(all_labels, dim=0)
+    metrics = calculate_metrics(probs_tensor, labels_tensor)
+    metrics["loss"] = float(avg_loss)
+    metrics["cls_loss"] = float(avg_cls_loss)
+    metrics["consistency_loss"] = float(avg_consistency_loss)
+    metrics["optimizer_steps"] = int(optimizer_step_count)
+
     return metrics
 
 
@@ -2937,6 +3284,8 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     stage1_swa_lr = get_with_fallback(cfg_run, "stage1_swa_lr", "swa_lr", 5e-5)
     stage1_drop_path_rate = get_with_fallback(cfg_run, "stage1_drop_path_rate", "drop_path_rate", 0.1)
     stage1_use_focal_loss = bool(cfg_run.get("stage1_use_focal_loss", True))
+    stage1_use_consistency_loss = bool(cfg_run.get("stage1_use_consistency_loss", False))
+    stage1_consistency_alpha = float(cfg_run.get("stage1_consistency_alpha", 0.3))
 
     # Log effective Stage 1 hyperparameters
     LOGGER.info("=" * 60)
@@ -2951,6 +3300,8 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     LOGGER.info("  stage1_drop_path_rate: %.3f", stage1_drop_path_rate)
     LOGGER.info("  min_lr_ratio: %.3f", min_lr_ratio)
     LOGGER.info("  stage1_use_focal_loss: %s", stage1_use_focal_loss)
+    LOGGER.info("  stage1_use_consistency_loss: %s", stage1_use_consistency_loss)
+    LOGGER.info("  stage1_consistency_alpha: %.3f", stage1_consistency_alpha)
     LOGGER.info("=" * 60)
 
     # SWA setup for breaking plateaus (using effective Stage 1 values)
@@ -2979,7 +3330,20 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     else:
         criterion = LabelSmoothingBCE(smoothing=stage1_label_smoothing)
         LOGGER.info("Using BCE with smoothing=%.2f", stage1_label_smoothing)
-    
+
+    # Bidirectional consistency loss for double-stranded DNA
+    consistency_criterion = None
+    if stage1_use_consistency_loss:
+        consistency_criterion = BidirectionalConsistencyLoss(
+            alpha=stage1_consistency_alpha,
+            label_smoothing=stage1_label_smoothing,
+        )
+        LOGGER.info(
+            "Using Bidirectional Consistency Loss (alpha=%.2f, label_smoothing=%.2f)",
+            stage1_consistency_alpha,
+            stage1_label_smoothing,
+        )
+
     # =========================================================================
     # OVERFIT DEBUG MODE: Train on 32 samples for 200 steps
     # =========================================================================
@@ -3232,6 +3596,29 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 lr_log_interval=lr_log_interval,
                 global_step_offset=global_optimizer_steps,
             )
+        elif stage1_use_consistency_loss and consistency_criterion is not None:
+            # Use bidirectional consistency training
+            train_metrics = run_consistency_epoch(
+                loader=train_loader,
+                model=model,
+                consistency_criterion=consistency_criterion,
+                vocab=vocab,
+                max_bp_len=max_bp_len,
+                device=device,
+                optimizer=optimizer,
+                scheduler=None if in_swa_phase else scheduler,
+                desc="Train-Consistency",
+                grad_accum_steps=grad_accum_steps,
+                max_optimizer_steps=remaining_steps,
+                grad_clip_norm=grad_clip_norm,
+                amp_ctx=amp_ctx,
+                scaler=scaler,
+                param_norm_warn=param_norm_warn,
+                param_norm_cap=param_norm_cap,
+                total_training_steps=total_steps,
+                lr_log_interval=lr_log_interval,
+                global_step_offset=global_optimizer_steps,
+            )
         else:
             train_metrics = run_epoch(
                 train_loader,
@@ -3315,6 +3702,16 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
                 train_metrics["loss"],
                 train_metrics.get("ce_loss", 0.0),
                 train_metrics.get("kl_loss", 0.0),
+                train_metrics["accuracy"],
+                train_metrics["f1"],
+                train_metrics["mcc"],
+            )
+        elif stage1_use_consistency_loss and "consistency_loss" in train_metrics:
+            LOGGER.info(
+                "Train - Loss: %.4f (CLS: %.4f, Cons: %.4f) | Acc: %.4f | F1: %.4f | MCC: %.4f",
+                train_metrics["loss"],
+                train_metrics.get("cls_loss", 0.0),
+                train_metrics.get("consistency_loss", 0.0),
                 train_metrics["accuracy"],
                 train_metrics["f1"],
                 train_metrics["mcc"],

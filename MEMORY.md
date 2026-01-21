@@ -265,3 +265,117 @@ RoPE from RoFormer/LLaMA rotates query and key vectors based on their positions 
 **Compatibility:**
 - RoPE is mutually exclusive with `use_relative_position_bias` - when RoPE is enabled, relative position bias is ignored
 - Checkpoints are backward compatible (position embeddings are still created but not used when RoPE is enabled)
+
+### 2026-01-20: Bidirectional Consistency Training
+Implemented bidirectional consistency training to enforce agreement between forward and reverse complement DNA strand predictions during training.
+
+**Why Consistency Training?**
+DNA is double-stranded, so a sequence and its reverse complement encode the same biological information. By enforcing that model predictions agree for both orientations during training, we improve model robustness and strand-handling capabilities.
+
+**Formula:**
+```
+total_loss = classification_loss + alpha * consistency_loss
+
+Where:
+- classification_loss = (BCE(fwd_logits, labels) + BCE(rc_logits, labels)) / 2
+- consistency_loss = MSE(sigmoid(fwd_logits), sigmoid(rc_logits))
+```
+
+**New Components:**
+
+1. **`BidirectionalConsistencyLoss` class** (`train_stage1.py`)
+   - Combined classification + consistency loss
+   - Returns total loss and detailed metrics (cls_loss, consistency_loss)
+   - Supports label smoothing
+
+2. **`get_reverse_complement_tokens_for_training()`** (`train_stage1.py`)
+   - Computes reverse complement tokens during training
+   - Decodes tokens → computes RC → re-tokenizes
+
+3. **`run_consistency_epoch()`** (`train_stage1.py`)
+   - Training loop variant for consistency training
+   - Computes both forward and RC predictions per batch
+   - Optionally recomputes engineered features for RC sequences
+
+**Config Options:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `stage1_use_consistency_loss` | true | Enable consistency training |
+| `stage1_consistency_alpha` | 0.3 | Weight for consistency term (0.0-1.0) |
+
+**Usage:**
+```yaml
+loss:
+  stage1_use_consistency_loss: true
+  stage1_consistency_alpha: 0.3
+```
+
+**Log Output:**
+```
+Train - Loss: 0.4521 (CLS: 0.4123, Cons: 0.0398) | Acc: 0.8542 | F1: 0.8521 | MCC: 0.7084
+```
+
+**Expected Improvement:** +0.3-0.5% accuracy from better strand handling
+
+**Interaction with Other Features:**
+- Compatible with SWA (consistency training used in regular phase, not SWA phase)
+- Mutually exclusive with distillation training (distillation takes priority)
+- Works with all model variants (original, transformer_only, combined)
+
+### 2026-01-20: Positional Motif Attention Bias
+Implemented learnable position-aware attention bias for known promoter regulatory regions.
+
+**Why Positional Motif Bias?**
+Promoters have known regulatory motifs at specific positions relative to the TSS:
+- TATA box: -30 to -25 bp (positions ~45-55 in 81bp window)
+- -10 box: -12 to -7 bp (positions ~64-74)
+- TSS: position 0 (positions ~75-81)
+
+By initializing attention bias toward these biologically important positions, the model can learn to focus on regulatory regions more effectively.
+
+**New Files:**
+- `Gene Whisperer/training/positional_motif_bias.py` - Core implementation
+  - `PositionalMotifBias` class with learnable (H, L, L) bias matrix
+  - `DEFAULT_PROMOTER_PRIORS` - Default bias values for promoter regions
+  - `create_promoter_motif_bias()` - Factory function
+
+- `Gene Whisperer/training/tests/test_positional_motif_bias.py` - Test suite (21 tests)
+
+**Modified Files:**
+- `Gene Whisperer/training/model.py`
+  - Added `motif_bias` parameter to `PreNormTransformerLayer.forward()`
+  - Added `use_positional_motif_bias` and `motif_regions` to `DNAEncoder`
+  - Updated all model classes (`GeneWhispererStage1`, `GeneWhispererTransformerOnly`, `GeneWhispererCombined`, `GeneWhispererStage2`)
+  - Updated `create_model_variant()` factory function
+
+- `Gene Whisperer/training/config.yaml`
+  - Added `use_positional_motif_bias: true`
+  - Added `motif_regions` with TATA box, -10 box, and TSS positions
+
+**Config Options:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `use_positional_motif_bias` | true | Enable positional motif attention bias |
+| `motif_regions.tata_box` | [45, 55] | TATA box region |
+| `motif_regions.minus_10_box` | [64, 74] | -10 box region |
+| `motif_regions.tss` | [75, 81] | TSS region (highest bias) |
+
+**How it Works:**
+1. A learnable bias matrix (H, L, L) is created for each attention head
+2. Bias is initialized with small values toward known motif positions:
+   - TO columns: All positions attend more to motif regions (bias=0.1-0.15)
+   - FROM rows: Motif positions have broader attention context (bias=0.05-0.075)
+3. The bias is added to attention scores before softmax in every transformer layer
+4. Compatible with RoPE (motif bias handles absolute positions, RoPE handles relative)
+
+**Usage:**
+```yaml
+model:
+  use_positional_motif_bias: true
+  motif_regions:
+    tata_box: [45, 55]
+    minus_10_box: [64, 74]
+    tss: [75, 81]
+```
+
+**Expected Improvement:** +0.5-1% accuracy from position-aware attention

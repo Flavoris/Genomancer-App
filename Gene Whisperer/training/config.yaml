@@ -63,6 +63,13 @@ model: &model
   # Rotary Position Embedding (RoPE) - better relative position understanding
   use_rope: true
   rope_base: 10000.0
+  # Positional Motif Bias - biases attention toward known promoter regulatory regions
+  # For 81bp sequences centered on TSS: TATA box (~45-55), -10 box (~64-74), TSS (~75-81)
+  use_positional_motif_bias: true
+  motif_regions:
+    tata_box: [45, 55]      # TATA box region (-35 to -25 bp from TSS)
+    minus_10_box: [64, 74]  # -10 box region (-15 to -5 bp from TSS)
+    tss: [75, 81]           # Transcription start site (most important)
   use_attention_pool: true
   lstm_hidden: 192
   kmer: 6
@@ -129,6 +136,10 @@ loss: &loss
   stage1_focal_alpha: 0.25
   stage1_focal_gamma: 2.0
   label_smoothing: 0.1  # Optimal from regularization experiment (86.55% val acc)
+  # Bidirectional consistency loss for double-stranded DNA
+  # Enforces agreement between forward and reverse complement predictions
+  stage1_use_consistency_loss: true
+  stage1_consistency_alpha: 0.3  # Weight for consistency term (0.0-1.0)
 
 # == AUGMENTATION ==
 augmentation: &augmentation
