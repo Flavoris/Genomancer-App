@@ -477,6 +477,39 @@ Updated `ensemble_infer.build_model()` to mirror the simplified Stage 1 architec
 - `Gene Whisperer/training/ensemble_infer.py`
 - `Gene Whisperer/training/tests/test_ensemble_infer_build_model.py`
 
+### 2026-01-23: Transformer Contribution Diagnostic Tool
+Added a diagnostic script to measure whether the transformer is learning useful patterns or if predictive power comes entirely from engineered features.
+
+**New Files:**
+- `Gene Whisperer/training/diagnose_transformer_contribution.py` - CLI entry point
+- `Gene Whisperer/training/experiment_runner.py` - Core experiment logic (model building, checkpoint loading, evaluation)
+- `Gene Whisperer/training/hooks.py` - Forward hooks for ablation (randomizes transformer output)
+- `Gene Whisperer/training/tests/test_diagnose_transformer.py` - 27 tests
+
+**Three Experiments:**
+| Experiment | What it tests | Method |
+|-----------|---------------|--------|
+| A (Full model) | Baseline accuracy | Normal forward pass |
+| B (Transformer only) | Transformer contribution | Zero out engineered_features tensor |
+| C (Features only) | Engineered features contribution | Replace pooled transformer output with random vectors via forward hook |
+
+**Interpretation:**
+- Exp B ~50-55%: Transformer NOT learning → improve pre-training
+- Exp B >> 50%: Transformer IS learning useful patterns
+- Exp C ≈ Exp A: Engineered features do all the work
+
+**Usage:**
+```bash
+cd "Gene Whisperer/training"
+python diagnose_transformer_contribution.py --config config.yaml
+python diagnose_transformer_contribution.py --checkpoint ../artifacts/checkpoints/stage1_k6.pt
+python diagnose_transformer_contribution.py --max-samples 500  # Quick test
+```
+
+**Architecture Support:**
+- V5 (GeneWhispererStage1): Hooks on attention pooling module
+- V6 (GeneWhispererV6): Hooks on final_norm, produces consistent per-sample random vectors so mean pooling yields random output
+
 ### 2026-01-23: Checkpoint Compatibility Verifier
 Added a CLI verification helper to compare checkpoint keys/shapes against the
 architecture produced by `ensemble_infer.build_model`.
