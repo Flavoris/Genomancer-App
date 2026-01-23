@@ -248,15 +248,48 @@ def load_vocab(vocab_path: Path) -> KmerVocabulary:
     return KmerVocabulary.load(vocab_path)
 
 
+def _resolve_pooling_type(pooling_type: Optional[str]) -> str:
+    """Normalize pooling type to supported values."""
+    normalized = str(pooling_type or "attention").strip().lower()
+    if normalized in {"attention", "mean"}:
+        return normalized
+    if normalized in {"cls", "max"}:
+        LOGGER.warning(
+            "pooling_type '%s' is not supported; using mean pooling",
+            normalized,
+        )
+        return "mean"
+    LOGGER.warning(
+        "pooling_type '%s' is not recognized; using attention pooling",
+        normalized,
+    )
+    return "attention"
+
+
 def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneWhispererStage1:
     """Build simplified GeneWhispererStage1 model."""
     simplified_cfg = cfg.get("simplified_model") if isinstance(cfg.get("simplified_model"), dict) else {}
-    pooling_type = simplified_cfg.get("pooling_type")
+    pooling_type = _resolve_pooling_type(simplified_cfg.get("pooling_type", "attention"))
     classifier_hidden = simplified_cfg.get("classifier_hidden")
+    if classifier_hidden is None:
+        classifier_hidden = 256
     classifier_dropout = simplified_cfg.get("classifier_dropout")
+    if classifier_dropout is None:
+        classifier_dropout = 0.15
 
     max_bp_len = int(cfg.get("max_bp_len", 81))
     max_seq_len = int(cfg.get("max_seq_len", max_bp_len - vocab.k + 1))
+    stage1_drop_path_rate = cfg.get("stage1_drop_path_rate")
+    if stage1_drop_path_rate is None:
+        stage1_drop_path_rate = cfg.get("drop_path_rate", 0.1)
+    ffn_type = cfg.get("ffn_type")
+    if ffn_type is not None:
+        ffn_type = str(ffn_type)
+    norm_type = cfg.get("norm_type")
+    norm_type = "layernorm" if norm_type is None else str(norm_type)
+    ffn_mult = cfg.get("ffn_mult")
+    if ffn_mult is not None:
+        ffn_mult = float(ffn_mult)
 
     model = GeneWhispererStage1(
         vocab_size=len(vocab.itos),
@@ -272,15 +305,20 @@ def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneW
         pooling_type=pooling_type,
         engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 256)),
         engineered_mlp_output=int(cfg.get("engineered_mlp_output", 128)),
-        classifier_hidden=classifier_hidden,
-        classifier_dropout=classifier_dropout,
-        drop_path_rate=float(cfg.get("drop_path_rate", 0.1)),
+        classifier_hidden=int(classifier_hidden),
+        classifier_dropout=float(classifier_dropout),
+        drop_path_rate=float(stage1_drop_path_rate),
         max_seq_len=max_seq_len,
         use_relative_position_bias=bool(cfg.get("use_relative_position_bias", False)),
         relative_position_num_buckets=int(cfg.get("relative_position_num_buckets", 32)),
         relative_position_max_distance=int(cfg.get("relative_position_max_distance", 128)),
         use_glu_ffn=bool(cfg.get("use_glu_ffn", False)),
         glu_activation=str(cfg.get("glu_activation", "gelu")),
+        use_rope=bool(cfg.get("use_rope", False)),
+        rope_base=float(cfg.get("rope_base", 10000.0)),
+        ffn_type=ffn_type,
+        norm_type=norm_type,
+        ffn_mult=ffn_mult,
     ).to(device)
     return model
 
@@ -715,6 +753,89 @@ def check_best_threshold(checkpoint_path: str, config_path: str = "config.yaml")
     LOGGER.info("✓ Unit check passed: model.best_threshold = %.4f", model.best_threshold)
 
 
+def verify_checkpoint_compatibility(
+    checkpoint_path: str,
+    config_path: str = "config.yaml",
+) -> bool:
+    """Verify that build_model creates architecture compatible with checkpoint."""
+    import yaml
+
+    script_dir = Path(__file__).resolve().parent
+    cfg_path = Path(config_path)
+    if not cfg_path.is_absolute():
+        cfg_path = (script_dir / cfg_path).resolve()
+
+    with cfg_path.open("r", encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle) or {}
+
+    ckpt_path = Path(checkpoint_path).resolve()
+    if not ckpt_path.exists():
+        print(f"✗ Checkpoint not found: {ckpt_path}")
+        return False
+
+    checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    ckpt_state = _normalize_state_dict(_extract_state_dict(checkpoint))
+
+    # Get k-mer from checkpoint name
+    kmer = 6
+    if "_k" in ckpt_path.stem:
+        try:
+            kmer = int(ckpt_path.stem.split("_k")[-1].split("_")[0])
+        except ValueError:
+            pass
+
+    # Load vocab
+    vocab_dir = Path(cfg.get("vocab_cache_dir", "../artifacts/vocabs"))
+    if not vocab_dir.is_absolute():
+        vocab_dir = (script_dir / vocab_dir).resolve()
+    vocab_path = (vocab_dir / f"k{kmer}_vocab.json").resolve()
+    if not vocab_path.exists():
+        print(f"✗ Vocab not found: {vocab_path}")
+        return False
+
+    vocab = KmerVocabulary.load(vocab_path)
+
+    # Build model
+    device = torch.device("cpu")
+    model = build_model(cfg, vocab, device)
+    model_state = model.state_dict()
+
+    # Compare keys
+    ckpt_keys = set(ckpt_state.keys())
+    model_keys = set(model_state.keys())
+
+    missing = model_keys - ckpt_keys
+    unexpected = ckpt_keys - model_keys
+
+    print(f"Checkpoint keys: {len(ckpt_keys)}")
+    print(f"Model keys: {len(model_keys)}")
+    print(f"Missing in checkpoint: {len(missing)}")
+    print(f"Unexpected in checkpoint: {len(unexpected)}")
+
+    if missing:
+        print(f"Missing keys (first 10): {list(missing)[:10]}")
+    if unexpected:
+        print(f"Unexpected keys (first 10): {list(unexpected)[:10]}")
+
+    # Check shape compatibility
+    shape_mismatches = []
+    for key in ckpt_keys & model_keys:
+        if ckpt_state[key].shape != model_state[key].shape:
+            shape_mismatches.append((key, ckpt_state[key].shape, model_state[key].shape))
+
+    if shape_mismatches:
+        print(f"Shape mismatches: {len(shape_mismatches)}")
+        for key, ckpt_shape, model_shape in shape_mismatches[:5]:
+            print(f"  {key}: ckpt={ckpt_shape}, model={model_shape}")
+
+    if not missing and not unexpected and not shape_mismatches:
+        print("✓ Checkpoint is FULLY COMPATIBLE with model architecture!")
+        return True
+
+    print("✗ Checkpoint has INCOMPATIBILITIES")
+    return False
+
+
 if __name__ == "__main__":
     import sys
 
@@ -724,5 +845,12 @@ if __name__ == "__main__":
         if len(sys.argv) >= 4:
             config_arg = sys.argv[3]
         check_best_threshold(sys.argv[2], config_arg)
+    elif len(sys.argv) >= 3 and sys.argv[1] == "--verify":
+        config_arg = "config.yaml"
+        if len(sys.argv) >= 4:
+            config_arg = sys.argv[3]
+        ok = verify_checkpoint_compatibility(sys.argv[2], config_arg)
+        if not ok:
+            sys.exit(1)
     else:
         main()

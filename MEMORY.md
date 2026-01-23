@@ -463,3 +463,29 @@ Updated `GeneWhispererV6.load_pretrained_weights()` to accept `transfer_mode` pa
 
 **Files Modified:**
 - `Gene Whisperer/training/model_v6.py` - Added transfer_mode parameter to load_pretrained_weights()
+
+### 2026-01-22: Ensemble Inference Architecture Alignment
+Updated `ensemble_infer.build_model()` to mirror the simplified Stage 1 architecture used in training.
+
+**Changes:**
+- Added pooling/classifier defaults from `simplified_model` config.
+- Pulled `stage1_drop_path_rate` with fallback to global `drop_path_rate`.
+- Wired RoPE + SwiGLU/RMSNorm settings (`use_rope`, `rope_base`, `ffn_type`, `norm_type`, `ffn_mult`).
+- Added focused tests for build_model parameter wiring.
+
+**Files Modified:**
+- `Gene Whisperer/training/ensemble_infer.py`
+- `Gene Whisperer/training/tests/test_ensemble_infer_build_model.py`
+
+### 2026-01-23: Checkpoint Compatibility Verifier
+Added a CLI verification helper to compare checkpoint keys/shapes against the
+architecture produced by `ensemble_infer.build_model`.
+
+**Changes:**
+- `verify_checkpoint_compatibility()` prints missing/unexpected keys and shape mismatches.
+- Added `--verify` CLI entrypoint for quick checks.
+- Added tests covering the verification workflow.
+
+**Files Modified:**
+- `Gene Whisperer/training/ensemble_infer.py`
+- `Gene Whisperer/training/tests/test_verify_checkpoint_compatibility.py`
