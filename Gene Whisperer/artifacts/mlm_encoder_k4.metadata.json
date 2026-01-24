@@ -1,7 +1,7 @@
 {
   "config_snapshot": {
     "script": "pretrain_mlm.py",
-    "timestamp": "20260121_133925",
+    "timestamp": "20260121_074935",
     "config_path": "<in-memory>",
     "ablation_enabled": false,
     "pretrain_bp_limit": null,
@@ -12,13 +12,13 @@
     "transformer_heads": 12,
     "transformer_ff_dim": 1536,
     "transformer_dropout": 0.1,
-    "lr": 0.0002,
+    "lr": 0.00025,
     "weight_decay": 0.01,
     "mask_prob": 0.15,
     "max_span_len": 3,
     "batch_size": 128,
     "max_bp_len": 234,
-    "kmer": 6,
+    "kmer": 4,
     "streaming_enabled": true,
     "mlm_fasta_path": "../data/GCF_000005845.2_ASM584v2_genomic.fna",
     "mlm_fasta_paths": [
@@ -40,7 +40,7 @@
     "mlm_steps_per_epoch": 5000,
     "include_reverse_complements": true,
     "reverse_complement_prob": 0.5,
-    "epochs": 200,
+    "epochs": 120,
     "grad_accum_steps": 16,
     "warmup_ratio": 0.06,
     "final_lr_ratio": 0.1,
@@ -71,16 +71,16 @@
       "transition_start_ratio": 0.8
     }
   },
-  "vocab_path": "/content/Genomancer/Gene Whisperer/artifacts/vocabs/mlm_k6_vocab.json",
-  "kmer": 6,
+  "vocab_path": "/content/Genomancer/Gene Whisperer/artifacts/vocabs/mlm_k4_vocab.json",
+  "kmer": 4,
   "embedding_dim": 384,
   "num_layers": 12,
   "heads": 12,
-  "best_val_loss": 0.7801998002529145,
+  "best_val_loss": 0.07929110091924667,
   "early_stopping": {
     "enabled": true,
     "triggered": true,
-    "best_epoch": 12,
-    "patience": 15
+    "best_epoch": 8,
+    "patience": 10
   }
 }

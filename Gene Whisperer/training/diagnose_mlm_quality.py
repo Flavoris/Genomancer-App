@@ -80,6 +80,10 @@ def parse_args() -> argparse.Namespace:
         help="Path to artifacts directory (default: ../artifacts)",
     )
     parser.add_argument(
+        "--device", type=str, default=None,
+        help="Force device: 'cpu', 'cuda', or 'mps' (default: auto-detect)",
+    )
+    parser.add_argument(
         "--seed", type=int, default=1337,
         help="Random seed for reproducibility (default: 1337)",
     )
@@ -155,8 +159,11 @@ def save_tsne_plot(
         embeddings = embeddings[idx]
         labels = labels[idx]
 
-    tsne = TSNE(n_components=2, random_state=42, perplexity=30)
-    coords = tsne.fit_transform(embeddings)
+    perplexity = min(30, len(embeddings) - 1)
+    # Use method='exact' to avoid Barnes-Hut segfault on macOS ARM;
+    # acceptable since we subsample to <=1000 points above.
+    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity, method="exact")
+    coords = tsne.fit_transform(embeddings.astype(np.float64))
 
     fig, ax = plt.subplots(figsize=(8, 6))
     scatter = ax.scatter(
@@ -301,7 +308,7 @@ def main() -> None:
     artifacts_dir = Path(args.artifacts_dir) if args.artifacts_dir else ARTIFACTS_DIR
     val_path = Path(args.val_data) if args.val_data else VAL_DATA_PATH
 
-    device = get_device()
+    device = torch.device(args.device) if args.device else get_device()
     LOGGER.info("Device: %s", device)
 
     # Load validation data

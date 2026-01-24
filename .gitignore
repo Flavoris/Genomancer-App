@@ -27,6 +27,7 @@ Thumbs.db
 
 # Training artifacts (large files)
 Gene Whisperer/artifacts/checkpoints/
+Gene Whisperer/artifacts/mlm_encoder_k*.pt
 
 # Logs
 *.log
