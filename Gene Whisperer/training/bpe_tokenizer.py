@@ -61,7 +61,12 @@ class DNABPETokenizer:
     def mask_id(self) -> int:
         return SPECIAL_TOKENS["[MASK]"]
 
-    def train(self, sequences: List[str], min_frequency: int = 2) -> None:
+    def train(
+        self,
+        sequences: List[str],
+        min_frequency: int = 2,
+        verbose: bool = True,
+    ) -> None:
         """Train BPE vocabulary from DNA sequences.
 
         Algorithm (following DNABERT-2 / SentencePiece BPE):
@@ -71,18 +76,23 @@ class DNABPETokenizer:
         4. Merge the most frequent pair into a new token
         5. Repeat until vocab_size is reached
 
+        Uses optimized incremental pair counting to avoid O(n) rescans.
+
         Args:
             sequences: List of DNA sequence strings (A/T/C/G only).
             min_frequency: Minimum pair frequency to consider for merging.
+            verbose: Print progress every 500 merges.
         """
         self._initialize_vocab()
 
         # Represent each sequence as a list of character tokens
         corpus = self._prepare_corpus(sequences)
 
+        # Initial pair count (only done once)
+        pair_counts = self._count_pairs(corpus)
+
         num_merges = self.vocab_size - len(self.vocab)
-        for _ in range(num_merges):
-            pair_counts = self._count_pairs(corpus)
+        for merge_idx in range(num_merges):
             if not pair_counts:
                 break
 
@@ -96,7 +106,16 @@ class DNABPETokenizer:
             self.vocab[merged_token] = token_id
             self.id_to_token[token_id] = merged_token
 
-            corpus = self._apply_merge(corpus, best_pair, merged_token)
+            # Apply merge and update counts incrementally
+            corpus, pair_counts = self._apply_merge_incremental(
+                corpus, best_pair, merged_token, pair_counts
+            )
+
+            if verbose and (merge_idx + 1) % 500 == 0:
+                print(
+                    f"  Merge {merge_idx + 1}/{num_merges}: "
+                    f"'{best_pair[0]}' + '{best_pair[1]}' -> '{merged_token}'"
+                )
 
     def tokenize(self, sequence: str) -> List[int]:
         """Tokenize a DNA sequence using learned BPE vocabulary.
@@ -261,6 +280,88 @@ class DNABPETokenizer:
                 self._apply_merge_to_tokens(tokens, pair[0], pair[1])
             )
         return new_corpus
+
+    def _apply_merge_incremental(
+        self,
+        corpus: List[List[str]],
+        pair: Tuple[str, str],
+        merged: str,
+        pair_counts: Counter,
+    ) -> Tuple[List[List[str]], Counter]:
+        """Apply merge and update pair counts incrementally.
+
+        This is O(occurrences) instead of O(corpus_size), making it much faster.
+
+        When we merge (A, B) -> AB at position i:
+        1. Remove (A, B) count
+        2. If there was X before A: remove (X, A), add (X, AB)
+        3. If there was Y after B: remove (B, Y), add (AB, Y)
+        """
+        left, right = pair
+        new_corpus = []
+
+        # Remove the merged pair count entirely
+        if pair in pair_counts:
+            del pair_counts[pair]
+
+        for tokens in corpus:
+            if len(tokens) < 2:
+                new_corpus.append(tokens)
+                continue
+
+            # First pass: find all merge positions (non-overlapping, left to right)
+            merge_positions = set()
+            i = 0
+            while i < len(tokens) - 1:
+                if tokens[i] == left and tokens[i + 1] == right:
+                    merge_positions.add(i)
+                    i += 2  # Skip to avoid overlapping merges
+                else:
+                    i += 1
+
+            if not merge_positions:
+                new_corpus.append(tokens)
+                continue
+
+            # Second pass: build new tokens and update pair counts
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                if i in merge_positions:
+                    # Merging tokens[i] and tokens[i+1]
+                    # Update left neighbor pair
+                    if new_tokens:
+                        prev_token = new_tokens[-1]
+                        # Remove old pair (prev, left)
+                        old_pair = (prev_token, left)
+                        if old_pair in pair_counts:
+                            pair_counts[old_pair] -= 1
+                            if pair_counts[old_pair] <= 0:
+                                del pair_counts[old_pair]
+                        # Add new pair (prev, merged)
+                        pair_counts[(prev_token, merged)] += 1
+
+                    # Update right neighbor pair
+                    if i + 2 < len(tokens) and (i + 2) not in merge_positions:
+                        next_token = tokens[i + 2]
+                        # Remove old pair (right, next)
+                        old_pair = (right, next_token)
+                        if old_pair in pair_counts:
+                            pair_counts[old_pair] -= 1
+                            if pair_counts[old_pair] <= 0:
+                                del pair_counts[old_pair]
+                        # Add new pair (merged, next)
+                        pair_counts[(merged, next_token)] += 1
+
+                    new_tokens.append(merged)
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+
+            new_corpus.append(new_tokens)
+
+        return new_corpus, pair_counts
 
     def _apply_merge_to_tokens(
         self, tokens: List[str], left: str, right: str
