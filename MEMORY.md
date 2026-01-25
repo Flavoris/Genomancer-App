@@ -681,3 +681,27 @@ python ensemble_infer.py --sequence "ATGC..." --config config.yaml
 - BPE vocab: `bpe_vocab.json` (new)
 
 **Test Status:** All 401 tests passing.
+
+### 2026-01-25: BPE Vocabulary Training Completed
+Successfully trained BPE vocabulary with 4096 tokens on DNA sequences.
+
+**Training Results:**
+- Vocabulary size: 4096 tokens
+- Compression ratio: 4.97x average (1000 sample sequences)
+- Average tokens per 234bp MLM window: 47.2
+- Max tokens per MLM window: 53
+- Token length distribution: 1-mer to 25-mer
+
+**Recommended vs Configured max_token_len:**
+| Sequence Type | Recommended | Configured | Status |
+|---------------|-------------|------------|--------|
+| 81bp fine-tuning | 22 | 24 | ✓ OK |
+| 234bp MLM pre-training | 58 | 64 | ✓ OK |
+
+**File Location:**
+- BPE vocab saved to: `Gene Whisperer/artifacts/vocabs/bpe_vocab.json`
+- Config path: `bpe_vocab_path: ../artifacts/vocabs/bpe_vocab.json`
+
+**Next Steps:**
+1. Run MLM pre-training: `python pretrain_mlm.py --config config.yaml`
+2. Fine-tune Stage 1: `python train_stage1.py --config config.yaml`
