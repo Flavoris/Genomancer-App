@@ -307,14 +307,14 @@ class TestCreateTunableModel:
     def mock_cfg(self):
         """Provide a mock configuration dict."""
         return {
-            "kmer": 6,
-            "max_bp_len": 81,
-            "vocab_size": 4099,
+            "max_token_len": 24,
+            "max_seq_len": 24,
+            "vocab_size": 4096,
             "embedding_dim": 384,
             "transformer_layers": 2,  # Reduced for testing
             "transformer_heads": 8,
             "transformer_ff_dim": 768,
-            "pad_token_id": 4098,
+            "pad_token_id": 0,
             "drop_path_rate": 0.1,
             "use_relative_position_bias": False,
             "use_glu_ffn": False,
@@ -370,8 +370,8 @@ class TestCreateTunableModel:
                 model = create_tunable_model("transformer_only", mock_cfg, hp_config, device)
 
                 batch_size = 2
-                seq_len = 76  # max_bp_len - kmer + 1
-                tokens = torch.randint(0, 4099, (batch_size, seq_len))
+                seq_len = 24
+                tokens = torch.randint(0, 4096, (batch_size, seq_len))
 
                 output = model(tokens)
                 assert output.shape == (batch_size, 1), f"Failed for pooling_type={pooling_type}"
@@ -396,8 +396,8 @@ class TestCreateTunableModel:
             model = create_tunable_model("combined", mock_cfg, hp_config, device)
 
             batch_size = 2
-            seq_len = 76
-            tokens = torch.randint(0, 4099, (batch_size, seq_len))
+            seq_len = 24
+            tokens = torch.randint(0, 4096, (batch_size, seq_len))
             eng_features = torch.randn(batch_size, 288)
 
             output = model(tokens, engineered_features=eng_features)

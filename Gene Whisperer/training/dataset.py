@@ -8,12 +8,14 @@ import math
 import os
 import random
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+
+from bpe_tokenizer import DNABPETokenizer
 
 LOGGER = logging.getLogger(__name__)
 if not LOGGER.handlers:
@@ -512,8 +514,8 @@ class PromoterDatasetStage1(Dataset):
     def __init__(
         self,
         df: pd.DataFrame,
-        max_bp_len: int,
-        vocab: KmerVocabulary,
+        max_token_len: int,
+        vocab: DNABPETokenizer,
         use_engineered_features: bool = True,
         feature_enable_tnc: bool = True,
         feature_enable_pseeiip: bool = True,
@@ -521,8 +523,8 @@ class PromoterDatasetStage1(Dataset):
         feature_enable_pstnp: bool = True,
         engineered_dim: int = ENGINEERED_DIM,
         reverse_complement_prob: float = 0.5,
-        base_substitution_prob: float = 0.0,  # Set > 0 for training augmentation
-        base_indel_prob: float = 0.0,  # Usually 0 for promoter prediction
+        base_substitution_prob: float = 0.0,
+        base_indel_prob: float = 0.0,
         cache_engineered_features: bool = False,
         cache_tokens: bool = False,
     ):
@@ -530,7 +532,7 @@ class PromoterDatasetStage1(Dataset):
             raise ValueError("Stage 1 data requires 'sequence' and 'is_promoter' columns")
         self.sequences = df["sequence"].astype(str).tolist()
         self.labels = df["is_promoter"].astype(float).tolist()
-        self.max_bp_len = max_bp_len
+        self.max_token_len = max_token_len
         self.vocab = vocab
         self.use_engineered_features = use_engineered_features
         self.feature_enable_tnc = bool(feature_enable_tnc)
@@ -586,7 +588,7 @@ class PromoterDatasetStage1(Dataset):
         LOGGER.info("Pre-tokenizing %d sequences...", len(self.sequences))
         self._cached_tokens = []
         for seq in self.sequences:
-            tokens = self.vocab.tokenize(seq, self.max_bp_len)
+            tokens = self.vocab.tokenize_and_pad(seq, self.max_token_len)
             self._cached_tokens.append(tokens)
         LOGGER.info("Tokens cached.")
 
@@ -656,14 +658,14 @@ class PromoterDatasetStage1(Dataset):
         if has_augmentation:
             # Apply augmentation - can't use cache
             sequence = self._augment_sequence(sequence)
-            tokens = self.vocab.tokenize(sequence, self.max_bp_len)
+            tokens = self.vocab.tokenize_and_pad(sequence, self.max_token_len)
             engineered = self._build_engineered_features(sequence)
         else:
             # No augmentation - use cache if available
             if self._cached_tokens is not None:
                 tokens = self._cached_tokens[idx]
             else:
-                tokens = self.vocab.tokenize(sequence, self.max_bp_len)
+                tokens = self.vocab.tokenize_and_pad(sequence, self.max_token_len)
 
             if self._cached_engineered is not None:
                 engineered = self._cached_engineered[idx]
@@ -686,10 +688,10 @@ class PromoterDatasetStage2(Dataset):
     def __init__(
         self,
         df: pd.DataFrame,
-        max_bp_len: int,
+        max_token_len: int,
         positive_strength: float,
         negative_strength: float,
-        vocab: KmerVocabulary,
+        vocab: DNABPETokenizer,
         use_engineered_features: bool = True,
         feature_enable_tnc: bool = True,
         feature_enable_pseeiip: bool = True,
@@ -703,7 +705,7 @@ class PromoterDatasetStage2(Dataset):
             raise ValueError("Stage 2 data requires 'sequence' and 'strength' columns")
         self.sequences = df["sequence"].astype(str).tolist()
         self.labels = [self._to_label(val, positive_strength, negative_strength) for val in df["strength"].tolist()]
-        self.max_bp_len = max_bp_len
+        self.max_token_len = max_token_len
         self.vocab = vocab
         self.engineered_dim = int(engineered_dim)
         self.use_engineered_features = bool(use_engineered_features)
@@ -738,7 +740,7 @@ class PromoterDatasetStage2(Dataset):
         LOGGER.info("Pre-tokenizing Stage2 %d sequences...", len(self.sequences))
         self._cached_tokens = []
         for seq in self.sequences:
-            tokens = self.vocab.tokenize(seq, self.max_bp_len)
+            tokens = self.vocab.tokenize_and_pad(seq, self.max_token_len)
             self._cached_tokens.append(tokens)
         LOGGER.info("Stage2 tokens cached.")
 
@@ -797,7 +799,7 @@ class PromoterDatasetStage2(Dataset):
         if self._cached_tokens is not None:
             tokens = self._cached_tokens[idx]
         else:
-            tokens = self.vocab.tokenize(sequence, self.max_bp_len)
+            tokens = self.vocab.tokenize_and_pad(sequence, self.max_token_len)
 
         # Use cached engineered features if available
         if self._cached_engineered is not None:
@@ -814,19 +816,15 @@ class PromoterDatasetStage2(Dataset):
 
 
 def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
-    max_bp_len = int(_cfg_value(cfg, "max_bp_len", 81))
+    max_token_len = int(_cfg_value(cfg, "max_token_len", 24))
     batch_size = int(_cfg_value(cfg, "batch_size", 64))
     delimiter = _cfg_value(cfg, "delimiter", "\t")
     train_val_split = float(_cfg_value(cfg, "train_val_split", 0.9))
     # DataLoader performance options
-    # Note: On Mac, num_workers > 0 can cause issues; default to 0
     num_workers = int(_cfg_value(cfg, "num_workers", 0))
-    # persistent_workers keeps worker processes alive between batches (only if num_workers > 0)
     persistent_workers = bool(_cfg_value(cfg, "persistent_workers", False)) and num_workers > 0
-    # prefetch_factor: number of batches to prefetch per worker (only if num_workers > 0)
     prefetch_factor_raw = _cfg_value(cfg, "prefetch_factor", None)
     prefetch_factor = int(prefetch_factor_raw) if prefetch_factor_raw is not None and num_workers > 0 else None
-    # pin_memory only works on CUDA, not MPS
     pin_memory = bool(_cfg_value(cfg, "pin_memory", False)) and torch.cuda.is_available()
 
     if num_workers > 0:
@@ -860,8 +858,18 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     stage2_feature_enable_pstnp = bool(_cfg_value(cfg, "stage2_feature_enable_pstnp", stage1_feature_enable_pstnp))
     engineered_dim = int(_cfg_value(cfg, "engineered_dim", PromoterDatasetStage1.ENGINEERED_DIM))
     stage1_rc_prob = float(_cfg_value(cfg, "stage1_reverse_complement_prob", 0.5))
-    kmer = int(_cfg_value(cfg, "kmer", 3))
-    vocab_cache_dir = Path(_cfg_value(cfg, "vocab_cache_dir", "../artifacts/vocabs")).resolve()
+
+    # Load BPE vocabulary
+    bpe_vocab_path = _cfg_value(cfg, "bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json")
+    bpe_path = Path(bpe_vocab_path)
+    if not bpe_path.exists():
+        raise FileNotFoundError(
+            f"BPE vocabulary not found at {bpe_path}. "
+            "Run train_bpe_vocab.py first to generate it."
+        )
+    stage1_vocab = DNABPETokenizer.load(str(bpe_path))
+    LOGGER.info("Loaded BPE vocab from %s (vocab_size=%d)", bpe_path, len(stage1_vocab))
+
     ablation_seed = int(_cfg_value(cfg, "ablation_seed", 1337))
     ablation_cfg = _cfg_value(cfg, "ablation")
     if not isinstance(ablation_cfg, dict):
@@ -898,36 +906,10 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         ablation_seed,
         "stage1 val",
     )
-    use_mlm_vocab = bool(_cfg_value(cfg, "stage1_load_mlm_weights", False))
-    mlm_vocab_path = _cfg_value(cfg, "mlm_vocab_path", None)
-
-    if use_mlm_vocab and mlm_vocab_path:
-        vocab_path = Path(mlm_vocab_path)
-        if not vocab_path.exists():
-            raise FileNotFoundError(f"mlm_vocab_path not found: {mlm_vocab_path}")
-        stage1_vocab = KmerVocabulary.load(vocab_path)
-        if stage1_vocab.k != kmer:
-            raise ValueError(
-                f"MLM vocab k={stage1_vocab.k} does not match config kmer={kmer}. "
-                f"Set kmer to {stage1_vocab.k} or regenerate MLM vocab."
-            )
-        LOGGER.info("Loaded MLM vocab from %s (k=%d, vocab_size=%d)", mlm_vocab_path, stage1_vocab.k, len(stage1_vocab.itos))
-        # Optional: also write a conventional cache name so other code paths can find it
-        try:
-            cache_path = vocab_cache_dir / f"k{kmer}_vocab.json"
-            stage1_vocab.save(cache_path)
-        except Exception:
-            pass
-    else:
-        stage1_vocab = _get_or_create_vocab(
-            stage1_train_df["sequence"].astype(str).tolist(),
-            kmer,
-            vocab_cache_dir
-        )
 
     stage1_train_ds = PromoterDatasetStage1(
         stage1_train_df,
-        max_bp_len,
+        max_token_len,
         vocab=stage1_vocab,
         use_engineered_features=stage1_use_engineered,
         feature_enable_tnc=stage1_feature_enable_tnc,
@@ -936,13 +918,12 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         feature_enable_pstnp=stage1_feature_enable_pstnp,
         engineered_dim=engineered_dim,
         reverse_complement_prob=stage1_rc_prob,
-        # Caching is less effective for training with augmentation
         cache_engineered_features=False,
         cache_tokens=False,
     )
     stage1_val_ds = PromoterDatasetStage1(
         stage1_val_df,
-        max_bp_len,
+        max_token_len,
         vocab=stage1_vocab,
         use_engineered_features=stage1_use_engineered,
         feature_enable_tnc=stage1_feature_enable_tnc,
@@ -950,8 +931,7 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         feature_enable_cksnap=stage1_feature_enable_cksnap,
         feature_enable_pstnp=stage1_feature_enable_pstnp,
         engineered_dim=engineered_dim,
-        reverse_complement_prob=0.0,  # No augmentation for validation
-        # Caching is effective for validation (no augmentation)
+        reverse_complement_prob=0.0,
         cache_engineered_features=cache_engineered_features,
         cache_tokens=cache_tokens,
     )
@@ -1018,7 +998,7 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
 
     stage2_train_ds = PromoterDatasetStage2(
         stage2_train_df,
-        max_bp_len,
+        max_token_len,
         pos_strength,
         neg_strength,
         stage1_vocab,
@@ -1028,13 +1008,12 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
         feature_enable_cksnap=stage2_feature_enable_cksnap,
         feature_enable_pstnp=stage2_feature_enable_pstnp,
         engineered_dim=engineered_dim,
-        # Stage 2 has no augmentation, so caching is effective for both train and val
         cache_engineered_features=cache_engineered_features,
         cache_tokens=cache_tokens,
     )
     stage2_val_ds = PromoterDatasetStage2(
         stage2_val_df,
-        max_bp_len,
+        max_token_len,
         pos_strength,
         neg_strength,
         stage1_vocab,
@@ -1050,7 +1029,7 @@ def build_dataloaders(cfg) -> Dict[str, Dict[str, Optional[DataLoader]]]:
     stage2_test_ds = (
         PromoterDatasetStage2(
             stage2_test_df,
-            max_bp_len,
+            max_token_len,
             pos_strength,
             neg_strength,
             stage1_vocab,

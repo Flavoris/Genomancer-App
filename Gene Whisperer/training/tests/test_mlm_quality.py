@@ -145,7 +145,6 @@ class TestBuildModel:
         from model import DNAEncoder
         encoder = DNAEncoder(
             vocab_size=len(k3_vocab.itos),
-            kmer=3,
             embedding_dim=32,
             num_layers=2,
             num_heads=4,
@@ -167,7 +166,6 @@ class TestBuildModel:
         from model import DNAEncoder
         encoder = DNAEncoder(
             vocab_size=len(k3_vocab.itos),
-            kmer=3,
             embedding_dim=32,
             num_layers=2,
             num_heads=4,
@@ -254,7 +252,6 @@ class TestMLMPredictions:
         from model import DNAEncoder
         encoder = DNAEncoder(
             vocab_size=len(k3_vocab.itos),
-            kmer=3,
             embedding_dim=32,
             num_layers=2,
             num_heads=4,
@@ -286,7 +283,6 @@ class TestMLMPredictions:
         from model import DNAEncoder
         encoder = DNAEncoder(
             vocab_size=len(k3_vocab.itos),
-            kmer=3,
             embedding_dim=32,
             num_layers=2,
             num_heads=4,
@@ -311,7 +307,6 @@ class TestMLMPredictions:
         from model import DNAEncoder
         encoder = DNAEncoder(
             vocab_size=len(k3_vocab.itos),
-            kmer=3,
             embedding_dim=32,
             num_layers=2,
             num_heads=4,
@@ -344,7 +339,6 @@ class TestEmbeddings:
         from model import DNAEncoder
         encoder = DNAEncoder(
             vocab_size=len(k3_vocab.itos),
-            kmer=3,
             embedding_dim=32,
             num_layers=2,
             num_heads=4,
@@ -366,7 +360,6 @@ class TestEmbeddings:
         from model import DNAEncoder
         encoder = DNAEncoder(
             vocab_size=len(k3_vocab.itos),
-            kmer=3,
             embedding_dim=32,
             num_layers=2,
             num_heads=4,
@@ -389,7 +382,6 @@ class TestEmbeddings:
         from model import DNAEncoder
         encoder = DNAEncoder(
             vocab_size=len(k3_vocab.itos),
-            kmer=3,
             embedding_dim=32,
             num_layers=2,
             num_heads=4,
@@ -487,7 +479,6 @@ class TestIntegration:
 
         encoder = DNAEncoder(
             vocab_size=len(k3_vocab.itos),
-            kmer=3,
             embedding_dim=32,
             num_layers=2,
             num_heads=4,
@@ -535,7 +526,6 @@ class TestIntegration:
 
             encoder = DNAEncoder(
                 vocab_size=len(vocab.itos),
-                kmer=k,
                 embedding_dim=32,
                 num_layers=2,
                 num_heads=4,

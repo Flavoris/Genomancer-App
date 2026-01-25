@@ -47,8 +47,8 @@ from amp_utils import (
     AMPContext,
     GradScalerType,
 )
+from bpe_tokenizer import DNABPETokenizer
 from dataset import (
-    KmerVocabulary,
     build_dataloaders,
     compute_cksnap,
     compute_pseeiip,
@@ -305,8 +305,6 @@ def load_teacher_model(
     Returns:
         Frozen teacher model in eval mode
     """
-    from dataset import KmerVocabulary
-
     # Load checkpoint to get model configuration
     checkpoint = torch.load(teacher_ckpt_path, map_location=device, weights_only=False)
 
@@ -316,18 +314,15 @@ def load_teacher_model(
     else:
         state_dict = checkpoint
 
-    # Try to infer k-mer from checkpoint path or use config
-    teacher_kmer = int(cfg.get("distill", {}).get("teacher_kmer", 6))
+    # Load BPE vocab for teacher (same vocab as student with BPE)
+    bpe_vocab_path = cfg.get("bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json")
+    script_dir = Path(__file__).resolve().parent
+    vocab_path = Path(bpe_vocab_path)
+    if not vocab_path.is_absolute():
+        vocab_path = (script_dir / vocab_path).resolve()
+    teacher_vocab = DNABPETokenizer.load(str(vocab_path))
 
-    # Build vocab for teacher
-    vocab_cache_dir = Path(cfg.get("vocab_cache_dir", "../artifacts/vocabs"))
-    mlm_vocab_path = cfg.get("mlm_vocab_path")
-    mlm_kmer = int(cfg.get("mlm_kmer", teacher_kmer))
-    if mlm_vocab_path and Path(mlm_vocab_path).exists() and mlm_kmer == teacher_kmer:
-        teacher_vocab = KmerVocabulary.load(Path(mlm_vocab_path))
-    else:
-        teacher_vocab_path = vocab_cache_dir / f"k{teacher_kmer}_vocab.json"
-        teacher_vocab = KmerVocabulary.load(teacher_vocab_path)
+    max_token_len = int(cfg.get("max_token_len", 24))
 
     # Create teacher model with simplified architecture
     embedding_dim = int(cfg.get("embedding_dim", 384))
@@ -345,7 +340,6 @@ def load_teacher_model(
 
     teacher = GeneWhispererStage1(
         vocab_size=len(teacher_vocab),
-        kmer=teacher_kmer,
         embedding_dim=embedding_dim,
         num_layers=transformer_layers,
         num_heads=transformer_heads,
@@ -360,7 +354,7 @@ def load_teacher_model(
         classifier_hidden=classifier_hidden,
         classifier_dropout=classifier_dropout,
         drop_path_rate=float(get_with_fallback(cfg, "stage1_drop_path_rate", "drop_path_rate", 0.1)),
-        max_seq_len=int(cfg.get("max_bp_len", 81)) - teacher_kmer + 1,
+        max_seq_len=max_token_len,
         use_relative_position_bias=bool(cfg.get("use_relative_position_bias", False)),
         relative_position_num_buckets=int(cfg.get("relative_position_num_buckets", 32)),
         relative_position_max_distance=int(cfg.get("relative_position_max_distance", 128)),
@@ -423,7 +417,7 @@ def verify_distillation_dry_run(
     Returns:
         True if verification passed
     """
-    from dataset import KmerVocabulary, PromoterDatasetStage1
+    from dataset import PromoterDatasetStage1
 
     LOGGER.info("=" * 60)
     LOGGER.info("DISTILLATION DRY-RUN VERIFICATION")
@@ -534,8 +528,6 @@ def verify_distillation_dry_run(
 def apply_distill_guardrails(
     *,
     distill_enabled: bool,
-    teacher_kmer: int,
-    student_kmer: int,
     teacher_ckpt_path: Path,
     student_ckpt_path: Path,
 ) -> tuple[bool, str]:
@@ -544,13 +536,10 @@ def apply_distill_guardrails(
 
     Prevents distillation in unsafe scenarios:
     1. If distillation is already disabled
-    2. If teacher and student have the same k-mer (no knowledge transfer benefit)
-    3. If teacher and student checkpoint paths resolve to the same file
+    2. If teacher and student checkpoint paths resolve to the same file
 
     Args:
         distill_enabled: Whether distillation was requested
-        teacher_kmer: Teacher model's k-mer size
-        student_kmer: Student model's k-mer size
         teacher_ckpt_path: Path to teacher checkpoint
         student_ckpt_path: Path to student checkpoint (output)
 
@@ -561,9 +550,6 @@ def apply_distill_guardrails(
     """
     if not distill_enabled:
         return (False, "distillation not enabled")
-
-    if teacher_kmer == student_kmer:
-        return (False, f"teacher k-mer ({teacher_kmer}) equals student k-mer ({student_kmer})")
 
     if teacher_ckpt_path.resolve() == student_ckpt_path.resolve():
         return (
@@ -751,15 +737,15 @@ class FocalLossWithSmoothing(nn.Module):
 
 def get_reverse_complement_tokens_for_training(
     tokens: torch.Tensor,
-    vocab: KmerVocabulary,
-    max_bp_len: int,
+    vocab: DNABPETokenizer,
+    max_token_len: int,
 ) -> torch.Tensor:
     """Compute reverse complement tokens for training consistency loss.
 
     Args:
         tokens: Tokenized sequences of shape (batch_size, seq_len)
-        vocab: KmerVocabulary instance for encoding/decoding
-        max_bp_len: Maximum base pair length for tokenization
+        vocab: DNABPETokenizer instance for encoding/decoding
+        max_token_len: Maximum token length for padded output
 
     Returns:
         Reverse complement tokens with same shape as input
@@ -774,8 +760,8 @@ def get_reverse_complement_tokens_for_training(
         # Compute reverse complement
         rc_seq = reverse_complement(seq)
 
-        # Re-tokenize
-        rc_tokens = vocab.tokenize(rc_seq, max_bp_len)
+        # Re-tokenize with BPE
+        rc_tokens = vocab.tokenize_and_pad(rc_seq, max_token_len)
         batch_rc_tokens.append(rc_tokens)
 
     return torch.stack(batch_rc_tokens, dim=0).to(tokens.device)
@@ -923,52 +909,33 @@ def _resolve_checkpoint_path(raw_path: Union[str, Path], script_dir: Path) -> Pa
     return path.resolve()
 
 
-def get_mlm_checkpoint_for_kmer(
+def get_mlm_checkpoint(
     cfg: dict,
-    kmer: int,
     script_dir: Optional[Path] = None,
 ) -> Optional[Path]:
     """
-    Get the correct MLM checkpoint path for a given k-mer.
+    Get the MLM encoder checkpoint path for BPE-based pre-training.
 
-    Checks for k-mer specific checkpoint first, then falls back to defaults.
+    Checks config for explicit path, then falls back to default location.
     """
     script_dir = script_dir or Path(__file__).resolve().parent
 
-    mlm_ckpt_by_k = cfg.get("mlm_encoder_ckpt_by_k")
-    if not isinstance(mlm_ckpt_by_k, dict):
-        checkpoints_cfg = cfg.get("checkpoints")
-        if isinstance(checkpoints_cfg, dict):
-            mlm_ckpt_by_k = checkpoints_cfg.get("mlm_encoder_ckpt_by_k")
-    if not isinstance(mlm_ckpt_by_k, dict):
-        mlm_ckpt_by_k = {}
+    # Check explicit config path
+    explicit_path = cfg.get("mlm_encoder_checkpoint") or cfg.get("mlm_encoder_path")
+    if explicit_path:
+        resolved_path = _resolve_checkpoint_path(str(explicit_path), script_dir)
+        if resolved_path.exists():
+            LOGGER.info("Using MLM checkpoint: %s", resolved_path)
+            return resolved_path
+        LOGGER.warning("Configured MLM checkpoint not found: %s", resolved_path)
 
-    candidate = mlm_ckpt_by_k.get(kmer) or mlm_ckpt_by_k.get(str(kmer))
-    if candidate:
-        ckpt_path = _resolve_checkpoint_path(str(candidate), script_dir)
-        if ckpt_path.exists():
-            LOGGER.info("Using k=%d specific MLM checkpoint: %s", kmer, ckpt_path)
-            return ckpt_path
-        LOGGER.warning("K=%d checkpoint not found: %s", kmer, ckpt_path)
-
-    default_path = _resolve_checkpoint_path(f"../artifacts/mlm_encoder_k{kmer}.pt", script_dir)
+    # Default BPE checkpoint location
+    default_path = _resolve_checkpoint_path("../artifacts/mlm_encoder_bpe.pt", script_dir)
     if default_path.exists():
-        LOGGER.info("Using default MLM checkpoint: %s", default_path)
+        LOGGER.info("Using default BPE MLM checkpoint: %s", default_path)
         return default_path
 
-    generic_path = cfg.get("mlm_encoder_path") or cfg.get("mlm_encoder_checkpoint")
-    if generic_path:
-        resolved_path = _resolve_checkpoint_path(str(generic_path), script_dir)
-        if resolved_path.exists():
-            LOGGER.warning(
-                "K=%d checkpoint not found, using generic: %s",
-                kmer,
-                resolved_path,
-            )
-            return resolved_path
-        LOGGER.warning("Generic MLM checkpoint not found: %s", resolved_path)
-
-    LOGGER.warning("No MLM checkpoint found for k=%d", kmer)
+    LOGGER.warning("No MLM checkpoint found")
     return None
 
 
@@ -1871,8 +1838,8 @@ def run_consistency_epoch(
     loader: torch.utils.data.DataLoader,
     model: nn.Module,
     consistency_criterion: BidirectionalConsistencyLoss,
-    vocab: KmerVocabulary,
-    max_bp_len: int,
+    vocab: DNABPETokenizer,
+    max_token_len: int,
     device: torch.device,
     optimizer: Optional[torch.optim.Optimizer] = None,
     scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
@@ -1898,8 +1865,8 @@ def run_consistency_epoch(
         loader: Training data loader
         model: The classification model
         consistency_criterion: BidirectionalConsistencyLoss instance
-        vocab: KmerVocabulary for tokenization
-        max_bp_len: Maximum base pair length for tokenization
+        vocab: DNABPETokenizer for tokenization
+        max_token_len: Maximum token length for padded output
         device: Target device (cuda/mps/cpu)
         optimizer: Optimizer (None for evaluation)
         scheduler: Learning rate scheduler
@@ -1946,7 +1913,7 @@ def run_consistency_epoch(
         labels = labels.to(device).unsqueeze(1)
 
         # Compute reverse complement tokens
-        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_token_len)
 
         # Optionally recompute engineered features for RC sequence
         if compute_rc_features:
@@ -2140,8 +2107,8 @@ def run_distillation_epoch(
         teacher_model: Frozen teacher model (in eval mode)
         distill_criterion: DistillationLoss instance
         device: Device to train on
-        student_vocab: Student's KmerVocabulary for decoding
-        teacher_vocab: Teacher's KmerVocabulary for re-tokenizing
+        student_vocab: Student's DNABPETokenizer for decoding
+        teacher_vocab: Teacher's DNABPETokenizer for re-tokenizing
         optimizer: Optimizer (None for validation)
         scheduler: LR scheduler
         desc: Description for progress bar
@@ -2756,10 +2723,10 @@ def main() -> None:
         help="Random seed for reproducibility. Overrides config value.",
     )
     parser.add_argument(
-        "--kmer",
+        "--max-token-len",
         type=int,
         default=None,
-        help="K-mer size (e.g. 3, 4, 6). Overrides config value.",
+        help="Max BPE token length for sequences. Overrides config value.",
     )
     parser.add_argument(
         "--vocab_cache_dir",
@@ -2809,8 +2776,8 @@ def main() -> None:
         overrides["overfit_debug"] = True
     if args.profile:
         overrides["profile"] = True
-    if args.kmer is not None:
-        overrides["kmer"] = args.kmer
+    if args.max_token_len is not None:
+        overrides["max_token_len"] = args.max_token_len
     if args.vocab_cache_dir is not None:
         overrides["vocab_cache_dir"] = args.vocab_cache_dir
     if args.checkpoint_name is not None:
@@ -2930,7 +2897,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         # Data
         "batch_size": int(cfg_run.get("batch_size", 32)),
         "max_bp_len": max_bp_len,
-        "kmer": int(cfg_run.get("kmer", 3)),
+        "max_token_len": int(cfg_run.get("max_token_len", 24)),
         # Engineered features
         "stage1_use_engineered_features": bool(cfg_run.get("stage1_use_engineered_features", True)),
         "engineered_dim": int(cfg_run.get("engineered_dim", 288)),
@@ -3035,7 +3002,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     vocab_size = len(vocab)
     pad_token_id = vocab.pad_id
-    kmer = vocab.k
+    max_token_len = int(cfg_run.get("max_token_len", 24))
     
     use_engineered_features = bool(cfg_run.get("stage1_use_engineered_features", True))
     engineered_dim = int(cfg_run.get("engineered_dim", 288))
@@ -3085,12 +3052,12 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     variant_config = dict(cfg_run)
     variant_config.update({
         "vocab_size": vocab_size,
-        "kmer": kmer,
         "pad_token_id": pad_token_id,
         "engineered_dim": engineered_dim,
         "engineered_mlp_hidden": engineered_mlp_hidden,
         "engineered_mlp_output": engineered_mlp_output,
-        "max_seq_len": max_bp_len - kmer + 1,
+        "max_seq_len": max_token_len,
+        "max_token_len": max_token_len,
         "drop_path_rate": stage1_drop_path_rate,
         "classifier_hidden": simplified_classifier_hidden,
         "classifier_dropout": simplified_classifier_dropout,
@@ -3101,7 +3068,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     else:
         model = GeneWhispererStage1(
             vocab_size=vocab_size,
-            kmer=kmer,
             embedding_dim=embedding_dim,
             num_layers=transformer_layers,
             num_heads=transformer_heads,
@@ -3114,7 +3080,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             engineered_mlp_hidden=engineered_mlp_hidden,
             engineered_mlp_output=engineered_mlp_output,
             drop_path_rate=stage1_drop_path_rate,
-            max_seq_len=max_bp_len - kmer + 1,
+            max_seq_len=max_token_len,
             use_relative_position_bias=bool(cfg_run.get("use_relative_position_bias", False)),
             relative_position_num_buckets=int(cfg_run.get("relative_position_num_buckets", 32)),
             relative_position_max_distance=int(cfg_run.get("relative_position_max_distance", 128)),
@@ -3160,11 +3126,10 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
         emb_before_norm = 0.0
     load_attempted = False
     if should_load_mlm:
-        checkpoint_path = get_mlm_checkpoint_for_kmer(cfg_run, kmer, script_dir=script_dir)
+        checkpoint_path = get_mlm_checkpoint(cfg_run, script_dir=script_dir)
         if checkpoint_path is not None:
             LOGGER.info(
-                "Loading MLM encoder weights for k=%d from %s (transfer_mode=%s)",
-                kmer,
+                "Loading BPE MLM encoder weights from %s (transfer_mode=%s)",
                 checkpoint_path,
                 transfer_mode,
             )
@@ -3419,8 +3384,6 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     # =========================================================================
     # KNOWLEDGE DISTILLATION SETUP
     # =========================================================================
-    from dataset import KmerVocabulary
-
     distill_cfg = cfg_run.get("distill", {})
     distill_enabled = bool(distill_cfg.get("enabled", False))
     teacher_model = None
@@ -3430,8 +3393,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     if distill_enabled:
         distill_alpha = float(distill_cfg.get("alpha", 0.5))
         distill_temperature = float(distill_cfg.get("temperature", 2.0))
-        teacher_ckpt = distill_cfg.get("teacher_ckpt", "../artifacts/checkpoints/stage1_k6.pt")
-        teacher_kmer = int(distill_cfg.get("teacher_kmer", 6))
+        teacher_ckpt = distill_cfg.get("teacher_ckpt", "../artifacts/checkpoints/stage1_bpe.pt")
 
         # Resolve teacher checkpoint path
         teacher_ckpt_path = Path(teacher_ckpt)
@@ -3440,14 +3402,12 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
 
         # Compute student checkpoint path for guardrail check
         artifacts_root = (script_dir / "../artifacts").resolve()
-        checkpoint_name = cfg_run.get("stage1_checkpoint_name") or f"stage1_k{kmer}.pt"
+        checkpoint_name = cfg_run.get("stage1_checkpoint_name", "stage1_bpe.pt")
         student_ckpt_path = artifacts_root / "checkpoints" / checkpoint_name
 
         # Apply distillation safety guardrails
         guardrail_ok, guardrail_reason = apply_distill_guardrails(
             distill_enabled=distill_enabled,
-            teacher_kmer=teacher_kmer,
-            student_kmer=kmer,
             teacher_ckpt_path=teacher_ckpt_path,
             student_ckpt_path=student_ckpt_path,
         )
@@ -3456,7 +3416,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             distill_enabled = False
 
         if not distill_enabled:
-            pass  # Skip distillation setup, teacher_model/teacher_vocab/distill_criterion stay None
+            pass  # Skip distillation setup
         elif not teacher_ckpt_path.exists():
             LOGGER.error("Teacher checkpoint not found: %s", teacher_ckpt_path)
             LOGGER.error("Distillation requires a trained teacher model. Disabling distillation.")
@@ -3466,29 +3426,20 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             LOGGER.info("KNOWLEDGE DISTILLATION ENABLED")
             LOGGER.info("=" * 60)
             LOGGER.info("Teacher checkpoint: %s", teacher_ckpt_path)
-            LOGGER.info("Teacher k-mer: %d, Student k-mer: %d", teacher_kmer, kmer)
             LOGGER.info("Alpha: %.2f, Temperature: %.2f", distill_alpha, distill_temperature)
             LOGGER.info("=" * 60)
 
-            # Update distill config with teacher_kmer for load_teacher_model
-            distill_cfg["teacher_kmer"] = teacher_kmer
-            cfg_run["distill"] = distill_cfg
-
-            # Load teacher model
+            # Load teacher model (uses same BPE vocab)
             teacher_model = load_teacher_model(cfg_run, teacher_ckpt_path, device)
 
-            # Get teacher vocab
-            vocab_cache_dir = Path(cfg_run.get("vocab_cache_dir", "../artifacts/vocabs"))
-            if not vocab_cache_dir.is_absolute():
-                vocab_cache_dir = (script_dir / vocab_cache_dir).resolve()
-            teacher_vocab_path = vocab_cache_dir / f"k{teacher_kmer}_vocab.json"
-            teacher_vocab = KmerVocabulary.load(teacher_vocab_path)
+            # Teacher uses same BPE vocab as student
+            teacher_vocab = vocab
 
             # Create distillation criterion with base criterion (focal loss or BCE)
             distill_criterion = DistillationLoss(
                 alpha=distill_alpha,
                 temperature=distill_temperature,
-                base_criterion=criterion,  # Use the same loss function for CE part
+                base_criterion=criterion,
             )
 
             # Dry run verification
@@ -3545,9 +3496,9 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
     
     # Paths
     artifacts_root = (script_dir / "../artifacts").resolve()
-    checkpoint_name = cfg_run.get("stage1_checkpoint_name") or f"stage1_k{kmer}.pt"
+    checkpoint_name = cfg_run.get("stage1_checkpoint_name", "stage1_bpe.pt")
     checkpoint_path = artifacts_root / "checkpoints" / checkpoint_name
-    report_path = artifacts_root / f"stage1_report_k{kmer}.json"
+    report_path = artifacts_root / "stage1_report_bpe.json"
     
     # Training loop
     best_val_mcc = -float("inf")
@@ -3846,7 +3797,7 @@ def run_stage1_training(cfg: dict, *, overrides: dict | None = None) -> dict:
             "embedding_dim": embedding_dim,
             "layers": transformer_layers,
             "heads": transformer_heads,
-            "kmer": kmer,
+            "tokenizer": "bpe",
         },
         "architecture": {
             "type": "simplified",

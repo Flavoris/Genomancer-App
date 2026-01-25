@@ -43,7 +43,7 @@ LOGGER = logging.getLogger("gene_whisperer.final_training")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
 # Import MLM weight loading function
-from train_stage1 import get_mlm_checkpoint_for_kmer
+from train_stage1 import get_mlm_checkpoint
 
 
 # Best hyperparameters from tuning (from screenshot)
@@ -195,7 +195,7 @@ def create_standard_model(
     cfg: dict,
     training_config: TrainingConfig,
     device: torch.device,
-    vocab: "KmerVocabulary",
+    vocab: "DNABPETokenizer",
 ) -> nn.Module:
     """
     Create legacy GeneWhispererStage1 model compatible with ensemble scripts.
@@ -205,12 +205,10 @@ def create_standard_model(
     """
     from model import GeneWhispererStage1Legacy
 
-    kmer = int(cfg.get("kmer", 6))
-    max_bp_len = int(cfg.get("max_bp_len", 81))
+    max_token_len = int(cfg.get("max_token_len", 24))
 
     model = GeneWhispererStage1Legacy(
-        vocab_size=len(vocab.itos),
-        kmer=kmer,
+        vocab_size=len(vocab),
         embedding_dim=int(cfg.get("embedding_dim", 384)),
         num_layers=int(cfg.get("transformer_layers", 12)),
         num_heads=int(cfg.get("transformer_heads", 12)),
@@ -231,7 +229,7 @@ def create_standard_model(
         engineered_mlp_hidden=int(cfg.get("engineered_mlp_hidden", 512)),
         engineered_mlp_output=int(cfg.get("engineered_mlp_output", 384)),
         fusion_hidden=int(cfg.get("fusion_hidden", 512)),
-        max_seq_len=max_bp_len - kmer + 1,
+        max_seq_len=max_token_len,
         drop_path_rate=float(cfg.get("drop_path_rate", 0.1)),
         use_relative_position_bias=bool(cfg.get("use_relative_position_bias", True)),
         use_glu_ffn=bool(cfg.get("use_glu_ffn", True)),
@@ -246,7 +244,7 @@ def create_model(
     training_config: TrainingConfig,
     device: torch.device,
     use_standard_model: bool = False,
-    vocab: Optional["KmerVocabulary"] = None,
+    vocab: Optional["DNABPETokenizer"] = None,
 ) -> nn.Module:
     """
     Create model with tuned hyperparameters.
@@ -301,16 +299,14 @@ def load_pretrained_mlm_weights(
         LOGGER.warning("Model does not support pretrained weight loading")
         return False
 
-    kmer = int(cfg.get("kmer", 6))
-    checkpoint_path = get_mlm_checkpoint_for_kmer(cfg, kmer)
+    checkpoint_path = get_mlm_checkpoint(cfg)
 
     if checkpoint_path is None:
-        LOGGER.warning("No MLM checkpoint found for k=%d - training from scratch", kmer)
+        LOGGER.warning("No MLM checkpoint found - training from scratch")
         return False
 
     LOGGER.info(
-        "Loading MLM encoder weights for k=%d from %s (transfer_mode=%s)",
-        kmer,
+        "Loading BPE MLM encoder weights from %s (transfer_mode=%s)",
         checkpoint_path,
         transfer_mode,
     )
@@ -363,7 +359,7 @@ def train_final_model(
     device: torch.device,
     output_dir: Path,
     use_standard_model: bool = False,
-    vocab: Optional["KmerVocabulary"] = None,
+    vocab: Optional["DNABPETokenizer"] = None,
     load_mlm_weights: bool = True,
     mlm_transfer_mode: str = "embed_only",
 ) -> Tuple[nn.Module, TrainingResult, Dict[str, List[float]]]:
@@ -1023,34 +1019,27 @@ def main():
     LOGGER.info("Device: %s", device)
 
     # Build data loaders
-    from dataset import build_dataloaders, KmerVocabulary
+    from bpe_tokenizer import DNABPETokenizer
+    from dataset import build_dataloaders
     loaders = build_dataloaders(cfg)
     train_loader = loaders["stage1"]["train"]
     val_loader = loaders["stage1"]["val"]
     LOGGER.info("Train samples: %d, Val samples: %d",
                 len(train_loader.dataset), len(val_loader.dataset))
 
-    # Load vocabulary if using standard model
+    # Load BPE vocabulary if using standard model
     vocab = None
     if args.use_standard_model:
-        kmer = int(cfg.get("kmer", 6))
-        vocab_path = cfg.get("mlm_vocab_path") or cfg.get("mlm_vocab_by_k", {}).get(kmer)
-        if vocab_path and Path(vocab_path).exists():
-            vocab = KmerVocabulary.load(Path(vocab_path))
-            LOGGER.info("Loaded vocabulary from %s (k=%d, vocab_size=%d)",
-                        vocab_path, kmer, len(vocab.itos))
-        else:
-            # Build vocabulary from config
-            vocab_cache_dir = Path(cfg.get("vocab_cache_dir", "../artifacts/vocabs"))
-            vocab_cache_path = vocab_cache_dir / f"mlm_k{kmer}_vocab.json"
-            if vocab_cache_path.exists():
-                vocab = KmerVocabulary.load(vocab_cache_path)
-                LOGGER.info("Loaded vocabulary from cache %s", vocab_cache_path)
-            else:
-                raise FileNotFoundError(
-                    f"Vocabulary not found. Please run MLM pretraining first or "
-                    f"provide vocab at {vocab_cache_path}"
-                )
+        bpe_vocab_path = cfg.get("bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json")
+        vocab_path = Path(bpe_vocab_path)
+        if not vocab_path.exists():
+            raise FileNotFoundError(
+                f"BPE vocabulary not found at {vocab_path}. "
+                "Run train_bpe_vocab.py first."
+            )
+        vocab = DNABPETokenizer.load(str(vocab_path))
+        LOGGER.info("Loaded BPE vocabulary from %s (vocab_size=%d)",
+                    vocab_path, len(vocab))
 
     # Create output directory with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

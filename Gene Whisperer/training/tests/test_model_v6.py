@@ -264,12 +264,11 @@ class TestCreateV6Model:
     def test_basic_config(self):
         """Factory creates model from basic config."""
         config = {
-            "vocab_size": 4099,
+            "vocab_size": 4096,
             "embedding_dim": 384,
             "transformer_layers": 12,
             "transformer_heads": 12,
-            "kmer": 6,
-            "max_bp_len": 81,
+            "max_token_len": 24,
         }
         model = create_v6_model(config)
         assert isinstance(model, GeneWhispererV6)
@@ -278,7 +277,7 @@ class TestCreateV6Model:
     def test_with_gqa_config(self):
         """Factory creates GQA model when configured."""
         config = {
-            "vocab_size": 4099,
+            "vocab_size": 4096,
             "embedding_dim": 384,
             "transformer_layers": 12,
             "transformer_heads": 12,
@@ -360,7 +359,7 @@ class TestV6ParameterCount:
     def test_gqa_reduces_parameters(self):
         """GQA reduces parameter count compared to standard attention."""
         config_base = {
-            "vocab_size": 4099,
+            "vocab_size": 4096,
             "embedding_dim": 384,
             "transformer_layers": 12,
             "transformer_heads": 12,
@@ -384,7 +383,7 @@ class TestV6ParameterCount:
     def test_reasonable_parameter_count(self):
         """V6 with default config has reasonable parameter count."""
         config = {
-            "vocab_size": 4099,
+            "vocab_size": 4096,
             "embedding_dim": 384,
             "transformer_layers": 12,
             "transformer_heads": 12,

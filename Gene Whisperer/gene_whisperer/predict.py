@@ -37,7 +37,8 @@ _TRAINING_DIR = _PROJECT_ROOT / "training"
 if str(_TRAINING_DIR) not in sys.path:
     sys.path.insert(0, str(_TRAINING_DIR))
 
-from dataset import KmerVocabulary, compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc
+from bpe_tokenizer import DNABPETokenizer
+from dataset import compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc
 from model import GeneWhispererStage1, MultiScaleEnsemble
 
 LOGGER = logging.getLogger("gene_whisperer.predict")
@@ -73,9 +74,9 @@ def _compute_engineered_features(
     return torch.cat([tnc, pseeiip, cksnap, pstnp], dim=0)
 
 
-def _load_vocab(vocab_path: Path) -> KmerVocabulary:
-    """Load a KmerVocabulary from JSON file."""
-    return KmerVocabulary.load(vocab_path)
+def _load_vocab(vocab_path: Path) -> DNABPETokenizer:
+    """Load a DNABPETokenizer from JSON file."""
+    return DNABPETokenizer.load(str(vocab_path))
 
 
 LEGACY_STATE_PREFIXES = (
@@ -178,7 +179,7 @@ def _infer_architecture_from_checkpoint(
 
 def _build_model(
     cfg: Dict,
-    vocab: KmerVocabulary,
+    vocab: DNABPETokenizer,
     device: torch.device,
     arch_overrides: Optional[Dict] = None,
 ) -> torch.nn.Module:
@@ -186,7 +187,7 @@ def _build_model(
 
     Args:
         cfg: Base configuration dictionary
-        vocab: Vocabulary for this k-mer size
+        vocab: DNABPETokenizer vocabulary
         device: Torch device
         arch_overrides: Optional architecture overrides inferred from checkpoint
     """
@@ -206,12 +207,11 @@ def _build_model(
     classifier_hidden = simplified_cfg.get("classifier_hidden")
     classifier_dropout = simplified_cfg.get("classifier_dropout")
 
-    max_bp_len = int(effective_cfg.get("max_bp_len", 81))
-    max_seq_len = int(effective_cfg.get("max_seq_len", max_bp_len - vocab.k + 1))
+    max_token_len = int(effective_cfg.get("max_token_len", 24))
+    max_seq_len = int(effective_cfg.get("max_seq_len", max_token_len))
 
     model = GeneWhispererStage1(
-        vocab_size=len(vocab.itos),
-        kmer=vocab.k,
+        vocab_size=len(vocab),
         embedding_dim=int(effective_cfg.get("embedding_dim", 384)),
         num_layers=int(effective_cfg.get("transformer_layers", 12)),
         num_heads=int(effective_cfg.get("transformer_heads", 12)),
@@ -329,7 +329,7 @@ class Stage1Predictor:
     def __init__(
         self,
         ensemble: MultiScaleEnsemble,
-        vocabs: Dict[int, KmerVocabulary],
+        vocabs: Dict[int, DNABPETokenizer],
         cfg: Dict,
         device: torch.device,
         threshold: float = 0.5,
@@ -349,15 +349,15 @@ class Stage1Predictor:
         self.cfg = cfg
         self.device = device
         self.threshold = threshold
-        self.max_bp_len = int(cfg.get("max_bp_len", 81))
+        self.max_token_len = int(cfg.get("max_token_len", 24))
 
     def _prepare_inputs(
         self,
         sequence: str,
-        vocab: KmerVocabulary,
+        vocab: DNABPETokenizer,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Tokenize and compute features for a single sequence."""
-        tokens = vocab.tokenize(sequence, self.max_bp_len)
+        tokens = vocab.tokenize_and_pad(sequence, self.max_token_len)
         engineered = _compute_engineered_features(sequence, self.cfg)
         return tokens.unsqueeze(0), engineered.unsqueeze(0)
 
@@ -375,15 +375,14 @@ class Stage1Predictor:
         """
         sequence = sequence.strip().upper()
 
-        batch_inputs: Dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
-        for k, vocab in self.vocabs.items():
-            tokens, engineered = self._prepare_inputs(sequence, vocab)
-            tokens = tokens.to(self.device)
-            engineered = engineered.to(self.device)
-            batch_inputs[k] = (tokens, engineered)
+        # Use the first available vocab for tokenization
+        vocab = next(iter(self.vocabs.values()))
+        tokens, engineered = self._prepare_inputs(sequence, vocab)
+        tokens = tokens.to(self.device)
+        engineered = engineered.to(self.device)
 
         with torch.no_grad():
-            outputs = self.ensemble(batch_inputs)
+            outputs = self.ensemble((tokens, engineered))
 
         prob = outputs.squeeze().item()
         label = "promoter" if prob >= self.threshold else "non-promoter"
@@ -397,7 +396,7 @@ class Stage1Predictor:
 
 def load_stage1_ensemble(
     config_path: Union[str, Path],
-    checkpoints_and_vocabs: Dict[int, Dict[str, str]],
+    checkpoints_and_vocabs: Dict[str, Dict[str, str]],
     device: Optional[torch.device] = None,
     threshold: Optional[float] = None,
 ) -> Stage1Predictor:
@@ -443,23 +442,22 @@ def load_stage1_ensemble(
     LOGGER.info("Using device: %s", device)
 
     models: List[torch.nn.Module] = []
-    vocabs: Dict[int, KmerVocabulary] = {}
+    vocabs: Dict = {}
     checkpoint_thresholds: List[float] = []
 
-    for k, paths in checkpoints_and_vocabs.items():
-        k = int(k)
+    for key, paths in checkpoints_and_vocabs.items():
         checkpoint_path = Path(paths["checkpoint"]).resolve()
         vocab_path = Path(paths["vocab"]).resolve()
 
         if not checkpoint_path.exists():
-            LOGGER.warning("Skipping k=%d: checkpoint not found at %s", k, checkpoint_path)
+            LOGGER.warning("Skipping %s: checkpoint not found at %s", key, checkpoint_path)
             continue
         if not vocab_path.exists():
-            LOGGER.warning("Skipping k=%d: vocab not found at %s", k, vocab_path)
+            LOGGER.warning("Skipping %s: vocab not found at %s", key, vocab_path)
             continue
 
         vocab = _load_vocab(vocab_path)
-        vocabs[k] = vocab
+        vocabs[key] = vocab
 
         # Infer architecture from checkpoint to handle different training configs
         arch_overrides = _infer_architecture_from_checkpoint(checkpoint_path, device)
@@ -470,7 +468,7 @@ def load_stage1_ensemble(
             checkpoint_thresholds.append(loaded_threshold)
         models.append(model)
 
-        LOGGER.info("Loaded k=%d model from %s", k, checkpoint_path)
+        LOGGER.info("Loaded model '%s' from %s", key, checkpoint_path)
 
     if not models:
         raise RuntimeError("No models could be loaded for ensemble inference")

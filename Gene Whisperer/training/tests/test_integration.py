@@ -20,7 +20,7 @@ def _compute_grad_norm(parameters) -> float:
 def test_full_training_step():
     """Test a complete training step with all optimizations."""
     from dataset import compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc
-    from model import GeneWhispererStage1Legacy
+    from model_legacy import GeneWhispererStage1Legacy
 
     print("Testing full training step with all optimizations...")
 
@@ -93,32 +93,29 @@ def test_full_training_step():
 
 
 def test_ensemble_inference():
-    """Test ensemble inference with soft voting."""
-    from model import GeneWhispererStage1Legacy, MultiScaleEnsemble
+    """Test ensemble inference with soft voting using BPE-based models."""
+    from model import GeneWhispererStage1, MultiScaleEnsemble
 
     print("\nTesting ensemble inference with soft voting...")
 
+    # Create ensemble of BPE-based models with different configurations
     models = []
-    for kmer_size in [3, 4]:
-        model = GeneWhispererStage1Legacy(
-            vocab_size=4**kmer_size + 3,
-            kmer=kmer_size,
+    for variant_id in [1, 2]:
+        model = GeneWhispererStage1(
+            vocab_size=4096,  # BPE vocab size
             embedding_dim=64,
             num_layers=1,
             num_heads=2,
             ff_dim=128,
             engineered_dim=128,  # Use 128 for quick test
-            use_tcn=False,
-            post_cnn_transformer_layers=1,
+            max_seq_len=24,  # BPE max token length
         )
         models.append(model)
 
     ensemble = MultiScaleEnsemble(models)
 
-    batch = {
-        3: (torch.randint(0, 64, (4, 79)), torch.randn(4, 128)),
-        4: (torch.randint(0, 256, (4, 78)), torch.randn(4, 128)),
-    }
+    # BPE-based ensemble uses same tokenization for all models
+    batch = (torch.randint(0, 4096, (4, 24)), torch.randn(4, 128))
 
     ensemble.eval()
     with torch.no_grad():
@@ -138,7 +135,7 @@ def test_memory_usage():
     """Test that model fits in M4 MacBook memory."""
     import gc
 
-    from model import GeneWhispererStage1Legacy
+    from model_legacy import GeneWhispererStage1Legacy
 
     print("\nTesting memory usage...")
 

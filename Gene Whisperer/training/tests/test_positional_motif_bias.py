@@ -222,7 +222,6 @@ class TestModelIntegration:
 
         encoder = DNAEncoder(
             vocab_size=100,
-            kmer=3,
             embedding_dim=64,
             num_layers=2,
             num_heads=4,
@@ -237,9 +236,9 @@ class TestModelIntegration:
         assert encoder.use_positional_motif_bias
 
         # Test forward pass
-        tokens = torch.randint(0, 100, (2, 76))  # 81 - 6 + 1 = 76 for k=3
+        tokens = torch.randint(0, 100, (2, 24))
         output = encoder(tokens)
-        assert output.shape == (2, 76, 64)
+        assert output.shape == (2, 24, 64)
 
     def test_dna_encoder_without_motif_bias(self):
         """Test DNAEncoder without positional motif bias."""
@@ -247,7 +246,6 @@ class TestModelIntegration:
 
         encoder = DNAEncoder(
             vocab_size=100,
-            kmer=3,
             embedding_dim=64,
             num_layers=2,
             num_heads=4,
@@ -265,22 +263,21 @@ class TestModelIntegration:
 
         model = GeneWhispererStage1(
             vocab_size=100,
-            kmer=3,
             embedding_dim=64,
             num_layers=2,
             num_heads=4,
             ff_dim=128,
             dropout=0.1,
-            max_seq_len=81,
+            max_seq_len=24,
             use_engineered_features=False,
             use_attention_pool=False,
             use_positional_motif_bias=True,
-            motif_regions={"tss": [70, 76]},
+            motif_regions={"tss": [18, 24]},
         )
         assert model._full_encoder.positional_motif_bias is not None
 
         # Test forward pass
-        tokens = torch.randint(0, 100, (2, 76))
+        tokens = torch.randint(0, 100, (2, 24))
         output = model(tokens)
         assert output.shape == (2, 1)
 

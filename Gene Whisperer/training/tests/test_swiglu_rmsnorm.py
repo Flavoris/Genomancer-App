@@ -259,7 +259,6 @@ class TestDNAEncoderWithSwiGLU:
         """DNAEncoder works with SwiGLU and RMSNorm."""
         encoder = DNAEncoder(
             vocab_size=67,
-            kmer=3,
             embedding_dim=64,
             num_layers=2,
             num_heads=4,
@@ -277,7 +276,6 @@ class TestDNAEncoderWithSwiGLU:
         """All encoder layers use SwiGLU and RMSNorm when specified."""
         encoder = DNAEncoder(
             vocab_size=67,
-            kmer=3,
             embedding_dim=64,
             num_layers=4,
             num_heads=4,
@@ -295,7 +293,6 @@ class TestDNAEncoderWithSwiGLU:
         """DNAEncoder still works with legacy use_glu_ffn parameter."""
         encoder = DNAEncoder(
             vocab_size=67,
-            kmer=3,
             embedding_dim=64,
             num_layers=2,
             num_heads=4,

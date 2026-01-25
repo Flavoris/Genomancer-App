@@ -1,6 +1,6 @@
 # Colab Quickstart
 
-Run Gene Whisperer training in Google Colab with two cells.
+Run Gene Whisperer training in Google Colab with GPU acceleration.
 
 ---
 
@@ -26,54 +26,143 @@ drive.mount('/content/drive')
 
 ---
 
-## Cell 2: Run Training
+## Training Pipeline Overview
 
-### Option A: MLM Pretraining
+Gene Whisperer now uses **BPE tokenization** (DNABERT-2 style) instead of k-mer tokenization. The training pipeline has 4 steps:
 
-```python
-!bash "Gene Whisperer/scripts/colab_run_mlm.sh" --run_name my_first_run
+```
+1. Train BPE Vocabulary → 2. MLM Pretraining → 3. Stage 1 Training → 4. Stage 2 Training
+        (one-time)           (self-supervised)    (promoter vs non)    (strong vs weak)
 ```
 
-This script uses config-driven auto mode. If `multi_kmer_pretrain_enabled: true`
-in `Gene Whisperer/training/config.yaml`, it will run multi-kmer sequential
-pretraining by default. To force a specific mode:
+---
+
+## Cell 2: Train BPE Vocabulary (One-Time)
+
+**Run this once** to create the BPE vocabulary from your genomic FASTA data.
 
 ```python
-# Force single-kmer pretraining
-!bash "Gene Whisperer/scripts/colab_run_mlm.sh" --single_kmer --run_name my_single_run
+%cd /content/Genomancer/"Gene Whisperer"/training
 
-# Force multi-kmer pretraining with selected k-mers
-!bash "Gene Whisperer/scripts/colab_run_mlm.sh" --multi_kmer --kmers 3 4 --run_name my_multi_run
+# Train BPE vocabulary (takes ~5-10 minutes)
+!python train_bpe_vocab.py --config config.yaml
 ```
 
-### Option B: Stage 1 Training (Promoter vs Non-Promoter)
+This creates `artifacts/vocabs/bpe_vocab.json` with 4096 tokens optimized for DNA sequences.
 
+**Options:**
 ```python
-!bash "Gene Whisperer/scripts/colab_run_stage1.sh" --run_name stage1_run
+# Custom vocab size (default: 4096, recommended by DNABERT-2)
+!python train_bpe_vocab.py --config config.yaml --vocab-size 8192
+
+# Custom FASTA data
+!python train_bpe_vocab.py --fasta /path/to/genomes.fna --output custom_vocab.json
+
+# Limit training windows (faster, for testing)
+!python train_bpe_vocab.py --config config.yaml --max-windows 100000
 ```
 
-With a pretrained MLM encoder:
+---
+
+## Cell 3: MLM Pretraining
+
+Self-supervised masked language model pretraining on genomic sequences.
+
+### Option A: Using Colab Script (Recommended)
 
 ```python
-!bash "Gene Whisperer/scripts/colab_run_stage1.sh" \
-    --run_name stage1_run \
-    --kmer 4 \
-    --stage1_ckpt "Gene Whisperer/artifacts/mlm_encoder_k4.pt"
+!bash "Gene Whisperer/scripts/colab_run_mlm.sh" --run_name mlm_bpe_run
 ```
 
-### Option C: Stage 2 Training (Strong vs Weak Promoters)
+### Option B: Direct Python Command
 
 ```python
-!bash "Gene Whisperer/scripts/colab_run_stage2.sh" --run_name stage2_run
+%cd /content/Genomancer/"Gene Whisperer"/training
+
+# Run MLM pretraining with BPE
+!python pretrain_mlm.py --config config.yaml
 ```
 
-With a pretrained Stage 1 checkpoint:
+**Output:** Creates `artifacts/mlm_encoder_bpe.pt` — the pretrained encoder weights.
+
+---
+
+## Cell 4: Stage 1 Training (Promoter vs Non-Promoter)
+
+Binary classification: is this sequence a promoter?
+
+### Option A: Using Colab Script (Recommended)
 
 ```python
-!bash "Gene Whisperer/scripts/colab_run_stage2.sh" \
-    --run_name stage2_run \
-    --kmer 4 \
-    --stage1_ckpt "Gene Whisperer/artifacts/checkpoints/stage1_k4.pt"
+!bash "Gene Whisperer/scripts/colab_run_stage1.sh" --run_name stage1_bpe_run
+```
+
+### Option B: Direct Python Command
+
+```python
+%cd /content/Genomancer/"Gene Whisperer"/training
+
+# Train Stage 1 classifier
+!python train_stage1.py --config config.yaml
+```
+
+**With a pretrained MLM encoder:**
+
+The config automatically looks for `artifacts/mlm_encoder_bpe.pt`. To use a custom checkpoint:
+
+```python
+# Set environment variable for custom MLM checkpoint
+import os
+os.environ['MLM_ENCODER_CHECKPOINT'] = '/path/to/mlm_encoder_bpe.pt'
+!python train_stage1.py --config config.yaml
+```
+
+**Output:** Creates `artifacts/checkpoints/stage1_bpe.pt`
+
+---
+
+## Cell 5: Stage 2 Training (Strong vs Weak Promoters)
+
+Binary classification: is this promoter strong or weak?
+
+### Option A: Using Colab Script (Recommended)
+
+```python
+!bash "Gene Whisperer/scripts/colab_run_stage2.sh" --run_name stage2_bpe_run
+```
+
+### Option B: Direct Python Command
+
+```python
+%cd /content/Genomancer/"Gene Whisperer"/training
+
+# Train Stage 2 classifier
+!python train_stage2.py --config config.yaml
+```
+
+**With a Stage 1 checkpoint:**
+
+```python
+!python train_stage2.py --config config.yaml \
+    --stage1_ckpt "Gene Whisperer/artifacts/checkpoints/stage1_bpe.pt"
+```
+
+**Output:** Creates `artifacts/checkpoints/stage2_bpe.pt`
+
+---
+
+## Running Inference
+
+After training, run inference on new sequences:
+
+```python
+%cd /content/Genomancer/"Gene Whisperer"/training
+
+# Single sequence inference
+!python ensemble_infer.py --sequence "ATGCATGCATGC..." --config config.yaml
+
+# With Test-Time Augmentation (TTA) for better accuracy
+!python ensemble_infer.py --sequence "ATGCATGCATGC..." --config config.yaml --tta
 ```
 
 ---
@@ -98,16 +187,37 @@ To use a custom location:
 
 ---
 
+## Key Configuration (config.yaml)
+
+The BPE pipeline uses these settings in `config.yaml`:
+
+```yaml
+# BPE Tokenization
+bpe_vocab_path: ../artifacts/vocabs/bpe_vocab.json
+vocab_size: 4096              # DNABERT-2 optimal
+pad_token_id: 0               # BPE pad token
+max_token_len: 24             # For 81bp sequences (~4x compression)
+mlm_max_token_len: 64         # For 234bp MLM sequences
+
+# MLM Pretraining
+mlm_encoder_checkpoint: ../artifacts/mlm_encoder_bpe.pt
+mlm_max_span_len: 1           # Independent token masking for BPE
+
+# Checkpoints
+stage1_checkpoint_name: stage1_bpe.pt
+```
+
+---
+
 ## Script Arguments
 
-All three scripts (`colab_run_mlm.sh`, `colab_run_stage1.sh`, `colab_run_stage2.sh`) accept:
+All Colab scripts accept:
 
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--run_name` | Name for the run directory | `<stage>_YYYYMMDD_HHMMSS` |
 | `--drive_dir` | Google Drive output directory | `/content/drive/MyDrive/GeneWhispererRuns` |
 | `--config` | Path to config YAML | `Gene Whisperer/training/config.yaml` |
-| `--kmer` | K-mer size (3, 4, or 6) | From config |
 
 Stage-specific arguments:
 
@@ -116,16 +226,48 @@ Stage-specific arguments:
 | `colab_run_stage1.sh` | `--stage1_ckpt` | MLM encoder checkpoint for initialization |
 | `colab_run_stage2.sh` | `--stage1_ckpt` | Stage 1 checkpoint for initialization |
 
-MLM-specific arguments:
+---
 
-| Script | Argument | Description |
-|--------|----------|-------------|
-| `colab_run_mlm.sh` | `--multi_kmer` | Force multi-kmer sequential pretraining |
-| `colab_run_mlm.sh` | `--single_kmer` | Force single-kmer pretraining |
-| `colab_run_mlm.sh` | `--kmers` | Select specific k-mers for multi-kmer mode |
-| `colab_run_mlm.sh` | `--resume` | Resume from checkpoints (single) or skip existing (multi) |
-| `colab_run_mlm.sh` | `--force` | Retrain all k-mers even if checkpoints exist |
-| `colab_run_mlm.sh` | `--skip_vocab_build` | Skip building missing vocabularies |
+## Full Training Example
+
+Complete Colab notebook cells to train from scratch:
+
+```python
+# Cell 1: Setup
+from google.colab import drive
+drive.mount('/content/drive')
+!git clone https://github.com/YOUR_USERNAME/Genomancer.git /content/Genomancer
+%cd /content/Genomancer
+!bash "Gene Whisperer/scripts/colab_bootstrap.sh"
+```
+
+```python
+# Cell 2: Train BPE Vocabulary (run once)
+%cd /content/Genomancer/"Gene Whisperer"/training
+!python train_bpe_vocab.py --config config.yaml
+```
+
+```python
+# Cell 3: MLM Pretraining
+!python pretrain_mlm.py --config config.yaml
+```
+
+```python
+# Cell 4: Stage 1 Training
+!python train_stage1.py --config config.yaml
+```
+
+```python
+# Cell 5: Stage 2 Training
+!python train_stage2.py --config config.yaml
+```
+
+```python
+# Cell 6: Test Inference
+!python ensemble_infer.py \
+    --sequence "ATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC" \
+    --config config.yaml --tta
+```
 
 ---
 
@@ -139,6 +281,16 @@ If you see "No NVIDIA GPU detected":
 2. Set **Hardware accelerator** to **GPU** (T4 or higher)
 3. Click **Save** and re-run both cells
 
+### BPE Vocabulary Not Found
+
+If you see `FileNotFoundError: BPE vocabulary not found`:
+
+```python
+# Train the BPE vocabulary first
+%cd /content/Genomancer/"Gene Whisperer"/training
+!python train_bpe_vocab.py --config config.yaml
+```
+
 ### Requirements Path Issues (Spaces in Folder Name)
 
 The folder is named `Gene Whisperer` (with a space). If you get path errors:
@@ -146,18 +298,6 @@ The folder is named `Gene Whisperer` (with a space). If you get path errors:
 - Ensure you're using quoted paths: `"Gene Whisperer/scripts/..."`
 - Don't rename the folder; the scripts expect this exact name
 - If cloning manually, keep the repo structure intact
-
-### Resume Training
-
-All scripts look for existing checkpoints in your Drive run directory. Currently, the training scripts do not support `--resume` directly.
-
-To continue from a checkpoint manually:
-
-1. Note the checkpoint path from your previous run
-2. For Stage 1/2: pass the checkpoint via `--stage1_ckpt`
-3. Checkpoints from interrupted runs are automatically saved to Drive
-
-When `--resume` support is added, scripts will automatically resume from the latest checkpoint found in `<drive_dir>/<run_name>/checkpoints/`.
 
 ### Git LFS Quota Errors
 
@@ -167,13 +307,29 @@ If you see LFS errors or checkout failures, rerun bootstrap with:
 !SKIP_LFS_PULL=1 bash "Gene Whisperer/scripts/colab_bootstrap.sh"
 ```
 
-Then copy your Drive checkpoints into `Gene Whisperer/artifacts/` or `Gene Whisperer/artifacts/checkpoints/` as needed.
+Then copy your Drive checkpoints into `Gene Whisperer/artifacts/` as needed.
 
 ### Small Reference Genome Files
 
 If `B_subtilis_genome` or `S_cerevisiae_genome` show up as ~100-byte files, they were checked out as placeholders.
-The bootstrap script now repairs these by re-downloading clean FASTA files. To skip that step, run:
+The bootstrap script now repairs these by re-downloading clean FASTA files. To skip that step:
 
 ```python
 !SKIP_REFERENCE_GENOME_FIX=1 bash "Gene Whisperer/scripts/colab_bootstrap.sh"
 ```
+
+---
+
+## Migration from K-mer to BPE
+
+If you have existing k-mer checkpoints (e.g., `mlm_encoder_k6.pt`, `stage1_k6.pt`), note that:
+
+- **BPE and k-mer checkpoints are NOT compatible** — you cannot load k-mer weights into a BPE model
+- BPE provides better performance with ~5x sequence compression
+- Retraining with BPE is recommended for best results
+
+Key changes:
+- `--kmer` argument is removed (BPE uses variable-length tokens)
+- Vocab size: 4099 → 4096
+- Pad token ID: 4098 → 0
+- Checkpoint names: `*_k6.pt` → `*_bpe.pt`

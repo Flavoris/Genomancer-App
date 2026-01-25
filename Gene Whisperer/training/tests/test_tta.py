@@ -1,8 +1,14 @@
 """Tests for Test-Time Augmentation (TTA) functionality."""
+import sys
+from pathlib import Path
+
 import pytest
 import torch
 
-from dataset import KmerVocabulary, reverse_complement
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from bpe_tokenizer import DNABPETokenizer
+from dataset import reverse_complement
 from tta import (
     get_reverse_complement_tokens,
     predict_with_tta,
@@ -32,16 +38,10 @@ class MockModel(torch.nn.Module):
 
 @pytest.fixture
 def vocab():
-    """Create a simple k=3 vocabulary for testing."""
-    tokens = ["AAA", "AAC", "AAG", "AAT", "ACA", "ACC", "ACG", "ACT",
-              "AGA", "AGC", "AGG", "AGT", "ATA", "ATC", "ATG", "ATT",
-              "CAA", "CAC", "CAG", "CAT", "CCA", "CCC", "CCG", "CCT",
-              "CGA", "CGC", "CGG", "CGT", "CTA", "CTC", "CTG", "CTT",
-              "GAA", "GAC", "GAG", "GAT", "GCA", "GCC", "GCG", "GCT",
-              "GGA", "GGC", "GGG", "GGT", "GTA", "GTC", "GTG", "GTT",
-              "TAA", "TAC", "TAG", "TAT", "TCA", "TCC", "TCG", "TCT",
-              "TGA", "TGC", "TGG", "TGT", "TTA", "TTC", "TTG", "TTT"]
-    return KmerVocabulary(k=3, tokens=tokens)
+    """Create a BPE tokenizer for testing."""
+    tok = DNABPETokenizer(vocab_size=30)
+    tok.train(["ACGTACGTAC", "GGGGCCCCAA", "ATATATAT", "TTTTAAAACCCC"])
+    return tok
 
 
 class TestReverseComplement:
@@ -74,33 +74,33 @@ class TestGetReverseComplementTokens:
 
     def test_get_rc_tokens_shape(self, vocab):
         """Test that RC tokens have same shape as input."""
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
 
-        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_token_len)
 
         assert rc_tokens.shape == tokens.shape
 
     def test_get_rc_tokens_batch(self, vocab):
         """Test RC tokens with batch input."""
-        max_bp_len = 12
+        max_token_len = 12
         sequences = ["ACGTACGTAC", "AAAATTTTGG"]
-        tokens = torch.stack([vocab.tokenize(s, max_bp_len) for s in sequences])
+        tokens = torch.stack([vocab.tokenize_and_pad(s, max_token_len) for s in sequences])
 
-        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_token_len)
 
         assert rc_tokens.shape == tokens.shape
 
     def test_double_rc_tokens_gives_original(self, vocab):
         """Test that double RC of tokens gives back original sequence."""
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
 
         # Apply RC twice
-        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_bp_len)
-        double_rc_tokens = get_reverse_complement_tokens(rc_tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_token_len)
+        double_rc_tokens = get_reverse_complement_tokens(rc_tokens, vocab, max_token_len)
 
         # Decode and compare
         original_decoded = vocab.decode(tokens.squeeze().tolist())
@@ -116,9 +116,9 @@ class TestPredictWithTTA:
     def test_predict_with_tta_returns_probabilities(self, vocab):
         """Test that TTA returns valid probabilities."""
         model = MockModel(output_value=0.7)
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
         features = torch.randn(1, 288)
 
         probs = predict_with_tta(
@@ -126,7 +126,7 @@ class TestPredictWithTTA:
             tokens=tokens,
             engineered_features=features,
             vocab=vocab,
-            max_bp_len=max_bp_len,
+            max_token_len=max_token_len,
         )
 
         assert probs.shape == (1, 1)
@@ -135,9 +135,9 @@ class TestPredictWithTTA:
     def test_predict_with_tta_calls_model_twice(self, vocab):
         """Test that TTA calls model twice (forward + RC)."""
         model = MockModel(output_value=0.7)
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
         features = torch.randn(1, 288)
 
         _ = predict_with_tta(
@@ -145,7 +145,7 @@ class TestPredictWithTTA:
             tokens=tokens,
             engineered_features=features,
             vocab=vocab,
-            max_bp_len=max_bp_len,
+            max_token_len=max_token_len,
         )
 
         assert model._call_count == 2
@@ -154,9 +154,9 @@ class TestPredictWithTTA:
         """Test mean aggregation of TTA predictions."""
         # Model returns same value for both orientations
         model = MockModel(output_value=0.7)
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
         features = torch.randn(1, 288)
 
         probs = predict_with_tta(
@@ -164,7 +164,7 @@ class TestPredictWithTTA:
             tokens=tokens,
             engineered_features=features,
             vocab=vocab,
-            max_bp_len=max_bp_len,
+            max_token_len=max_token_len,
             aggregation="mean",
         )
 
@@ -174,9 +174,9 @@ class TestPredictWithTTA:
     def test_predict_with_tta_geometric_mean_aggregation(self, vocab):
         """Test geometric mean aggregation."""
         model = MockModel(output_value=0.64)
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
         features = torch.randn(1, 288)
 
         probs = predict_with_tta(
@@ -184,7 +184,7 @@ class TestPredictWithTTA:
             tokens=tokens,
             engineered_features=features,
             vocab=vocab,
-            max_bp_len=max_bp_len,
+            max_token_len=max_token_len,
             aggregation="geometric_mean",
         )
 
@@ -198,9 +198,9 @@ class TestPredictBatchWithTTA:
     def test_batch_tta_returns_three_tensors(self, vocab):
         """Test that batch TTA returns forward, RC, and averaged probs."""
         model = MockModel(output_value=0.7)
-        max_bp_len = 12
+        max_token_len = 12
         sequences = ["ACGTACGTAC", "AAAATTTTGG"]
-        tokens = torch.stack([vocab.tokenize(s, max_bp_len) for s in sequences])
+        tokens = torch.stack([vocab.tokenize_and_pad(s, max_token_len) for s in sequences])
         features = torch.randn(2, 288)
 
         prob_fwd, prob_rc, prob_avg = predict_batch_with_tta(
@@ -208,7 +208,7 @@ class TestPredictBatchWithTTA:
             tokens_batch=tokens,
             features_batch=features,
             vocab=vocab,
-            max_bp_len=max_bp_len,
+            max_token_len=max_token_len,
         )
 
         assert prob_fwd.shape == (2, 1)
@@ -218,9 +218,9 @@ class TestPredictBatchWithTTA:
     def test_batch_tta_average_is_correct(self, vocab):
         """Test that averaged probability is correct."""
         model = MockModel(output_value=0.8)
-        max_bp_len = 12
+        max_token_len = 12
         sequences = ["ACGTACGTAC"]
-        tokens = torch.stack([vocab.tokenize(s, max_bp_len) for s in sequences])
+        tokens = torch.stack([vocab.tokenize_and_pad(s, max_token_len) for s in sequences])
         features = torch.randn(1, 288)
 
         prob_fwd, prob_rc, prob_avg = predict_batch_with_tta(
@@ -228,7 +228,7 @@ class TestPredictBatchWithTTA:
             tokens_batch=tokens,
             features_batch=features,
             vocab=vocab,
-            max_bp_len=max_bp_len,
+            max_token_len=max_token_len,
         )
 
         # Average of 0.8 and 0.8 should be 0.8
@@ -244,11 +244,11 @@ class TestTTAWrapper:
         wrapper = TTAWrapper(
             model=model,
             vocab=vocab,
-            max_bp_len=12,
+            max_token_len=12,
             enabled=True,
         )
 
-        tokens = vocab.tokenize("ACGTACGTAC", 12).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad("ACGTACGTAC", 12).unsqueeze(0)
         features = torch.randn(1, 288)
 
         probs = wrapper(tokens, features)
@@ -262,11 +262,11 @@ class TestTTAWrapper:
         wrapper = TTAWrapper(
             model=model,
             vocab=vocab,
-            max_bp_len=12,
+            max_token_len=12,
             enabled=False,
         )
 
-        tokens = vocab.tokenize("ACGTACGTAC", 12).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad("ACGTACGTAC", 12).unsqueeze(0)
         features = torch.randn(1, 288)
 
         probs = wrapper(tokens, features)
@@ -280,11 +280,11 @@ class TestTTAWrapper:
         wrapper = TTAWrapper(
             model=model,
             vocab=vocab,
-            max_bp_len=12,
+            max_token_len=12,
             enabled=True,
         )
 
-        tokens = vocab.tokenize("ACGTACGTAC", 12).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad("ACGTACGTAC", 12).unsqueeze(0)
         features = torch.randn(1, 288)
 
         result = wrapper.predict_with_details(tokens, features)
@@ -300,11 +300,11 @@ class TestTTAWrapper:
         wrapper = TTAWrapper(
             model=model,
             vocab=vocab,
-            max_bp_len=12,
+            max_token_len=12,
             enabled=False,
         )
 
-        tokens = vocab.tokenize("ACGTACGTAC", 12).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad("ACGTACGTAC", 12).unsqueeze(0)
         features = torch.randn(1, 288)
 
         result = wrapper.predict_with_details(tokens, features)
@@ -326,9 +326,9 @@ class TestTTACorrectness:
         """
         # Use a model that always outputs high probability
         model = MockModel(output_value=0.9)
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
         features = torch.randn(1, 288)
 
         prob_fwd, prob_rc, prob_avg = predict_batch_with_tta(
@@ -336,7 +336,7 @@ class TestTTACorrectness:
             tokens_batch=tokens,
             features_batch=features,
             vocab=vocab,
-            max_bp_len=max_bp_len,
+            max_token_len=max_token_len,
         )
 
         # Both should be high probability (promoter)
@@ -347,9 +347,9 @@ class TestTTACorrectness:
     def test_tta_improves_confidence_for_consistent_predictions(self, vocab):
         """TTA should maintain confidence when both strands agree."""
         model = MockModel(output_value=0.85)
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
         features = torch.randn(1, 288)
 
         prob_fwd, prob_rc, prob_avg = predict_batch_with_tta(
@@ -357,7 +357,7 @@ class TestTTACorrectness:
             tokens_batch=tokens,
             features_batch=features,
             vocab=vocab,
-            max_bp_len=max_bp_len,
+            max_token_len=max_token_len,
         )
 
         # Average should still be high when both agree

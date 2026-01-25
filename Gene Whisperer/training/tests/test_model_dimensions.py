@@ -10,7 +10,7 @@ sys.path.insert(0, ".")
 
 def test_model_with_288_dim_features():
     """Test model works with 288-dim engineered features."""
-    from model import GeneWhispererStage1Legacy
+    from model_legacy import GeneWhispererStage1Legacy
 
     model = GeneWhispererStage1Legacy(
         vocab_size=4099,
@@ -62,7 +62,7 @@ def test_model_with_288_dim_features():
 
 def test_model_backward_compatible():
     """Test model still works with old 128-dim features."""
-    from model import GeneWhispererStage1Legacy
+    from model_legacy import GeneWhispererStage1Legacy
 
     model = GeneWhispererStage1Legacy(
         vocab_size=67,
@@ -100,7 +100,8 @@ def test_model_backward_compatible():
 
 def test_model_component_dimensions():
     """Test internal component dimensions are correct."""
-    from model import EngineeredFeatureMLP, GatedAttentionFusion
+    from model import EngineeredFeatureMLP
+    from model_legacy import GatedAttentionFusion
 
     # Test EngineeredFeatureMLP with new dimensions
     mlp = EngineeredFeatureMLP(

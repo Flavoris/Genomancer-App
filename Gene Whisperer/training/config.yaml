@@ -80,14 +80,14 @@ model: &model
   # Convenience flags for v6 architecture (can override ffn_type/norm_type)
   use_swiglu: true  # Use SwiGLU FFN (sets ffn_type: "swiglu" for v6)
   use_rmsnorm: true  # Use RMSNorm (sets norm_type: "rmsnorm" for v6)
-  use_positional_bias: true  # Use positional motif bias in v6 (alias for use_positional_motif_bias)
+  use_positional_bias: false  # Disabled for BPE (token positions don't map to fixed bp positions)
   use_attention_pool: true
   lstm_hidden: 192
-  kmer: 6
-  stage2_kmer: 6
-  vocab_size: 4099  # 4096 + 3 special tokens
-  pad_token_id: 4098
-  vocab_cache_dir: ../artifacts/vocabs
+  bpe_vocab_path: ../artifacts/vocabs/bpe_vocab.json
+  vocab_size: 4096
+  pad_token_id: 0
+  max_token_len: 24          # For 81bp fine-tuning sequences (~4x BPE compression + headroom)
+  mlm_max_token_len: 64      # For 234bp MLM pre-training sequences
 
 # == SIMPLIFIED MODEL SETTINGS ==
 # The simplified architecture removes CNN/TCN layers which were shown
@@ -210,9 +210,8 @@ mlm: &mlm
   # MLM-specific learning rate (separate from stage training)
   mlm_lr: 0.0002
   mlm_weight_decay: 0.01
-  mlm_kmer: 6
-  mlm_vocab_path: ../artifacts/vocabs/mlm_k6_vocab.json
-  mlm_encoder_path: ../artifacts/mlm_encoder_k6.pt
+  mlm_max_span_len: 1        # Independent token masking for BPE (tokens already multi-base)
+  mlm_encoder_checkpoint: ../artifacts/mlm_encoder_bpe.pt
   mlm_embedding_dim: 384
   mlm_transformer_layers: 12
   mlm_transformer_heads: 12
@@ -267,20 +266,7 @@ checkpoints: &checkpoints
 
   # Stage 1 checkpoints (unchanged)
   stage1_checkpoint_name: null
-  stage1_ckpt_by_k:
-    3: ../artifacts/checkpoints/stage1_k3.pt
-    4: ../artifacts/checkpoints/stage1_k4.pt
-    5: ../artifacts/checkpoints/stage1_k5.pt
-    6: ../artifacts/checkpoints/stage1_k6.pt
-
-# == VOCAB PATHS ==
-vocab_paths: &vocab_paths
-  vocab_cache_dir: ../artifacts/vocabs
-  mlm_vocab_by_k:
-    3: ../artifacts/vocabs/mlm_k3_vocab.json
-    4: ../artifacts/vocabs/mlm_k4_vocab.json
-    5: ../artifacts/vocabs/mlm_k5_vocab.json
-    6: ../artifacts/vocabs/mlm_k6_vocab.json
+  stage1_checkpoint_name: stage1_bpe.pt
 
 # == VISUALIZATION ==
 visualization: &visualization
@@ -320,36 +306,11 @@ amp: &amp
   amp_dtype: "float16"
   amp_force_fp32_loss: true
 
-# == MULTI-KMER MLM PRETRAINING ==
-multi_kmer_pretrain: &multi_kmer_pretrain
-  # Enable multi-kmer pretraining
-  multi_kmer_pretrain_enabled: true
-
-  # K-mer sizes to pretrain (in order)
-  pretrain_kmers: [3, 4, 5, 6]
-
-  # Whether to train sequentially or in parallel (sequential recommended)
-  pretrain_mode: "sequential"  # "sequential" or "parallel"
-
-  # Per-kmer configuration overrides (optional)
-  # Smaller k-mers may need fewer epochs since vocab is smaller
-  kmer_pretrain_overrides:
-    3:
-      mlm_epochs: 100
-      mlm_lr: 0.0003  # Can use higher LR for smaller vocab
-      vocab_size: 67   # 4^3 + 3 special tokens
-    4:
-      mlm_epochs: 120
-      mlm_lr: 0.00025
-      vocab_size: 259  # 4^4 + 3 special tokens
-    5:
-      mlm_epochs: 150
-      mlm_lr: 0.0002
-      vocab_size: 1027 # 4^5 + 3 special tokens
-    6:
-      mlm_epochs: 200
-      mlm_lr: 0.0002
-      vocab_size: 4099 # 4^6 + 3 special tokens
+# == BPE MLM PRETRAINING ==
+bpe_pretrain: &bpe_pretrain
+  # BPE vocabulary is trained once, then used for all MLM pre-training
+  # Run train_bpe_vocab.py first to generate the vocabulary
+  bpe_vocab_size: 4096  # DNABERT-2 optimal (Fig 3c)
 
 # == EARLY STOPPING FOR PRETRAINING ==
 # Now with intelligent convergence detection to prevent wasted compute
@@ -360,13 +321,9 @@ pretrain_early_stopping: &pretrain_early_stopping
   # Metric to monitor (validation loss)
   mlm_early_stopping_metric: "val_loss"
 
-  # Use k-mer specific defaults (recommended - smaller k-mers converge faster)
-  # When true, these settings override patience/min_epochs based on k-mer size:
-  #   k=3: min_epochs=5, patience=8, target_accuracy=85%
-  #   k=4: min_epochs=8, patience=10, target_accuracy=82%
-  #   k=5: min_epochs=10, patience=12, target_accuracy=80%
-  #   k=6: min_epochs=12, patience=15, target_accuracy=78%
-  mlm_use_kmer_defaults: true
+  # BPE pre-training convergence settings
+  mlm_early_stopping_patience: 15
+  mlm_early_stopping_min_epochs: 12
 
   # Patience: epochs to wait for improvement (overridden by k-mer defaults)
   mlm_early_stopping_patience: 15
@@ -430,8 +387,7 @@ distill:
   enabled: false
   alpha: 0.5
   temperature: 2.0
-  teacher_ckpt: ../artifacts/checkpoints/stage1_k6.pt
-  teacher_kmer: 6
+  teacher_ckpt: ../artifacts/checkpoints/stage1_bpe.pt
 
 # == MERGED ROOT KEYS (BACKWARD COMPATIBILITY) ==
 <<: *data
@@ -450,6 +406,5 @@ distill:
 <<: *metrics
 <<: *smoketest
 <<: *amp
-<<: *multi_kmer_pretrain
+<<: *bpe_pretrain
 <<: *pretrain_early_stopping
-<<: *vocab_paths

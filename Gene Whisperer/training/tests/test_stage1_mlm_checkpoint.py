@@ -1,11 +1,11 @@
-"""Tests for k-mer aware MLM checkpoint selection."""
+"""Tests for BPE MLM checkpoint selection."""
 
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from train_stage1 import get_mlm_checkpoint_for_kmer
+from train_stage1 import get_mlm_checkpoint
 
 
 def _touch(path: Path) -> Path:
@@ -14,58 +14,58 @@ def _touch(path: Path) -> Path:
     return path
 
 
-def test_get_mlm_checkpoint_prefers_k_specific(tmp_path: Path) -> None:
+def test_get_mlm_checkpoint_uses_explicit_config(tmp_path: Path) -> None:
     script_dir = tmp_path / "training"
     script_dir.mkdir()
 
-    custom_path = _touch(script_dir / "mlm_k3_custom.pt")
-    _touch(tmp_path / "artifacts" / "mlm_encoder_k3.pt")
+    explicit_path = _touch(script_dir / "custom_mlm.pt")
+    cfg = {"mlm_encoder_checkpoint": "custom_mlm.pt"}
 
-    cfg = {"mlm_encoder_ckpt_by_k": {"3": "mlm_k3_custom.pt"}}
-    ckpt_path = get_mlm_checkpoint_for_kmer(cfg, 3, script_dir=script_dir)
+    ckpt_path = get_mlm_checkpoint(cfg, script_dir=script_dir)
 
-    assert ckpt_path == custom_path.resolve()
+    assert ckpt_path == explicit_path.resolve()
 
 
-def test_get_mlm_checkpoint_reads_nested_mapping(tmp_path: Path) -> None:
+def test_get_mlm_checkpoint_uses_mlm_encoder_path(tmp_path: Path) -> None:
     script_dir = tmp_path / "training"
     script_dir.mkdir()
 
-    nested_path = _touch(script_dir / "nested_k4.pt")
-    cfg = {"checkpoints": {"mlm_encoder_ckpt_by_k": {4: "nested_k4.pt"}}}
+    path = _touch(script_dir / "encoder.pt")
+    cfg = {"mlm_encoder_path": "encoder.pt"}
 
-    ckpt_path = get_mlm_checkpoint_for_kmer(cfg, 4, script_dir=script_dir)
+    ckpt_path = get_mlm_checkpoint(cfg, script_dir=script_dir)
 
-    assert ckpt_path == nested_path.resolve()
+    assert ckpt_path == path.resolve()
 
 
-def test_get_mlm_checkpoint_uses_default_pattern(tmp_path: Path) -> None:
+def test_get_mlm_checkpoint_uses_default_bpe_path(tmp_path: Path) -> None:
     script_dir = tmp_path / "training"
     script_dir.mkdir()
 
-    default_path = _touch(tmp_path / "artifacts" / "mlm_encoder_k5.pt")
+    default_path = _touch(tmp_path / "artifacts" / "mlm_encoder_bpe.pt")
 
-    ckpt_path = get_mlm_checkpoint_for_kmer({}, 5, script_dir=script_dir)
+    ckpt_path = get_mlm_checkpoint({}, script_dir=script_dir)
 
     assert ckpt_path == default_path.resolve()
-
-
-def test_get_mlm_checkpoint_falls_back_to_generic(tmp_path: Path) -> None:
-    script_dir = tmp_path / "training"
-    script_dir.mkdir()
-
-    generic_path = _touch(script_dir / "generic.pt")
-    cfg = {"mlm_encoder_checkpoint": "generic.pt"}
-
-    ckpt_path = get_mlm_checkpoint_for_kmer(cfg, 6, script_dir=script_dir)
-
-    assert ckpt_path == generic_path.resolve()
 
 
 def test_get_mlm_checkpoint_returns_none_when_missing(tmp_path: Path) -> None:
     script_dir = tmp_path / "training"
     script_dir.mkdir()
 
-    ckpt_path = get_mlm_checkpoint_for_kmer({}, 3, script_dir=script_dir)
+    ckpt_path = get_mlm_checkpoint({}, script_dir=script_dir)
 
     assert ckpt_path is None
+
+
+def test_get_mlm_checkpoint_prefers_explicit_over_default(tmp_path: Path) -> None:
+    script_dir = tmp_path / "training"
+    script_dir.mkdir()
+
+    explicit_path = _touch(script_dir / "my_encoder.pt")
+    _touch(tmp_path / "artifacts" / "mlm_encoder_bpe.pt")
+
+    cfg = {"mlm_encoder_checkpoint": "my_encoder.pt"}
+    ckpt_path = get_mlm_checkpoint(cfg, script_dir=script_dir)
+
+    assert ckpt_path == explicit_path.resolve()

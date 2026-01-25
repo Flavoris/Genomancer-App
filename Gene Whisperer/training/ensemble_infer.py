@@ -1,4 +1,4 @@
-"""Promoter prediction via Stage-1 ensemble over multiple k-mer models."""
+"""Promoter prediction via Stage-1 model with BPE tokenization."""
 from __future__ import annotations
 
 import argparse
@@ -10,13 +10,9 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import yaml
 
-from dataset import KmerVocabulary, compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc, reverse_complement
+from bpe_tokenizer import DNABPETokenizer
+from dataset import compute_cksnap, compute_pseeiip, compute_pstnp, compute_tnc, reverse_complement
 from tta import get_reverse_complement_tokens, predict_with_tta, TTAWrapper
-from ensemble_weights import (
-    align_weights_to_kmers as _align_weights_to_kmers,
-    load_ensemble_weights as _load_ensemble_weights,
-    optimize_ensemble_weights as _optimize_ensemble_weights,
-)
 from model import GeneWhispererStage1
 
 LOGGER = logging.getLogger("gene_whisperer.ensemble")
@@ -24,7 +20,6 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 
 # Default calibration file path (relative to training directory)
 DEFAULT_CALIBRATION_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "calibration_stage1.json"
-DEFAULT_ENSEMBLE_WEIGHTS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "ensemble_weights.json"
 
 
 def load_calibration(calibration_path: Optional[Path] = None) -> Optional[Dict]:
@@ -61,21 +56,6 @@ def load_calibration(calibration_path: Optional[Path] = None) -> Optional[Dict]:
         LOGGER.warning("Failed to load calibration from %s: %s", path, e)
         return None
 
-
-def optimize_ensemble_weights(
-    val_probs: Dict,
-    val_labels: torch.Tensor,
-    metric: str = "accuracy",
-    min_weight: float = 0.01,
-) -> Dict:
-    """Find optimal ensemble weights using validation set."""
-    labels_np = val_labels.detach().cpu().numpy() if isinstance(val_labels, torch.Tensor) else val_labels
-    return _optimize_ensemble_weights(
-        val_probs=val_probs,
-        val_labels=labels_np,
-        metric=metric,
-        min_weight=min_weight,
-    )
 
 
 def apply_calibration(
@@ -244,8 +224,8 @@ def load_checkpoint(model: GeneWhispererStage1, path: Path, device: torch.device
     LOGGER.info("Loaded model from %s", path)
 
 
-def load_vocab(vocab_path: Path) -> KmerVocabulary:
-    return KmerVocabulary.load(vocab_path)
+def load_vocab(vocab_path: Path) -> DNABPETokenizer:
+    return DNABPETokenizer.load(str(vocab_path))
 
 
 def _resolve_pooling_type(pooling_type: Optional[str]) -> str:
@@ -266,7 +246,7 @@ def _resolve_pooling_type(pooling_type: Optional[str]) -> str:
     return "attention"
 
 
-def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneWhispererStage1:
+def build_model(cfg: Dict, vocab: DNABPETokenizer, device: torch.device) -> GeneWhispererStage1:
     """Build simplified GeneWhispererStage1 model."""
     simplified_cfg = cfg.get("simplified_model") if isinstance(cfg.get("simplified_model"), dict) else {}
     pooling_type = _resolve_pooling_type(simplified_cfg.get("pooling_type", "attention"))
@@ -277,8 +257,8 @@ def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneW
     if classifier_dropout is None:
         classifier_dropout = 0.15
 
-    max_bp_len = int(cfg.get("max_bp_len", 81))
-    max_seq_len = int(cfg.get("max_seq_len", max_bp_len - vocab.k + 1))
+    max_token_len = int(cfg.get("max_token_len", 24))
+    max_seq_len = int(cfg.get("max_seq_len", max_token_len))
     stage1_drop_path_rate = cfg.get("stage1_drop_path_rate")
     if stage1_drop_path_rate is None:
         stage1_drop_path_rate = cfg.get("drop_path_rate", 0.1)
@@ -292,8 +272,7 @@ def build_model(cfg: Dict, vocab: KmerVocabulary, device: torch.device) -> GeneW
         ffn_mult = float(ffn_mult)
 
     model = GeneWhispererStage1(
-        vocab_size=len(vocab.itos),
-        kmer=vocab.k,
+        vocab_size=len(vocab),
         embedding_dim=int(cfg.get("embedding_dim", 384)),
         num_layers=int(cfg.get("transformer_layers", 12)),
         num_heads=int(cfg.get("transformer_heads", 12)),
@@ -342,9 +321,9 @@ def compute_engineered_features(sequence: str, cfg: Optional[Dict] = None) -> to
 
 
 def prepare_inputs(
-    sequence: str, vocab: KmerVocabulary, max_bp_len: int, cfg: Optional[Dict] = None
+    sequence: str, vocab: DNABPETokenizer, max_token_len: int, cfg: Optional[Dict] = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    tokens = vocab.tokenize(sequence, max_bp_len)
+    tokens = vocab.tokenize_and_pad(sequence, max_token_len)
     engineered = compute_engineered_features(sequence, cfg)
     return tokens.unsqueeze(0), engineered.unsqueeze(0)
 
@@ -371,56 +350,14 @@ def load_stage1_report_weight(report_path: Path) -> Optional[float]:
     return None
 
 
-def resolve_ensemble_weights(kmers: List[int], artifacts_dir: Path) -> Optional[List[float]]:
-    weights = []
-    missing = []
-    for k in kmers:
-        report_path = artifacts_dir / f"stage1_report_k{k}.json"
-        weight = load_stage1_report_weight(report_path)
-        if weight is None:
-            missing.append(k)
-            weight = 1.0
-        weights.append(float(weight))
-
-    if missing:
-        LOGGER.warning(
-            "Missing validation metrics for k=%s; defaulting weights to 1.0 for those models",
-            ",".join(str(k) for k in missing),
-        )
-
-    weight_sum = sum(weights)
-    if weight_sum == 0.0:
-        LOGGER.warning("Weighted ensemble requested but weights sum to 0; using uniform mean instead")
+def resolve_ensemble_weights(checkpoints: List[str], artifacts_dir: Path) -> Optional[List[float]]:
+    """Load weights from stage1 report for multi-checkpoint ensemble."""
+    report_path = artifacts_dir / "stage1_report_bpe.json"
+    weight = load_stage1_report_weight(report_path)
+    if weight is None:
         return None
-
-    return [weight / weight_sum for weight in weights]
-
-
-def resolve_optimized_weights(
-    kmers: List[int],
-    weights_path: Path,
-) -> Optional[List[float]]:
-    """Load optimized weights from disk and align with requested k-mers."""
-    if not weights_path.exists():
-        LOGGER.warning("Optimized ensemble weights not found at %s", weights_path)
-        return None
-    try:
-        weights, metadata = _load_ensemble_weights(weights_path)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        LOGGER.warning("Failed to load optimized weights from %s: %s", weights_path, exc)
-        return None
-
-    aligned = _align_weights_to_kmers(weights, kmers)
-    if aligned is None:
-        LOGGER.warning("Optimized weights did not match requested k-mers")
-        return None
-
-    if metadata:
-        summary = ", ".join(f"{k}={v}" for k, v in metadata.items() if k != "weights")
-        if summary:
-            LOGGER.info("Loaded optimized weight metadata: %s", summary)
-
-    return aligned
+    # For single model, weight is 1.0
+    return [1.0 / len(checkpoints)] * len(checkpoints)
 
 
 def select_device() -> torch.device:
@@ -432,11 +369,11 @@ def select_device() -> torch.device:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Stage-1 ensemble inference")
+    parser = argparse.ArgumentParser(description="Stage-1 BPE model inference")
     parser.add_argument("--config", default="config.yaml", help="Path to YAML config")
     parser.add_argument("--sequence", required=True, help="Raw DNA sequence (A/C/G/T)")
     parser.add_argument("--threshold", type=float, default=0.5, help="Promoter decision threshold")
-    parser.add_argument("--kmer_configs", type=str, help="JSON mapping of k to checkpoint/vocab paths")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint")
     parser.add_argument(
         "--calibration",
         type=str,
@@ -447,22 +384,6 @@ def main() -> None:
         "--no-calibration",
         action="store_true",
         help="Disable calibration even if calibration file exists.",
-    )
-    parser.add_argument(
-        "--per_model",
-        action="store_true",
-        help="Print each model's probability alongside the ensemble probability.",
-    )
-    parser.add_argument(
-        "--weighted",
-        action="store_true",
-        help="Weight ensemble outputs using validation metrics from artifacts/stage1_report_k{k}.json.",
-    )
-    parser.add_argument(
-        "--optimized-weights",
-        type=str,
-        default=None,
-        help="Path to optimized ensemble weights JSON (overrides config).",
     )
     parser.add_argument(
         "--tta",
@@ -485,106 +406,38 @@ def main() -> None:
     with config_path.open("r", encoding="utf-8") as handle:
         cfg = yaml.safe_load(handle) or {}
     sequence = args.sequence.strip().upper()
-    max_bp_len = int(cfg.get("max_bp_len", 81))
+    max_token_len = int(cfg.get("max_token_len", 24))
     device = select_device()
 
-    if args.kmer_configs:
-        kmer_config = json.loads(args.kmer_configs)
+    # Load BPE vocabulary
+    bpe_vocab_path = cfg.get("bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json")
+    vocab_path = Path(bpe_vocab_path)
+    if not vocab_path.is_absolute():
+        vocab_path = (script_dir / vocab_path).resolve()
+    if not vocab_path.exists():
+        raise FileNotFoundError(f"BPE vocab not found: {vocab_path}")
+    vocab = load_vocab(vocab_path)
+
+    # Load model checkpoint
+    checkpoint_path = args.checkpoint
+    if checkpoint_path is None:
+        checkpoint_name = cfg.get("stage1_checkpoint_name", "stage1_bpe.pt")
+        checkpoint_path = (script_dir / "../artifacts/checkpoints" / checkpoint_name).resolve()
     else:
-        kmer_config = {}
-        kmer_list = cfg.get("multi_scale_kmers", [6])
-        stage1_ckpt_by_k = cfg.get("stage1_ckpt_by_k", {}) or {}
-        vocab_cache_dir = cfg.get("vocab_cache_dir")
-        if not vocab_cache_dir:
-            LOGGER.warning("Missing vocab_cache_dir in config; cannot resolve vocab paths.")
-        for raw_k in kmer_list:
-            try:
-                k = int(raw_k)
-            except (TypeError, ValueError):
-                LOGGER.warning("Skipping invalid k-mer value: %s", raw_k)
-                continue
-            ckpt_rel = stage1_ckpt_by_k.get(k, stage1_ckpt_by_k.get(str(k)))
-            if not ckpt_rel or not vocab_cache_dir:
-                LOGGER.warning("Skipping k=%s (missing checkpoint or vocab config)", k)
-                continue
-            ckpt_path = Path(ckpt_rel)
-            if not ckpt_path.is_absolute():
-                ckpt_path = (script_dir / ckpt_path).resolve()
-            vocab_dir = Path(vocab_cache_dir)
-            if not vocab_dir.is_absolute():
-                vocab_dir = (script_dir / vocab_dir).resolve()
-            vocab_path = (vocab_dir / f"k{k}_vocab.json").resolve()
-            if not vocab_path.exists() or not ckpt_path.exists():
-                LOGGER.warning("Skipping k=%s (missing vocab or checkpoint)", k)
-                continue
-            kmer_config[str(k)] = {"checkpoint": str(ckpt_path), "vocab": str(vocab_path)}
+        checkpoint_path = Path(checkpoint_path).resolve()
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    models = []
-    batch_inputs = {}
-    vocabs = {}  # Store vocabs for TTA
-    for k_str, paths in kmer_config.items():
-        try:
-            k = int(k_str)
-        except (TypeError, ValueError):
-            LOGGER.warning("Skipping invalid k-mer entry: %s", k_str)
-            continue
-        vocab_path = Path(paths["vocab"]).resolve()
-        checkpoint_path = Path(paths["checkpoint"]).resolve()
-        if not vocab_path.exists() or not checkpoint_path.exists():
-            LOGGER.warning("Skipping k=%s (missing vocab or checkpoint)", k_str)
-            continue
-        vocab = load_vocab(vocab_path)
-        vocabs[k] = vocab  # Store vocab for TTA
-        # Infer architecture from checkpoint to handle config mismatches
-        arch_overrides = infer_model_architecture(checkpoint_path)
-        model_cfg = {**cfg, **arch_overrides}
-        model = build_model(model_cfg, vocab, device)
-        load_checkpoint(model, checkpoint_path, device)
-        tokens, engineered = prepare_inputs(sequence, vocab, max_bp_len, cfg)
-        tokens = tokens.to(device)
-        engineered = engineered.to(device)
-        models.append((k, model))
-        batch_inputs[k] = (tokens, engineered)
+    # Infer architecture from checkpoint to handle config mismatches
+    arch_overrides = infer_model_architecture(checkpoint_path)
+    model_cfg = {**cfg, **arch_overrides}
+    model = build_model(model_cfg, vocab, device)
+    load_checkpoint(model, checkpoint_path, device)
 
-    if not models:
-        raise RuntimeError("No models loaded for ensemble inference")
-
-    ensemble_weights = None
-    use_weighted = False
-    ensemble_cfg = cfg.get("ensemble") if isinstance(cfg.get("ensemble"), dict) else {}
-    optimize_weights = bool(ensemble_cfg.get("optimize_weights", False))
-    weights_path_value = args.optimized_weights or ensemble_cfg.get("weights_path")
-    weights_path = None
-    if weights_path_value:
-        weights_path = Path(weights_path_value)
-        if not weights_path.is_absolute():
-            weights_path = (script_dir / weights_path).resolve()
-    elif optimize_weights:
-        weights_path = DEFAULT_ENSEMBLE_WEIGHTS_PATH
-
-    kmers = [k for k, _ in models]
-    if weights_path is not None and (optimize_weights or args.optimized_weights):
-        ensemble_weights = resolve_optimized_weights(kmers, weights_path)
-        if ensemble_weights is not None:
-            use_weighted = True
-            weight_summary = ", ".join(
-                f"k{k}={weight:.4f}" for k, weight in zip(kmers, ensemble_weights)
-            )
-            LOGGER.info("Using optimized ensemble weights (%s)", weight_summary)
-        else:
-            LOGGER.warning("Optimized weights requested but unavailable; falling back")
-
-    if not use_weighted and args.weighted:
-        artifacts_dir = script_dir.parent / "artifacts"
-        ensemble_weights = resolve_ensemble_weights(kmers, artifacts_dir)
-        if ensemble_weights is None:
-            LOGGER.warning("Weighted ensemble requested but weights unavailable; using unweighted averaging")
-        else:
-            use_weighted = True
-            weight_summary = ", ".join(
-                f"k{k}={weight:.4f}" for k, weight in zip(kmers, ensemble_weights)
-            )
-            LOGGER.info("Using weighted ensemble (%s)", weight_summary)
+    # Prepare inputs
+    tokens, engineered = prepare_inputs(sequence, vocab, max_token_len, cfg)
+    tokens = tokens.to(device)
+    engineered = engineered.to(device)
 
     # Load calibration if available and not disabled
     calibration = None
@@ -600,94 +453,40 @@ def main() -> None:
     if use_tta:
         LOGGER.info("TTA enabled with %s aggregation", tta_aggregation)
 
-    # Perform inference with calibration and TTA support
+    # Perform inference
     with torch.no_grad():
-        per_model_probs = []
-        all_probs = []
-        tta_details = []  # Store TTA details if requested
+        # Determine decision threshold
         if calibration is None:
-            # Original behavior: use ensemble without calibration
-            # Determine decision threshold: use average of model thresholds or fallback
-            model_thresholds = [
-                getattr(m, "best_threshold", None) for m in models if getattr(m, "best_threshold", None) is not None
-            ]
-            if model_thresholds:
-                thr = sum(model_thresholds) / len(model_thresholds)
-            else:
-                thr = cfg.get("stage1_decision_threshold", args.threshold)
+            model_threshold = getattr(model, "best_threshold", None)
+            thr = model_threshold if model_threshold is not None else cfg.get("stage1_decision_threshold", args.threshold)
             LOGGER.info("Using decision threshold: %.4f (no calibration)", thr)
 
-        for k, model in models:
-            tokens, engineered = batch_inputs.get(k, (None, None))
-            if tokens is None:
-                continue
-
-            if use_tta:
-                # TTA: average predictions over forward and reverse complement
-                vocab = vocabs.get(k)
-                if vocab is None:
-                    LOGGER.warning("Vocab not found for k=%s, skipping TTA", k)
-                    logits = model(tokens, engineered_features=engineered)
-                    probs = torch.sigmoid(logits)
-                else:
-                    probs = predict_with_tta(
-                        model=model,
-                        tokens=tokens,
-                        engineered_features=engineered,
-                        vocab=vocab,
-                        max_bp_len=max_bp_len,
-                        compute_features_fn=lambda seq: compute_engineered_features(seq, cfg),
-                        aggregation=tta_aggregation,
-                    )
-                    # Store TTA details for per_model output
-                    if args.per_model:
-                        # Get individual forward/RC predictions for reporting
-                        logits_fwd = model(tokens, engineered_features=engineered)
-                        prob_fwd = torch.sigmoid(logits_fwd).squeeze().item()
-                        # Get RC prediction
-                        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_bp_len)
-                        rc_tokens = rc_tokens.to(tokens.device)
-                        rc_seq = vocab.decode(rc_tokens.squeeze().tolist())
-                        rc_features = compute_engineered_features(rc_seq, cfg).unsqueeze(0).to(tokens.device)
-                        logits_rc = model(rc_tokens, engineered_features=rc_features)
-                        prob_rc = torch.sigmoid(logits_rc).squeeze().item()
-                        tta_details.append({
-                            "k": k,
-                            "forward": prob_fwd,
-                            "reverse_complement": prob_rc,
-                        })
-            else:
-                logits = model(tokens, engineered_features=engineered)
-                probs = torch.sigmoid(logits)
-
-            if calibration is not None:
-                # Apply calibration temperature scaling to probabilities
-                # Convert back to logits, scale, then to probs
-                eps = 1e-7
-                logits_from_probs = torch.log(probs / (1 - probs + eps) + eps)
-                probs, _ = apply_calibration(logits_from_probs, calibration)
-
-            all_probs.append(probs)
-            per_model_probs.append((k, probs.squeeze().item()))
-
-        if not all_probs:
-            raise RuntimeError("No model outputs available for ensemble inference")
-
-        stacked = torch.stack(all_probs, dim=0)
-        if use_weighted and ensemble_weights is not None:
-            weights = torch.tensor(ensemble_weights, device=stacked.device, dtype=stacked.dtype)
-            probs = (weights.view(-1, 1, 1) * stacked).sum(dim=0)
+        if use_tta:
+            probs = predict_with_tta(
+                model=model,
+                tokens=tokens,
+                engineered_features=engineered,
+                vocab=vocab,
+                max_token_len=max_token_len,
+                compute_features_fn=lambda seq: compute_engineered_features(seq, cfg),
+                aggregation=tta_aggregation,
+            )
         else:
-            probs = stacked.mean(dim=0)
-        prob = probs.squeeze().item()
+            logits = model(tokens, engineered_features=engineered)
+            probs = torch.sigmoid(logits)
 
         if calibration is not None:
+            eps = 1e-7
+            logits_from_probs = torch.log(probs / (1 - probs + eps) + eps)
+            probs, _ = apply_calibration(logits_from_probs, calibration)
             thr = calibration.get("calibrated_threshold", 0.5)
             LOGGER.info(
                 "Using calibrated inference: T=%.4f, threshold=%.4f",
                 calibration["temperature"],
                 thr,
             )
+
+        prob = probs.squeeze().item()
 
     label = "promoter" if prob >= thr else "non-promoter"
     result = {"probability": prob, "label": label, "threshold": thr}
@@ -697,14 +496,6 @@ def main() -> None:
     if use_tta:
         result["tta_enabled"] = True
         result["tta_aggregation"] = tta_aggregation
-    if args.per_model:
-        if use_tta and tta_details:
-            result["per_model"] = [
-                {"k": d["k"], "probability": per_model_probs[i][1], "forward": d["forward"], "reverse_complement": d["reverse_complement"]}
-                for i, d in enumerate(tta_details)
-            ]
-        else:
-            result["per_model"] = [{"k": k, "probability": p} for k, p in per_model_probs]
     print(json.dumps(result))
 
 
@@ -728,21 +519,15 @@ def check_best_threshold(checkpoint_path: str, config_path: str = "config.yaml")
 
     device = select_device()
 
-    # Infer k-mer from checkpoint name (e.g., stage1_k6.pt -> k=6)
-    ckpt_name = ckpt_path.stem
-    kmer = 6  # default
-    if "_k" in ckpt_name:
-        try:
-            kmer = int(ckpt_name.split("_k")[-1].split(".")[0])
-        except ValueError:
-            pass
-
-    vocab_path = script_dir / f"../artifacts/vocabs/k{kmer}_vocab.json"
+    bpe_vocab_path = cfg.get("bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json")
+    vocab_path = Path(bpe_vocab_path)
+    if not vocab_path.is_absolute():
+        vocab_path = (script_dir / vocab_path).resolve()
     if not vocab_path.exists():
-        LOGGER.error("Vocab not found at %s", vocab_path)
+        LOGGER.error("BPE vocab not found at %s", vocab_path)
         sys.exit(1)
 
-    vocab = load_vocab(vocab_path.resolve())
+    vocab = load_vocab(vocab_path)
     model = build_model(cfg, vocab, device)
     load_checkpoint(model, ckpt_path, device)
 
@@ -750,7 +535,7 @@ def check_best_threshold(checkpoint_path: str, config_path: str = "config.yaml")
     assert hasattr(model, "best_threshold"), "model.best_threshold attribute not set!"
     assert model.best_threshold is not None, "model.best_threshold is None!"
 
-    LOGGER.info("✓ Unit check passed: model.best_threshold = %.4f", model.best_threshold)
+    LOGGER.info("Unit check passed: model.best_threshold = %.4f", model.best_threshold)
 
 
 def verify_checkpoint_compatibility(
@@ -770,30 +555,22 @@ def verify_checkpoint_compatibility(
 
     ckpt_path = Path(checkpoint_path).resolve()
     if not ckpt_path.exists():
-        print(f"✗ Checkpoint not found: {ckpt_path}")
+        print(f"Checkpoint not found: {ckpt_path}")
         return False
 
     checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     ckpt_state = _normalize_state_dict(_extract_state_dict(checkpoint))
 
-    # Get k-mer from checkpoint name
-    kmer = 6
-    if "_k" in ckpt_path.stem:
-        try:
-            kmer = int(ckpt_path.stem.split("_k")[-1].split("_")[0])
-        except ValueError:
-            pass
-
-    # Load vocab
-    vocab_dir = Path(cfg.get("vocab_cache_dir", "../artifacts/vocabs"))
-    if not vocab_dir.is_absolute():
-        vocab_dir = (script_dir / vocab_dir).resolve()
-    vocab_path = (vocab_dir / f"k{kmer}_vocab.json").resolve()
+    # Load BPE vocab
+    bpe_vocab_path = cfg.get("bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json")
+    vocab_path = Path(bpe_vocab_path)
+    if not vocab_path.is_absolute():
+        vocab_path = (script_dir / vocab_path).resolve()
     if not vocab_path.exists():
-        print(f"✗ Vocab not found: {vocab_path}")
+        print(f"BPE vocab not found: {vocab_path}")
         return False
 
-    vocab = KmerVocabulary.load(vocab_path)
+    vocab = load_vocab(vocab_path)
 
     # Build model
     device = torch.device("cpu")

@@ -681,7 +681,6 @@ class GeneWhispererStage1Legacy(nn.Module):
         # Store the full encoder for MLM weight loading compatibility
         self._full_encoder = encoder or DNAEncoder(
             vocab_size=vocab_size,
-            kmer=kmer,
             embedding_dim=embedding_dim,
             num_layers=num_layers,
             num_heads=num_heads,

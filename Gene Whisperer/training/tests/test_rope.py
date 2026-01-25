@@ -154,7 +154,6 @@ class TestRoPEIntegration:
 
         encoder = DNAEncoder(
             vocab_size=67,
-            kmer=3,
             embedding_dim=192,
             num_layers=2,
             num_heads=8,
@@ -179,7 +178,6 @@ class TestRoPEIntegration:
 
         encoder = DNAEncoder(
             vocab_size=67,
-            kmer=3,
             embedding_dim=192,
             num_layers=2,
             num_heads=8,
@@ -204,7 +202,6 @@ class TestRoPEIntegration:
         torch.manual_seed(42)
         encoder_rope = DNAEncoder(
             vocab_size=67,
-            kmer=3,
             embedding_dim=192,
             num_layers=2,
             num_heads=8,
@@ -217,7 +214,6 @@ class TestRoPEIntegration:
         torch.manual_seed(42)
         encoder_no_rope = DNAEncoder(
             vocab_size=67,
-            kmer=3,
             embedding_dim=192,
             num_layers=2,
             num_heads=8,

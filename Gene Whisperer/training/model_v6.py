@@ -457,18 +457,14 @@ def create_v6_model(config: dict) -> GeneWhispererV6:
     Returns:
         Configured GeneWhispererV6 instance
     """
-    vocab_size = int(config.get("vocab_size", 4099))
+    vocab_size = int(config.get("vocab_size", 4096))
     embed_dim = int(config.get("embedding_dim", 384))
     num_layers = int(config.get("transformer_layers", 12))
     num_heads = int(config.get("transformer_heads", 12))
     dropout = float(config.get("transformer_dropout", 0.1))
-    pad_token_id = config.get("pad_token_id")
-    if pad_token_id is not None:
-        pad_token_id = int(pad_token_id)
+    pad_token_id = int(config.get("pad_token_id", 0))
 
-    kmer = int(config.get("kmer", 6))
-    max_bp_len = int(config.get("max_bp_len", 81))
-    max_seq_len = int(config.get("max_seq_len", max_bp_len - kmer + 1))
+    max_seq_len = int(config.get("max_seq_len", config.get("max_token_len", 24)))
 
     engineered_dim = int(config.get("engineered_dim", 288))
     use_engineered = bool(config.get("stage1_use_engineered_features", True))
@@ -477,7 +473,7 @@ def create_v6_model(config: dict) -> GeneWhispererV6:
     use_rope = bool(config.get("use_rope", True))
     use_swiglu = bool(config.get("use_swiglu", True))
     use_rmsnorm = bool(config.get("use_rmsnorm", True))
-    use_positional_bias = bool(config.get("use_positional_bias", True))
+    use_positional_bias = bool(config.get("use_positional_bias", False))
     use_gqa = bool(config.get("use_gqa", False))
     num_kv_heads = config.get("num_kv_heads")
     if num_kv_heads is not None and use_gqa:

@@ -35,7 +35,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR
 from torch.utils.data import DataLoader, Dataset, IterableDataset, random_split
 
-from dataset import KmerVocabulary
+from bpe_tokenizer import DNABPETokenizer
 from model import DNAEncoder
 from length_curriculum import (
     LengthCurriculumConfig,
@@ -343,7 +343,7 @@ class PromoterMLMDataset(Dataset):
 
     Args:
         sequences: List of DNA sequences (raw strings)
-        vocab: KmerVocabulary for tokenization
+        vocab: DNABPETokenizer for tokenization
         max_len: Maximum sequence length in base pairs (default: 81)
         mask_strategy: "contiguous" for DNABERT-style or "random" for span masking
         mask_rate: Fraction of tokens to mask (can be updated during training)
@@ -356,7 +356,7 @@ class PromoterMLMDataset(Dataset):
     def __init__(
         self,
         sequences: List[str],
-        vocab: KmerVocabulary,
+        vocab: DNABPETokenizer,
         max_len: int = 81,
         mask_strategy: str = "contiguous",
         mask_rate: float = 0.15,
@@ -435,7 +435,7 @@ class PromoterMLMDataset(Dataset):
         sequence = self.sequences[idx]
 
         # Tokenize the sequence
-        tokens = self.vocab.tokenize(sequence, self.max_len)
+        tokens = self.vocab.tokenize_and_pad(sequence, self.max_len)
 
         # Add batch dimension for masking functions (they expect batch input)
         tokens_batch = tokens.unsqueeze(0)
@@ -444,9 +444,9 @@ class PromoterMLMDataset(Dataset):
             # Use DNABERT-style contiguous span masking
             masked_tokens, labels, _ = create_contiguous_mask(
                 tokens_batch,
-                kmer=self.vocab.k,
+                kmer=1,  # BPE tokens are already multi-base
                 mask_token_id=self.vocab.mask_id,
-                vocab_size=len(self.vocab.itos),
+                vocab_size=len(self.vocab),
                 mask_prob=self.mask_rate,
                 mask_token_prob=self.mask_token_prob,
                 random_token_prob=self.random_token_prob,
@@ -613,7 +613,7 @@ class GenomeMLMIterableDataset(IterableDataset):
         if self.reverse_complement_prob > 0 and random.random() < self.reverse_complement_prob:
             window = reverse_complement(window)
             rc_used = True
-        tokens = self.vocab.tokenize(window, self.window_bp)
+        tokens = self.vocab.tokenize_and_pad(window, self.window_bp)
         metadata = {
             "species": species_name,
             "record_id": record_id,
@@ -741,7 +741,7 @@ def sample_span_length_geometric(max_span_len: int, mean_span: float = 3.0) -> i
 
 def mask_tokens_span(
     inputs: torch.LongTensor,
-    vocab: KmerVocabulary,
+    vocab: DNABPETokenizer,
     mask_prob: float = 0.15,
     max_span_len: int = 3,
     track_spans: bool = False,
@@ -765,7 +765,7 @@ def mask_tokens_span(
     
     Args:
         inputs: (B, L) input token indices
-        vocab: KmerVocabulary with mask_id and pad_id
+        vocab: DNABPETokenizer with mask_id and pad_id
         mask_prob: Target fraction of tokens to mask (~15%)
         max_span_len: Maximum length of each masked span
         track_spans: If True, also return list of span lengths
@@ -782,7 +782,7 @@ def mask_tokens_span(
     device = inputs.device
     labels = inputs.clone()
     batch_size, seq_len = inputs.shape
-    vocab_size = len(vocab.itos)
+    vocab_size = len(vocab)
 
     if max_span_len < 1:
         raise ValueError(f"max_span_len must be >= 1, got {max_span_len}")
@@ -1106,7 +1106,7 @@ def create_contiguous_mask(
 
 def debug_label_token_frequency(
     labels: torch.LongTensor,
-    vocab: KmerVocabulary,
+    vocab: DNABPETokenizer,
     num_batches: int = 1,
 ) -> Dict[str, Any]:
     """
@@ -1119,7 +1119,7 @@ def debug_label_token_frequency(
     
     Args:
         labels: (B, L) label tensor with -100 for ignored positions
-        vocab: KmerVocabulary to decode token IDs
+        vocab: DNABPETokenizer to decode token IDs
         num_batches: Number of batches this report covers (for averaging)
         
     Returns:
@@ -1169,7 +1169,7 @@ def debug_label_token_frequency(
 
 def print_label_debug_report(
     report: Dict[str, Any],
-    vocab: KmerVocabulary,
+    vocab: DNABPETokenizer,
     top_k: int = 10,
 ) -> None:
     """
@@ -1177,7 +1177,7 @@ def print_label_debug_report(
     
     Args:
         report: Output from debug_label_token_frequency()
-        vocab: KmerVocabulary for decoding token names
+        vocab: DNABPETokenizer for decoding token names
         top_k: Number of most common tokens to display
     """
     print("=" * 80)
@@ -1222,7 +1222,7 @@ def print_label_debug_report(
         for rank, (token_id, count) in enumerate(sorted_counts, 1):
             pct = count / total * 100 if total > 0 else 0
             # Get token name
-            if token_id < len(vocab.itos):
+            if token_id < len(vocab):
                 token_name = vocab.itos[token_id]
             else:
                 token_name = f"<unknown:{token_id}>"
@@ -1434,7 +1434,7 @@ class MLMCollator:
     """
     def __init__(
         self,
-        vocab: KmerVocabulary,
+        vocab: DNABPETokenizer,
         mask_prob: float = 0.15,
         debug: bool = False,
         track_spans: bool = False,
@@ -1656,7 +1656,7 @@ def collate_mlm_streaming(
 
 def collate_mlm(
     batch: Iterable[torch.LongTensor],
-    vocab: KmerVocabulary,
+    vocab: DNABPETokenizer,
     mask_prob: float = 0.15,
 ) -> Tuple[torch.LongTensor, torch.LongTensor]:
     """Collate batch and apply DNABERT-style span masking."""
@@ -1666,7 +1666,7 @@ def collate_mlm(
 
 
 def debug_masking(
-    vocab: KmerVocabulary,
+    vocab: DNABPETokenizer,
     batch: Iterable[torch.LongTensor],
     mask_prob: float = 0.15,
     max_span_len: int = 3,
@@ -1780,8 +1780,8 @@ def debug_masking(
     if num_masked > 0:
         min_label = masked_labels.min().item()
         max_label = masked_labels.max().item()
-        valid_range = (min_label >= 0 and max_label < len(vocab.itos))
-        print(f"    Masked labels in valid range [0, {len(vocab.itos)-1}]: ", end="")
+        valid_range = (min_label >= 0 and max_label < len(vocab))
+        print(f"    Masked labels in valid range [0, {len(vocab)-1}]: ", end="")
         if valid_range:
             print(f"✓ PASS (min={min_label}, max={max_label})")
         else:
@@ -1801,7 +1801,7 @@ def debug_masking(
 
 def verify_no_leakage(
     model: nn.Module,
-    vocab: KmerVocabulary,
+    vocab: DNABPETokenizer,
     device: torch.device,
 ) -> None:
     """
@@ -2181,14 +2181,19 @@ class DNAMLM(nn.Module):
         return math.exp(loss.item())
 
 
-def load_or_build_vocab(windows: List[str], k: int, vocab_path: Path) -> KmerVocabulary:
+def load_or_build_vocab(windows: List[str], k: int, vocab_path: Path) -> DNABPETokenizer:
+    """Load pre-trained BPE vocabulary.
+
+    The BPE vocab must be pre-trained using train_bpe_vocab.py.
+    The `k` parameter is ignored (kept for call-site compatibility).
+    """
     if vocab_path.exists():
-        LOGGER.info("Loading existing vocabulary from %s", vocab_path)
-        return KmerVocabulary.load(vocab_path)
-    vocab = KmerVocabulary.build_from_sequences(windows, k=k)
-    vocab.save(vocab_path)
-    LOGGER.info("Saved vocabulary with %d entries to %s", len(vocab.itos), vocab_path)
-    return vocab
+        LOGGER.info("Loading BPE vocabulary from %s", vocab_path)
+        return DNABPETokenizer.load(str(vocab_path))
+    raise FileNotFoundError(
+        f"BPE vocabulary not found at {vocab_path}. "
+        "Run train_bpe_vocab.py first to generate it."
+    )
 
 
 def _build_windows_from_records(
@@ -2243,7 +2248,7 @@ def _build_windows_from_records(
     return windows
 
 
-def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], KmerVocabulary]:
+def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], DNABPETokenizer]:
     script_dir = Path(__file__).resolve().parent
     fasta_path = _resolve_cfg_path(cfg.get("mlm_fasta_path"), base_dir=script_dir)
     if not fasta_path.exists():
@@ -2251,11 +2256,11 @@ def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], KmerVocabulary]:
     # Use MLM-specific window size, fallback to max_bp_len for backward compatibility
     window_size = int(cfg.get("mlm_window_size", cfg.get("max_bp_len", 234)))
     stride = int(cfg.get("mlm_stride", 20))
-    k = int(cfg.get("mlm_kmer", 3))
+    k = 1  # BPE tokens are variable-length; k is unused but kept for call compatibility
     unknown_base_strategy = _normalize_unknown_base_strategy(cfg.get("mlm_unknown_base_strategy"))
     include_reverse_complements = bool(cfg.get("include_reverse_complements", cfg.get("mlm_include_reverse_complements", False)))
     vocab_path = _resolve_cfg_path(
-        cfg.get("mlm_vocab_path", f"../artifacts/vocabs/k{k}_mlm_vocab.json"),
+        cfg.get("bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json"),
         base_dir=script_dir,
     )
 
@@ -2286,7 +2291,7 @@ def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], KmerVocabulary]:
         include_reverse_complements=include_reverse_complements,
     )
     vocab = load_or_build_vocab(windows, k=k, vocab_path=vocab_path)
-    token_tensors = [vocab.tokenize(window, window_size) for window in windows]
+    token_tensors = [vocab.tokenize_and_pad(window, window_size) for window in windows]
     return token_tensors, vocab
 
 
@@ -2676,14 +2681,14 @@ def _load_or_build_vocab_for_streaming(
     reverse_complement_prob: float,
     unknown_base_strategy: str,
     species_weights: Dict[str, float],
-) -> KmerVocabulary:
+) -> DNABPETokenizer:
     vocab_path = _resolve_cfg_path(
-        cfg.get("mlm_vocab_path", f"../artifacts/vocabs/mlm_k{kmer}_vocab.json"),
+        cfg.get("bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json"),
         base_dir=base_dir,
     )
     if vocab_path.exists():
-        LOGGER.info("Loading existing vocabulary from %s", vocab_path)
-        return KmerVocabulary.load(vocab_path)
+        LOGGER.info("Loading BPE vocabulary from %s", vocab_path)
+        return DNABPETokenizer.load(str(vocab_path))
 
     LOGGER.warning("Vocabulary not found at %s; sampling windows to build one", vocab_path)
     records_by_species, species_order, skipped_short = _build_species_records(corpus, window_bp=window_bp)
@@ -2770,7 +2775,7 @@ def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
     _log_split_validation_check(species_names, train_corpus, val_corpus)
     if not val_corpus:
         LOGGER.warning("Validation corpus empty after record split; dry run uses train corpus.")
-    kmer = int(cfg.get("mlm_kmer", 3))
+    kmer = 1  # BPE: variable-length tokens, kept for call compatibility
     reverse_complement_prob = _resolve_reverse_complement_prob(cfg)
     unknown_base_strategy = _normalize_unknown_base_strategy(cfg.get("mlm_unknown_base_strategy"))
     species_weights = _normalize_species_weights(cfg.get("mlm_species_weights"), species_names)
@@ -2789,12 +2794,12 @@ def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
     print("=" * 60)
     print("MLM DRY RUN CONFIGURATION")
     print("=" * 60)
-    print(f"kmer:       {kmer}")
-    print(f"vocab_size: {len(vocab.itos)}")
+    print("tokenizer:  BPE")
+    print(f"vocab_size: {len(vocab)}")
 
     # Sample tokenization for a short sequence
     sample_seq = "ATGCATGCATGCATGCATGC"  # 20bp sample
-    sample_tokens = vocab.tokenize(sample_seq, max_bp_len=len(sample_seq))
+    sample_tokens = vocab.tokenize_and_pad(sample_seq, max_bp_len=len(sample_seq))
     print(f"sample_seq: '{sample_seq}' ({len(sample_seq)} bp)")
     print(f"sample_tokenization_length: {len(sample_tokens)} tokens")
 
@@ -2995,7 +3000,7 @@ def print_topk_predictions_debug(
     model: nn.Module,
     inputs: torch.LongTensor,
     labels: torch.LongTensor,
-    vocab: KmerVocabulary,
+    vocab: DNABPETokenizer,
     epoch: int,
     num_sequences: int = 3,
     top_k: int = 5,
@@ -3016,7 +3021,7 @@ def print_topk_predictions_debug(
         model: The DNAMLM model
         inputs: (B, L) masked input token IDs
         labels: (B, L) target labels with -100 for non-masked positions
-        vocab: KmerVocabulary for decoding tokens
+        vocab: DNABPETokenizer for decoding tokens
         epoch: Current epoch number (for display)
         num_sequences: Number of sequences to analyze (default: 3)
         top_k: Number of top predictions to show (default: 5)
@@ -3076,7 +3081,7 @@ def print_topk_predictions_debug(
             true_label = seq_labels[pos_idx].item()
             
             # Get true token string
-            if true_label < len(vocab.itos):
+            if true_label < len(vocab):
                 true_token = vocab.itos[true_label]
             else:
                 true_token = f"<id:{true_label}>"
@@ -3105,7 +3110,7 @@ def print_topk_predictions_debug(
             
             for rank, (prob, pred_id) in enumerate(zip(topk_probs, topk_ids), 1):
                 pred_id_val = pred_id.item()
-                if pred_id_val < len(vocab.itos):
+                if pred_id_val < len(vocab):
                     pred_token = vocab.itos[pred_id_val]
                 else:
                     pred_token = f"<id:{pred_id_val}>"
@@ -3150,7 +3155,7 @@ def print_topk_predictions_debug(
 def run_overfit_debug(
     model: nn.Module,
     train_samples: List[torch.LongTensor],
-    vocab: KmerVocabulary,
+    vocab: DNABPETokenizer,
     device: torch.device,
     num_steps: int = 500,
     lr: float = 3e-3,
@@ -3310,7 +3315,7 @@ def run_overfit_debug(
         pos_idx = masked_indices[1][i].item()
         
         true_label = labels[batch_idx, pos_idx].item()
-        true_token = vocab.itos[true_label] if true_label < len(vocab.itos) else f"<{true_label}>"
+        true_token = vocab.itos[true_label] if true_label < len(vocab) else f"<{true_label}>"
         
         # Get top-5 predictions
         pos_probs = probs[batch_idx, pos_idx]
@@ -3319,7 +3324,7 @@ def run_overfit_debug(
         print(f"  Position [{batch_idx},{pos_idx}] - True label: '{true_token}' (id={true_label})")
         print(f"    Top-5 predictions:")
         for j, (prob, pred_id) in enumerate(zip(top5_probs, top5_ids)):
-            pred_token = vocab.itos[pred_id.item()] if pred_id.item() < len(vocab.itos) else f"<{pred_id.item()}>"
+            pred_token = vocab.itos[pred_id.item()] if pred_id.item() < len(vocab) else f"<{pred_id.item()}>"
             marker = "✓" if pred_id.item() == true_label else " "
             print(f"      {j+1}. {marker} '{pred_token}' (id={pred_id.item()}) - {prob.item()*100:.1f}%")
         print()
@@ -3570,7 +3575,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         # Data
         "batch_size": int(cfg_run.get("mlm_batch_size", 128)),
         "max_bp_len": int(cfg_run.get("mlm_window_size", cfg_run.get("max_bp_len", 234))),
-        "kmer": int(cfg_run.get("mlm_kmer", 3)),
+        "tokenizer": "bpe",
         "streaming_enabled": use_streaming,
         "mlm_fasta_path": cfg_run.get("mlm_fasta_path"),
         "mlm_fasta_paths": cfg_run.get("mlm_fasta_paths"),
@@ -3684,9 +3689,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         if ablation_enabled and ablation_cfg.get("pretrain_bp_limit") is not None:
             LOGGER.warning("Ablation pretrain_bp_limit not supported in streaming mode; ignoring.")
 
-        kmer = int(cfg_run.get("mlm_kmer", 3))
+        kmer = 1  # BPE: variable-length tokens
         vocab_path = _resolve_cfg_path(
-            cfg_run.get("mlm_vocab_path", f"../artifacts/vocabs/mlm_k{kmer}_vocab.json"),
+            cfg_run.get("bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json"),
             base_dir=script_dir,
         )
         vocab = _load_or_build_vocab_for_streaming(
@@ -3795,10 +3800,10 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         # Use MLM-specific window size, fallback to max_bp_len for backward compatibility
         window_size = int(cfg_run.get("mlm_window_size", cfg_run.get("max_bp_len", 234)))
         stride = int(cfg_run.get("mlm_stride", 20))
-        k = int(cfg_run.get("mlm_kmer", 3))
+        k = 1  # BPE: variable-length tokens
         include_reverse_complements = reverse_complement_prob > 0
         vocab_path = _resolve_cfg_path(
-            cfg_run.get("mlm_vocab_path", f"../artifacts/vocabs/k{k}_mlm_vocab.json"),
+            cfg_run.get("bpe_vocab_path", "../artifacts/vocabs/bpe_vocab.json"),
             base_dir=script_dir,
         )
         species_name = fasta_path.stem
@@ -3846,8 +3851,8 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             val_windows = train_windows
 
         vocab = load_or_build_vocab(train_windows, k=k, vocab_path=vocab_path)
-        train_token_tensors = [vocab.tokenize(window, window_size) for window in train_windows]
-        val_token_tensors = [vocab.tokenize(window, window_size) for window in val_windows]
+        train_token_tensors = [vocab.tokenize_and_pad(window, window_size) for window in train_windows]
+        val_token_tensors = [vocab.tokenize_and_pad(window, window_size) for window in val_windows]
         token_tensors = train_token_tensors
         train_dataset = MLMDataset(train_token_tensors)
         val_dataset = MLMDataset(val_token_tensors)
@@ -4019,8 +4024,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         relative_position_max_distance = int(cfg_run.get("relative_position_max_distance", 128))
 
         encoder = DNAEncoder(
-            vocab_size=len(vocab.itos),
-            kmer=vocab.k,
+            vocab_size=len(vocab),
             embedding_dim=embedding_dim,
             num_layers=transformer_layers,
             num_heads=transformer_heads,
@@ -4036,7 +4040,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         special_token_ids = [vocab.mask_id, vocab.unk_id, vocab.pad_id]
         model = DNAMLM(
             encoder,
-            vocab_size=len(vocab.itos),
+            vocab_size=len(vocab),
             special_token_ids=special_token_ids,
             tie_weights=bool(cfg_run.get("mlm_tie_weights", True)),
             use_output_norm=bool(cfg_run.get("mlm_use_output_norm", True)),
@@ -4152,8 +4156,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     relative_position_max_distance = int(cfg_run.get("relative_position_max_distance", 128))
 
     encoder = DNAEncoder(
-        vocab_size=len(vocab.itos),
-        kmer=vocab.k,
+        vocab_size=len(vocab),
         embedding_dim=embedding_dim,
         num_layers=transformer_layers,
         num_heads=transformer_heads,
@@ -4179,7 +4182,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     model = DNAMLM(
         encoder,
-        vocab_size=len(vocab.itos),
+        vocab_size=len(vocab),
         special_token_ids=special_token_ids,
         tie_weights=tie_weights,
         use_output_norm=use_output_norm,
@@ -4271,7 +4274,6 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             patience=int(cfg_run.get("mlm_early_stopping_patience", 20)),
             min_delta=float(cfg_run.get("mlm_early_stopping_min_delta", 0.001)),
             min_epochs=int(cfg_run.get("mlm_early_stopping_min_epochs", 30)),
-            kmer=int(vocab.k),
             restore_best=bool(cfg_run.get("mlm_early_stopping_restore_best", True)),
             verbose=True,
             # New convergence detection parameters
@@ -4395,7 +4397,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     param_norm_cap = float(cfg_run.get("param_norm_cap", 200.0))
 
     encoder_path = _resolve_cfg_path(
-        cfg_run.get("mlm_encoder_path", f"../artifacts/mlm_encoder_k{vocab.k}.pt"),
+        cfg_run.get("mlm_encoder_path", "../artifacts/mlm_encoder_bpe.pt"),
         base_dir=script_dir,
     )
     encoder_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4405,7 +4407,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         metadata = {
             "config_snapshot": resolved_config,
             "vocab_path": str(vocab_path) if vocab_path is not None else None,
-            "kmer": int(vocab.k),
+            "tokenizer": "bpe",
             "embedding_dim": embedding_dim,
             "num_layers": transformer_layers,
             "heads": transformer_heads,
@@ -4443,7 +4445,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             "best_val_acc": best_val_acc,
             "patience_counter": patience_counter,
             "config_snapshot": resolved_config,
-            "vocab_k": vocab.k,
+            "tokenizer": "bpe",
             "rng_state_python": random.getstate(),
             "rng_state_torch": torch.get_rng_state(),
         }
@@ -5051,7 +5053,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         )
 
     # Copy encoder to output_dir as well (if output_dir is different from encoder_path's parent)
-    output_encoder_path = output_dir / f"mlm_encoder_k{vocab.k}.pt"
+    output_encoder_path = output_dir / "mlm_encoder_bpe.pt"
     if output_encoder_path.resolve() != encoder_path.resolve():
         shutil.copy(encoder_path, output_encoder_path)
         LOGGER.info("Copied encoder to output_dir: %s", output_encoder_path)
@@ -5148,7 +5150,7 @@ def main(cfg: dict | None = None) -> dict:
         cfg = yaml.safe_load(handle) or {}
 
     cfg["_config_path"] = str(config_path)
-    kmer = args.kmer if args.kmer is not None else int(cfg.get("mlm_kmer", 6))
+    kmer = 1  # BPE: variable-length tokens; kmer kept for call compatibility
     kmer_cfg = get_kmer_pretrain_config(cfg, kmer)
 
     overrides: Dict[str, Any] = {}
@@ -5213,7 +5215,7 @@ def main(cfg: dict | None = None) -> dict:
         # Data
         "batch_size": int(cfg.get("mlm_batch_size", 128)),
         "max_bp_len": int(cfg.get("mlm_window_size", cfg.get("max_bp_len", 234))),
-        "kmer": int(cfg.get("mlm_kmer", 3)),
+        "tokenizer": "bpe",
         "include_reverse_complements": bool(cfg.get("include_reverse_complements", cfg.get("mlm_include_reverse_complements", False))),
         # Training
         "epochs": int(cfg.get("mlm_epochs", 200)),
@@ -5371,8 +5373,7 @@ def main(cfg: dict | None = None) -> dict:
         relative_position_max_distance = int(cfg.get("relative_position_max_distance", 128))
 
         encoder = DNAEncoder(
-            vocab_size=len(vocab.itos),
-            kmer=vocab.k,
+            vocab_size=len(vocab),
             embedding_dim=embedding_dim,
             num_layers=transformer_layers,
             num_heads=transformer_heads,
@@ -5388,7 +5389,7 @@ def main(cfg: dict | None = None) -> dict:
         special_token_ids = [vocab.mask_id, vocab.unk_id, vocab.pad_id]
         model = DNAMLM(
             encoder,
-            vocab_size=len(vocab.itos),
+            vocab_size=len(vocab),
             special_token_ids=special_token_ids,
             tie_weights=bool(cfg.get("mlm_tie_weights", True)),
             use_output_norm=bool(cfg.get("mlm_use_output_norm", True)),
@@ -5497,8 +5498,7 @@ def main(cfg: dict | None = None) -> dict:
     relative_position_max_distance = int(cfg.get("relative_position_max_distance", 128))
 
     encoder = DNAEncoder(
-        vocab_size=len(vocab.itos),
-        kmer=vocab.k,
+        vocab_size=len(vocab),
         embedding_dim=embedding_dim,
         num_layers=transformer_layers,
         num_heads=transformer_heads,
@@ -5524,7 +5524,7 @@ def main(cfg: dict | None = None) -> dict:
     
     model = DNAMLM(
         encoder, 
-        vocab_size=len(vocab.itos),
+        vocab_size=len(vocab),
         special_token_ids=special_token_ids,
         tie_weights=tie_weights,
         use_output_norm=use_output_norm,
@@ -5662,7 +5662,7 @@ def main(cfg: dict | None = None) -> dict:
     param_norm_cap = float(cfg.get("param_norm_cap", 200.0))
     
     encoder_path = _resolve_cfg_path(
-        cfg.get("mlm_encoder_path", f"../artifacts/mlm_encoder_k{vocab.k}.pt"),
+        cfg.get("mlm_encoder_path", "../artifacts/mlm_encoder_bpe.pt"),
         base_dir=script_dir,
     )
     encoder_path.parent.mkdir(parents=True, exist_ok=True)

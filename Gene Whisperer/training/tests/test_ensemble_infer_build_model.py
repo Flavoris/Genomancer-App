@@ -14,17 +14,19 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(TRAINING_DIR) not in sys.path:
     sys.path.insert(0, str(TRAINING_DIR))
 
-from dataset import KmerVocabulary
+from bpe_tokenizer import DNABPETokenizer
 from ensemble_infer import build_model
 from model import RMSNorm, SwiGLU
 
 
-def _make_vocab(k: int = 3) -> KmerVocabulary:
-    return KmerVocabulary.build_from_sequences(["ACGTACGT"], k=k)
+def _make_vocab() -> DNABPETokenizer:
+    vocab = DNABPETokenizer(vocab_size=20)
+    vocab.train(["ACGTACGTAC", "GGGGCCCCAA", "ATATATAT"])
+    return vocab
 
 
 def test_build_model_applies_stage1_arch_params() -> None:
-    vocab = _make_vocab(3)
+    vocab = _make_vocab()
     cfg = {
         "embedding_dim": 32,
         "transformer_layers": 2,
@@ -33,7 +35,7 @@ def test_build_model_applies_stage1_arch_params() -> None:
         "transformer_dropout": 0.1,
         "engineered_dim": 0,
         "stage1_use_engineered_features": False,
-        "max_bp_len": 20,
+        "max_token_len": 20,
         "drop_path_rate": 0.05,
         "stage1_drop_path_rate": 0.2,
         "use_relative_position_bias": False,
@@ -68,7 +70,7 @@ def test_build_model_applies_stage1_arch_params() -> None:
 
 
 def test_build_model_uses_simplified_defaults() -> None:
-    vocab = _make_vocab(3)
+    vocab = _make_vocab()
     cfg = {
         "embedding_dim": 16,
         "transformer_layers": 1,
@@ -77,7 +79,7 @@ def test_build_model_uses_simplified_defaults() -> None:
         "transformer_dropout": 0.05,
         "engineered_dim": 0,
         "stage1_use_engineered_features": False,
-        "max_bp_len": 12,
+        "max_token_len": 12,
     }
 
     model = build_model(cfg, vocab, torch.device("cpu"))

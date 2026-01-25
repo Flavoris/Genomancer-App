@@ -3,7 +3,8 @@ import pytest
 import torch
 import torch.nn as nn
 
-from dataset import KmerVocabulary, reverse_complement
+from bpe_tokenizer import DNABPETokenizer
+from dataset import reverse_complement
 
 
 # Import from train_stage1 - we need to handle the import path
@@ -60,16 +61,10 @@ class AsymmetricMockModel(nn.Module):
 
 @pytest.fixture
 def vocab():
-    """Create a simple k=3 vocabulary for testing."""
-    tokens = ["AAA", "AAC", "AAG", "AAT", "ACA", "ACC", "ACG", "ACT",
-              "AGA", "AGC", "AGG", "AGT", "ATA", "ATC", "ATG", "ATT",
-              "CAA", "CAC", "CAG", "CAT", "CCA", "CCC", "CCG", "CCT",
-              "CGA", "CGC", "CGG", "CGT", "CTA", "CTC", "CTG", "CTT",
-              "GAA", "GAC", "GAG", "GAT", "GCA", "GCC", "GCG", "GCT",
-              "GGA", "GGC", "GGG", "GGT", "GTA", "GTC", "GTG", "GTT",
-              "TAA", "TAC", "TAG", "TAT", "TCA", "TCC", "TCG", "TCT",
-              "TGA", "TGC", "TGG", "TGT", "TTA", "TTC", "TTG", "TTT"]
-    return KmerVocabulary(k=3, tokens=tokens)
+    """Create a simple BPE tokenizer for testing."""
+    tok = DNABPETokenizer(vocab_size=20)
+    tok.train(["ACGTACGTAC", "GGGGCCCCAA", "ATATATAT", "ACGTACGT"])
+    return tok
 
 
 class TestBidirectionalConsistencyLoss:
@@ -195,44 +190,44 @@ class TestGetReverseComplementTokensForTraining:
 
     def test_rc_tokens_shape(self, vocab):
         """Test that RC tokens have same shape as input."""
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
 
-        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_token_len)
 
         assert rc_tokens.shape == tokens.shape
 
     def test_rc_tokens_batch(self, vocab):
         """Test RC tokens with batch of sequences."""
-        max_bp_len = 12
+        max_token_len = 12
         sequences = ["ACGTACGTAC", "GGGGCCCCAA", "ATATATAT"]
-        tokens_list = [vocab.tokenize(seq, max_bp_len) for seq in sequences]
+        tokens_list = [vocab.tokenize_and_pad(seq, max_token_len) for seq in sequences]
         tokens = torch.stack(tokens_list, dim=0)
 
-        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_token_len)
 
         assert rc_tokens.shape == tokens.shape
 
     def test_double_rc_returns_original(self, vocab):
         """Test that applying RC twice returns original tokens."""
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
 
-        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_bp_len)
-        rc_rc_tokens = get_reverse_complement_tokens_for_training(rc_tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_token_len)
+        rc_rc_tokens = get_reverse_complement_tokens_for_training(rc_tokens, vocab, max_token_len)
 
         # Double RC should give back original
         assert torch.equal(tokens, rc_rc_tokens)
 
     def test_rc_tokens_device_transfer(self, vocab):
         """Test that RC tokens are on same device as input."""
-        max_bp_len = 12
+        max_token_len = 12
         seq = "ACGTACGTAC"
-        tokens = vocab.tokenize(seq, max_bp_len).unsqueeze(0)
+        tokens = vocab.tokenize_and_pad(seq, max_token_len).unsqueeze(0)
 
-        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_token_len)
 
         assert rc_tokens.device == tokens.device
 
@@ -242,17 +237,17 @@ class TestConsistencyTrainingIntegration:
 
     def test_full_loss_computation_pipeline(self, vocab):
         """Test full pipeline: tokens -> RC tokens -> loss."""
-        max_bp_len = 12
+        max_token_len = 12
         batch_size = 4
         sequences = ["ACGTACGTAC", "GGGGCCCCAA", "ATATATAT", "CGATCGATCG"]
 
         # Tokenize sequences
-        tokens_list = [vocab.tokenize(seq, max_bp_len) for seq in sequences]
+        tokens_list = [vocab.tokenize_and_pad(seq, max_token_len) for seq in sequences]
         tokens = torch.stack(tokens_list, dim=0)
         labels = torch.randint(0, 2, (batch_size, 1)).float()
 
         # Get RC tokens
-        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_token_len)
 
         # Create mock model
         model = MockModel(output_value=0.5)
@@ -270,17 +265,17 @@ class TestConsistencyTrainingIntegration:
 
     def test_asymmetric_model_has_consistency_loss(self, vocab):
         """Test that asymmetric predictions result in consistency loss."""
-        max_bp_len = 12
+        max_token_len = 12
         batch_size = 2
         sequences = ["ACGTACGTAC", "GGGGCCCCAA"]
 
         # Tokenize sequences
-        tokens_list = [vocab.tokenize(seq, max_bp_len) for seq in sequences]
+        tokens_list = [vocab.tokenize_and_pad(seq, max_token_len) for seq in sequences]
         tokens = torch.stack(tokens_list, dim=0)
         labels = torch.ones(batch_size, 1)
 
         # Get RC tokens
-        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_token_len)
 
         # Create asymmetric model
         model = AsymmetricMockModel(fwd_value=2.0, rc_value=-2.0)
@@ -299,13 +294,13 @@ class TestConsistencyTrainingIntegration:
     def test_consistency_loss_encourages_agreement(self, vocab):
         """Test that training with consistency loss encourages prediction agreement."""
         # This is a simplified optimization test
-        max_bp_len = 12
+        max_token_len = 12
         batch_size = 4
         sequences = ["ACGT" * 3] * batch_size
 
-        tokens_list = [vocab.tokenize(seq, max_bp_len) for seq in sequences]
+        tokens_list = [vocab.tokenize_and_pad(seq, max_token_len) for seq in sequences]
         tokens = torch.stack(tokens_list, dim=0)
-        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens_for_training(tokens, vocab, max_token_len)
         labels = torch.ones(batch_size, 1)
 
         # Simple learnable parameters

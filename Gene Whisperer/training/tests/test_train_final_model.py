@@ -328,14 +328,14 @@ class TestLoadPretrainedMLMWeights:
     def test_returns_false_for_none_transfer_mode(self):
         """Test that load_pretrained_mlm_weights returns False for transfer_mode='none'."""
         model = MagicMock()
-        cfg = {"kmer": 6}
+        cfg = {}
         result = load_pretrained_mlm_weights(model, cfg, transfer_mode="none")
         assert result is False
 
     def test_returns_false_if_model_lacks_load_method(self):
         """Test returns False if model doesn't have load_pretrained_weights."""
         model = nn.Linear(10, 10)  # No load_pretrained_weights method
-        cfg = {"kmer": 6}
+        cfg = {}
         result = load_pretrained_mlm_weights(model, cfg, transfer_mode="embed_only")
         assert result is False
 
@@ -343,10 +343,10 @@ class TestLoadPretrainedMLMWeights:
         """Test returns False when no checkpoint file exists."""
         model = MagicMock()
         model.load_pretrained_weights = MagicMock()
-        cfg = {"kmer": 6}
+        cfg = {}
 
         # Mock the checkpoint finder to return None
-        with patch("train_final_model.get_mlm_checkpoint_for_kmer", return_value=None):
+        with patch("train_final_model.get_mlm_checkpoint", return_value=None):
             result = load_pretrained_mlm_weights(model, cfg, transfer_mode="embed_only")
         assert result is False
 
@@ -355,10 +355,10 @@ class TestLoadPretrainedMLMWeights:
         model = MagicMock()
         model.embedding = nn.Embedding(100, 64)
         model.load_pretrained_weights = MagicMock()
-        cfg = {"kmer": 6}
+        cfg = {}
 
         mock_path = Path("/fake/checkpoint.pt")
-        with patch("train_final_model.get_mlm_checkpoint_for_kmer", return_value=mock_path):
+        with patch("train_final_model.get_mlm_checkpoint", return_value=mock_path):
             load_pretrained_mlm_weights(model, cfg, transfer_mode="embed_only")
 
         model.load_pretrained_weights.assert_called_once_with(
@@ -372,10 +372,10 @@ class TestLoadPretrainedMLMWeights:
         model = MagicMock()
         model.embedding = nn.Embedding(100, 64)
         model.load_pretrained_weights = MagicMock()
-        cfg = {"kmer": 6}
+        cfg = {}
 
         mock_path = Path("/fake/checkpoint.pt")
-        with patch("train_final_model.get_mlm_checkpoint_for_kmer", return_value=mock_path):
+        with patch("train_final_model.get_mlm_checkpoint", return_value=mock_path):
             load_pretrained_mlm_weights(model, cfg, transfer_mode="embed_plus_adapter")
 
         model.load_pretrained_weights.assert_called_once_with(

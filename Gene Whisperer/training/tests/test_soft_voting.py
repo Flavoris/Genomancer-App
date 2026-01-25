@@ -52,31 +52,27 @@ def test_soft_voting_vs_logit_average():
 
 def test_soft_voting_ensemble_class():
     """Test the updated MultiScaleEnsemble class uses soft voting."""
-    from model import GeneWhispererStage1Legacy, MultiScaleEnsemble
+    from model import GeneWhispererStage1, MultiScaleEnsemble
 
-    # Create mock models (minimal config)
+    # Create two models with same vocab_size (BPE-based single tokenizer)
     models = []
-    for k in [3, 4]:
-        model = GeneWhispererStage1Legacy(
-            vocab_size=4**k + 3,
-            kmer=k,
+    for _ in range(2):
+        model = GeneWhispererStage1(
+            vocab_size=100,
             embedding_dim=64,
             num_layers=1,
             num_heads=2,
             ff_dim=128,
             engineered_dim=128,
-            use_tcn=False,
-            post_cnn_transformer_layers=1,
+            use_engineered_features=True,
+            max_seq_len=24,
         )
         models.append(model)
 
     ensemble = MultiScaleEnsemble(models)
 
-    # Create mock batch
-    batch = {
-        3: (torch.randint(0, 64, (4, 79)), torch.randn(4, 128)),
-        4: (torch.randint(0, 256, (4, 78)), torch.randn(4, 128)),
-    }
+    # Create mock batch as tuple (tokens, engineered_features)
+    batch = (torch.randint(0, 100, (4, 24)), torch.randn(4, 128))
 
     # Forward pass
     output = ensemble(batch)
@@ -89,50 +85,47 @@ def test_soft_voting_ensemble_class():
     print(f"Ensemble output range: [{output.min().item():.4f}, {output.max().item():.4f}]")
     print("\nTEST PASSED: MultiScaleEnsemble outputs valid probabilities")
 
-    return True
-
 
 def test_soft_voting_with_return_logits():
     """Test that return_logits option works for training."""
-    from model import GeneWhispererStage1Legacy, MultiScaleEnsemble
+    from model import GeneWhispererStage1, MultiScaleEnsemble
 
     models = []
-    for k in [3, 4]:
-        model = GeneWhispererStage1Legacy(
-            vocab_size=4**k + 3,
-            kmer=k,
+    for _ in range(2):
+        model = GeneWhispererStage1(
+            vocab_size=100,
             embedding_dim=64,
             num_layers=1,
             num_heads=2,
             ff_dim=128,
             engineered_dim=128,
-            use_tcn=False,
-            post_cnn_transformer_layers=1,
+            use_engineered_features=True,
+            max_seq_len=24,
         )
         models.append(model)
 
     ensemble = MultiScaleEnsemble(models)
+    ensemble.eval()
 
-    batch = {
-        3: (torch.randint(0, 64, (4, 79)), torch.randn(4, 128)),
-        4: (torch.randint(0, 256, (4, 78)), torch.randn(4, 128)),
-    }
+    batch = (torch.randint(0, 100, (4, 24)), torch.randn(4, 128))
 
-    # Check if return_logits is supported
-    if hasattr(ensemble, "forward_with_logits"):
-        prob, logits = ensemble.forward_with_logits(batch)
+    # Test return_logits parameter
+    with torch.no_grad():
+        logits = ensemble(batch, return_logits=True)
+        probs = ensemble(batch, return_logits=False)
 
-        # Verify logits can be converted back to same probs
-        reconstructed_prob = torch.sigmoid(logits)
-        diff = (prob - reconstructed_prob).abs().max().item()
+    # Verify logits can be converted back to same probs
+    # Note: logits = torch.logit(probs), so sigmoid(logits) should match probs
+    reconstructed_prob = torch.sigmoid(logits)
+    diff = (probs - reconstructed_prob).abs().max().item()
 
-        assert diff < 1e-5, f"Logit reconstruction error: {diff}"
-        print(f"Logit reconstruction error: {diff:.8f}")
-        print("\nTEST PASSED: return_logits works correctly")
-    else:
-        print("WARNING: forward_with_logits not implemented (optional)")
+    # Due to float precision in logit/sigmoid roundtrip, tolerance is relaxed
+    assert diff < 1e-3, f"Logit reconstruction error: {diff}"
 
-    return True
+    # Verify logits are finite and in expected range
+    assert torch.isfinite(logits).all(), "Logits contain non-finite values"
+    print(f"Logit reconstruction error: {diff:.8f}")
+    print("\nTEST PASSED: return_logits works correctly")
 
 
 if __name__ == "__main__":

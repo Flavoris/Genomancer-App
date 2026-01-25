@@ -42,7 +42,8 @@ def test_combined_feature_dimensions():
 
 def test_dataset_returns_correct_features():
     """Test that dataset __getitem__ returns correct feature dimension."""
-    from dataset import KmerVocabulary, PromoterDatasetStage1
+    from bpe_tokenizer import DNABPETokenizer
+    from dataset import PromoterDatasetStage1
     import os
     import pandas as pd
     import tempfile
@@ -64,14 +65,14 @@ def test_dataset_returns_correct_features():
     try:
         df = pd.read_csv(temp_path, delimiter="\t", header=None, names=["sequence", "is_promoter"])
         sequences = df["sequence"].tolist()
-        vocab = KmerVocabulary.build_from_sequences(sequences, k=3)
+        vocab = DNABPETokenizer(vocab_size=30)
+        vocab.train(sequences)
 
-        # Create dataset
-        # Note: This tests the OLD dataset. After prompt 3, it should return 288 dims
+        # Create dataset with BPE tokenizer
         dataset = PromoterDatasetStage1(
             df,
             vocab=vocab,
-            max_bp_len=81,
+            max_token_len=24,
             reverse_complement_prob=0.0,
         )
 

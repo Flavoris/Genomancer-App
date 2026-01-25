@@ -41,7 +41,7 @@ from amp_utils import get_amp_context, create_grad_scaler
 from dataset import build_dataloaders
 from early_stopping import EarlyStopping
 from seed_utils import set_global_seed
-from train_stage1 import run_epoch, load_config, get_mlm_checkpoint_for_kmer
+from train_stage1 import run_epoch, load_config, get_mlm_checkpoint
 
 LOGGER = logging.getLogger("gene_whisperer.hyperparameter_tuning")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -179,27 +179,24 @@ def _create_tunable_transformer_model(
     from model import DNAEncoder, AttentionPooling
 
     # Common encoder parameters
-    kmer = int(cfg.get("kmer", 6))
-    max_bp_len = int(cfg.get("max_bp_len", 81))
-    max_seq_len = max_bp_len - kmer + 1
-    vocab_size = int(cfg.get("vocab_size", 4099))
+    max_token_len = int(cfg.get("max_token_len", 24))
+    vocab_size = int(cfg.get("vocab_size", 4096))
     embedding_dim = int(cfg.get("embedding_dim", 384))
     num_layers = int(cfg.get("transformer_layers", 12))
     num_heads = int(cfg.get("transformer_heads", 12))
     ff_dim = int(cfg.get("transformer_ff_dim", 1536))
-    pad_token_id = int(cfg.get("pad_token_id", 4098))
+    pad_token_id = int(cfg.get("pad_token_id", 0))
 
     # Create encoder
     encoder = DNAEncoder(
         vocab_size=vocab_size,
-        kmer=kmer,
         embedding_dim=embedding_dim,
         num_layers=num_layers,
         num_heads=num_heads,
         ff_dim=ff_dim,
         dropout=dropout,
         pad_token_id=pad_token_id,
-        max_seq_len=max_seq_len,
+        max_seq_len=max_token_len,
         drop_path_rate=float(cfg.get("drop_path_rate", 0.1)),
         use_relative_position_bias=bool(cfg.get("use_relative_position_bias", True)),
         use_glu_ffn=bool(cfg.get("use_glu_ffn", True)),
@@ -463,17 +460,16 @@ def train_with_config(
 
     # Load pretrained MLM weights if enabled
     if load_mlm_weights and hasattr(model, "load_pretrained_weights"):
-        kmer = int(cfg.get("kmer", 6))
-        checkpoint_path = get_mlm_checkpoint_for_kmer(cfg, kmer)
+        checkpoint_path = get_mlm_checkpoint(cfg)
         if checkpoint_path is not None:
-            LOGGER.info("Loading MLM weights for k=%d from %s", kmer, checkpoint_path)
+            LOGGER.info("Loading BPE MLM weights from %s", checkpoint_path)
             model.load_pretrained_weights(
                 checkpoint_path=checkpoint_path,
                 strict=False,
                 transfer_mode="embed_only",
             )
         else:
-            LOGGER.warning("No MLM checkpoint found for k=%d", kmer)
+            LOGGER.warning("No MLM checkpoint found")
 
     # Optimizer with tuned parameters
     optimizer = torch.optim.AdamW(

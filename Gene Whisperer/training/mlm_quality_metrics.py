@@ -91,7 +91,6 @@ def build_mlm_model(
     """
     encoder = DNAEncoder(
         vocab_size=len(vocab.itos),
-        kmer=vocab.k,
         embedding_dim=encoder_cfg.embedding_dim,
         num_layers=encoder_cfg.num_layers,
         num_heads=encoder_cfg.num_heads,

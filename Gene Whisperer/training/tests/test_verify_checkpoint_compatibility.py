@@ -14,14 +14,15 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(TRAINING_DIR) not in sys.path:
     sys.path.insert(0, str(TRAINING_DIR))
 
-from dataset import KmerVocabulary
+from bpe_tokenizer import DNABPETokenizer
 from ensemble_infer import build_model, verify_checkpoint_compatibility
 
 
 def test_verify_checkpoint_compatibility(tmp_path: Path) -> None:
-    vocab = KmerVocabulary.build_from_sequences(["ACGTACGT"], k=3)
-    vocab_path = tmp_path / "k3_vocab.json"
-    vocab.save(vocab_path)
+    vocab = DNABPETokenizer(vocab_size=20)
+    vocab.train(["ACGTACGTAC", "GGGGCCCCAA", "ATATATAT"])
+    vocab_path = tmp_path / "bpe_vocab.json"
+    vocab.save(str(vocab_path))
 
     cfg = {
         "embedding_dim": 16,
@@ -31,8 +32,8 @@ def test_verify_checkpoint_compatibility(tmp_path: Path) -> None:
         "transformer_dropout": 0.05,
         "engineered_dim": 0,
         "stage1_use_engineered_features": False,
-        "max_bp_len": 12,
-        "vocab_cache_dir": str(tmp_path),
+        "max_token_len": 12,
+        "bpe_vocab_path": str(vocab_path),
         "simplified_model": {
             "pooling_type": "attention",
             "classifier_hidden": 16,
@@ -44,7 +45,7 @@ def test_verify_checkpoint_compatibility(tmp_path: Path) -> None:
         yaml.safe_dump(cfg, handle)
 
     model = build_model(cfg, vocab, torch.device("cpu"))
-    checkpoint_path = tmp_path / "stage1_k3.pt"
+    checkpoint_path = tmp_path / "stage1.pt"
     torch.save({"model_state": model.state_dict()}, checkpoint_path)
 
     assert verify_checkpoint_compatibility(

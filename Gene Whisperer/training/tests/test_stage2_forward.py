@@ -34,7 +34,7 @@ from model import (
 def test_strength_transformer_head():
     """Test StrengthTransformerHead forward pass."""
     batch_size = 4
-    seq_len = 79
+    seq_len = 24
     input_dim = 256
 
     head = StrengthTransformerHead(
@@ -63,7 +63,7 @@ def test_strength_transformer_head():
 def test_strength_bilstm_head():
     """Test StrengthBiLSTMHead forward pass."""
     batch_size = 4
-    seq_len = 79
+    seq_len = 24
     input_dim = 256
     hidden_dim = 128
 
@@ -93,7 +93,7 @@ def test_strength_bilstm_head():
 def test_combined_strength_head_concat():
     """Test CombinedStrengthHead with concatenation mode."""
     batch_size = 4
-    seq_len = 79
+    seq_len = 24
     input_dim = 256
     bilstm_hidden = 128
 
@@ -127,7 +127,7 @@ def test_combined_strength_head_concat():
 def test_combined_strength_head_avg():
     """Test CombinedStrengthHead with averaging mode."""
     batch_size = 4
-    seq_len = 79
+    seq_len = 24
     input_dim = 256
 
     head = CombinedStrengthHead(
@@ -159,13 +159,12 @@ def test_combined_strength_head_avg():
 def test_stage2_transformer_head():
     """Test GeneWhispererStage2 with transformer head."""
     batch_size = 4
-    seq_len = 79  # (81bp - kmer + 1) for k=3
+    seq_len = 24  # BPE max_token_len
     vocab_size = 67
     engineered_dim = 128
 
     model = GeneWhispererStage2(
         vocab_size=vocab_size,
-        kmer=3,
         embedding_dim=192,
         num_layers=4,
         num_heads=4,
@@ -204,13 +203,12 @@ def test_stage2_transformer_head():
 def test_stage2_bilstm_head():
     """Test GeneWhispererStage2 with BiLSTM head."""
     batch_size = 4
-    seq_len = 79
+    seq_len = 24
     vocab_size = 67
     engineered_dim = 128
 
     model = GeneWhispererStage2(
         vocab_size=vocab_size,
-        kmer=3,
         embedding_dim=192,
         num_layers=4,
         num_heads=4,
@@ -249,13 +247,12 @@ def test_stage2_bilstm_head():
 def test_stage2_both_heads():
     """Test GeneWhispererStage2 with both transformer and BiLSTM heads."""
     batch_size = 4
-    seq_len = 79
+    seq_len = 24
     vocab_size = 67
     engineered_dim = 128
 
     model = GeneWhispererStage2(
         vocab_size=vocab_size,
-        kmer=3,
         embedding_dim=192,
         num_layers=4,
         num_heads=4,
@@ -297,12 +294,11 @@ def test_stage2_both_heads():
 def test_stage2_without_engineered_features():
     """Test GeneWhispererStage2 without engineered features."""
     batch_size = 4
-    seq_len = 79
+    seq_len = 24
     vocab_size = 67
 
     model = GeneWhispererStage2(
         vocab_size=vocab_size,
-        kmer=3,
         embedding_dim=192,
         num_layers=4,
         num_heads=4,
@@ -334,13 +330,12 @@ def test_stage2_without_engineered_features():
 def test_stage2_gradient_flow():
     """Test that gradients flow correctly through Stage 2 model."""
     batch_size = 4
-    seq_len = 79
+    seq_len = 24
     vocab_size = 67
     engineered_dim = 128
 
     model = GeneWhispererStage2(
         vocab_size=vocab_size,
-        kmer=3,
         embedding_dim=192,
         num_layers=4,
         num_heads=4,

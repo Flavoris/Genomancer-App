@@ -30,9 +30,9 @@ class TestTrainSequential:
         from train_sequential import load_config
 
         config_data = {
-            "kmer": 6,
-            "multi_scale_kmers": [3, 4, 5, 6],
-            "max_bp_len": 81,
+            "vocab_size": 4096,
+            "max_token_len": 24,
+            "embedding_dim": 384,
         }
         config_path = tmp_path / "test_config.yaml"
         import yaml
@@ -40,8 +40,8 @@ class TestTrainSequential:
             yaml.dump(config_data, f)
 
         cfg = load_config(config_path)
-        assert cfg["kmer"] == 6
-        assert cfg["multi_scale_kmers"] == [3, 4, 5, 6]
+        assert cfg["vocab_size"] == 4096
+        assert cfg["max_token_len"] == 24
 
     def test_sequential_train_function_signature(self):
         """Test that sequential_train has the expected signature."""

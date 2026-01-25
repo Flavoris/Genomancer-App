@@ -185,7 +185,6 @@ class DNAEncoder(nn.Module):
     def __init__(
         self,
         vocab_size: int,
-        kmer: int,
         embedding_dim: int = 192,
         num_layers: int = 6,
         num_heads: int = 8,
@@ -211,7 +210,6 @@ class DNAEncoder(nn.Module):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.vocab_size = vocab_size
-        self.k = kmer
         self.pad_token_id = pad_token_id
         self.num_heads = num_heads
         self.use_relative_position_bias = use_relative_position_bias
@@ -995,14 +993,13 @@ class GeneWhispererStage1(nn.Module):
 
     def __init__(
         self,
-        vocab_size: int = 67,
-        kmer: int = 3,
+        vocab_size: int = 4096,
         embedding_dim: int = 192,
         num_layers: int = 12,
         num_heads: int = 8,
         ff_dim: int = 384,
         dropout: float = 0.15,
-        pad_token_id: Optional[int] = None,
+        pad_token_id: Optional[int] = 0,
         encoder: Optional[DNAEncoder] = None,
         engineered_dim: int = 288,
         use_engineered_features: bool = True,
@@ -1016,25 +1013,18 @@ class GeneWhispererStage1(nn.Module):
         engineered_mlp_use_residual: bool = True,
         classifier_hidden: Optional[int] = None,
         classifier_dropout: Optional[float] = None,
-        # Stochastic depth (drop path) rate for encoder
         drop_path_rate: float = 0.1,
-        # Maximum sequence length for positional embeddings
-        max_seq_len: int = 256,
-        # Relative position bias parameters
+        max_seq_len: int = 24,
         use_relative_position_bias: bool = False,
         relative_position_num_buckets: int = 32,
         relative_position_max_distance: int = 128,
-        # GLU FFN parameters
         use_glu_ffn: bool = False,
         glu_activation: str = "gelu",
-        # RoPE parameters
         use_rope: bool = False,
         rope_base: float = 10000.0,
-        # SwiGLU and RMSNorm parameters
         ffn_type: str = None,
         norm_type: str = "layernorm",
         ffn_mult: float = None,
-        # Positional motif bias parameters
         use_positional_motif_bias: bool = False,
         motif_regions: Optional[dict] = None,
     ):
@@ -1056,7 +1046,6 @@ class GeneWhispererStage1(nn.Module):
 
         self._full_encoder = encoder or DNAEncoder(
             vocab_size=vocab_size,
-            kmer=kmer,
             embedding_dim=embedding_dim,
             num_layers=num_layers,
             num_heads=num_heads,
@@ -1353,15 +1342,14 @@ class GeneWhispererTransformerOnly(nn.Module):
 
     def __init__(
         self,
-        vocab_size: int = 4099,
-        kmer: int = 6,
+        vocab_size: int = 4096,
         embedding_dim: int = 384,
         num_layers: int = 12,
         num_heads: int = 12,
         ff_dim: int = 1536,
         dropout: float = 0.12,
-        pad_token_id: Optional[int] = 4098,
-        max_seq_len: int = 256,
+        pad_token_id: Optional[int] = 0,
+        max_seq_len: int = 24,
         encoder: Optional[DNAEncoder] = None,
         classifier_hidden: Optional[int] = None,
         classifier_dropout: Optional[float] = None,
@@ -1384,7 +1372,6 @@ class GeneWhispererTransformerOnly(nn.Module):
 
         self._full_encoder = encoder or DNAEncoder(
             vocab_size=vocab_size,
-            kmer=kmer,
             embedding_dim=embedding_dim,
             num_layers=num_layers,
             num_heads=num_heads,
@@ -1549,15 +1536,14 @@ class GeneWhispererCombined(nn.Module):
 
     def __init__(
         self,
-        vocab_size: int = 4099,
-        kmer: int = 6,
+        vocab_size: int = 4096,
         embedding_dim: int = 384,
         num_layers: int = 12,
         num_heads: int = 12,
         ff_dim: int = 1536,
         dropout: float = 0.12,
-        pad_token_id: Optional[int] = 4098,
-        max_seq_len: int = 256,
+        pad_token_id: Optional[int] = 0,
+        max_seq_len: int = 24,
         encoder: Optional[DNAEncoder] = None,
         engineered_dim: int = 288,
         engineered_mlp_hidden: int = 512,
@@ -1584,7 +1570,6 @@ class GeneWhispererCombined(nn.Module):
 
         self._full_encoder = encoder or DNAEncoder(
             vocab_size=vocab_size,
-            kmer=kmer,
             embedding_dim=embedding_dim,
             num_layers=num_layers,
             num_heads=num_heads,
@@ -1719,22 +1704,14 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
     if normalized == "v6":
         return create_v6_model(config)
 
-    vocab_size = int(config.get("vocab_size", 67))
-    kmer = int(config.get("kmer", 3))
+    vocab_size = int(config.get("vocab_size", 4096))
     embedding_dim = int(config.get("embedding_dim", 192))
     num_layers = int(config.get("transformer_layers", 12))
     num_heads = int(config.get("transformer_heads", 8))
     ff_dim = int(config.get("transformer_ff_dim", embedding_dim * 4))
     dropout = float(config.get("transformer_dropout", 0.1))
-    pad_token_id = config.get("pad_token_id")
-    if pad_token_id is not None:
-        pad_token_id = int(pad_token_id)
-    max_seq_len = int(
-        config.get(
-            "max_seq_len",
-            int(config.get("max_bp_len", 81)) - kmer + 1,
-        )
-    )
+    pad_token_id = int(config.get("pad_token_id", 0))
+    max_seq_len = int(config.get("max_seq_len", config.get("max_token_len", 24)))
     engineered_dim = int(config.get("engineered_dim", 288))
     engineered_mlp_hidden = int(config.get("engineered_mlp_hidden", 256))
     engineered_mlp_output = int(config.get("engineered_mlp_output", 128))
@@ -1764,7 +1741,6 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
     if normalized == "transformer_only":
         return GeneWhispererTransformerOnly(
             vocab_size=vocab_size,
-            kmer=kmer,
             embedding_dim=embedding_dim,
             num_layers=num_layers,
             num_heads=num_heads,
@@ -1797,7 +1773,6 @@ def create_model_variant(variant: str, config: dict) -> nn.Module:
         )
     return GeneWhispererCombined(
         vocab_size=vocab_size,
-        kmer=kmer,
         embedding_dim=embedding_dim,
         num_layers=num_layers,
         num_heads=num_heads,
@@ -2030,28 +2005,25 @@ class GeneWhispererStage2(nn.Module):
 
     def __init__(
         self,
-        vocab_size: int = 67,
-        kmer: int = 3,
+        vocab_size: int = 4096,
         embedding_dim: int = 192,
         num_layers: int = 6,
         num_heads: int = 8,
         ff_dim: int = 384,
         dropout: float = 0.15,
-        pad_token_id: Optional[int] = None,
+        pad_token_id: Optional[int] = 0,
         encoder: Optional[DNAEncoder] = None,
         engineered_dim: int = 288,
         use_engineered_features: bool = True,
-        max_seq_len: int = 256,
-        # Stage 2 head configuration
-        stage2_head_type: str = "transformer",  # "transformer", "bilstm", or "both"
+        max_seq_len: int = 24,
+        stage2_head_type: str = "transformer",
         stage2_transformer_layers: int = 2,
         stage2_transformer_heads: int = 4,
         stage2_transformer_ff_dim: Optional[int] = None,
         stage2_bilstm_hidden: int = 128,
         stage2_bilstm_layers: int = 1,
-        stage2_combine_mode: str = "concat",  # For "both": "concat" or "avg"
+        stage2_combine_mode: str = "concat",
         stage2_combine_order: str = "transformer_first",
-        # Engineered features MLP parameters
         engineered_mlp_hidden: int = 512,
         engineered_mlp_output: int = 256,
         engineered_mlp_pre_norm: bool = True,
@@ -2059,23 +2031,17 @@ class GeneWhispererStage2(nn.Module):
         engineered_mlp_use_gated: bool = True,
         engineered_mlp_use_residual: bool = True,
         fusion_hidden: int = 384,
-        # Stochastic depth (drop path) rate for encoder
         drop_path_rate: float = 0.1,
-        # Relative position bias parameters
         use_relative_position_bias: bool = False,
         relative_position_num_buckets: int = 32,
         relative_position_max_distance: int = 128,
-        # GLU FFN parameters
         use_glu_ffn: bool = False,
         glu_activation: str = "gelu",
-        # RoPE parameters
         use_rope: bool = False,
         rope_base: float = 10000.0,
-        # SwiGLU and RMSNorm parameters
         ffn_type: str = None,
         norm_type: str = "layernorm",
         ffn_mult: float = None,
-        # Positional motif bias parameters
         use_positional_motif_bias: bool = False,
         motif_regions: Optional[dict] = None,
     ):
@@ -2084,10 +2050,8 @@ class GeneWhispererStage2(nn.Module):
         self.pad_token_id = pad_token_id
         self.stage2_head_type = stage2_head_type
 
-        # Store the full encoder for MLM weight loading compatibility
         self._full_encoder = encoder or DNAEncoder(
             vocab_size=vocab_size,
-            kmer=kmer,
             embedding_dim=embedding_dim,
             num_layers=num_layers,
             num_heads=num_heads,
@@ -2399,13 +2363,7 @@ class MultiScaleEnsemble(nn.Module):
         """
         outputs = []
         for model in self.models:
-            encoder = getattr(model, "encoder", None)
-            kmer = getattr(encoder, "k", None)
-            if kmer is None:
-                raise ValueError("Model missing encoder k-mer metadata")
-            if kmer not in batch:
-                raise KeyError(f"No batch entry for k-mer {kmer}")
-            tokens, engineered = batch[kmer]
+            tokens, engineered = batch
             outputs.append(model(tokens, engineered))
 
         stacked = torch.stack(outputs, dim=0)

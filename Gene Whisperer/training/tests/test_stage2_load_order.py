@@ -47,7 +47,6 @@ def test_stage1_ckpt_skips_mlm_loading():
     # Create Stage 1 model with distinctive weights
     stage1_model = GeneWhispererStage1(
         vocab_size=vocab_size,
-        kmer=3,
         embedding_dim=embedding_dim,
         num_layers=4,
         num_heads=4,
@@ -63,7 +62,6 @@ def test_stage1_ckpt_skips_mlm_loading():
     # Create Stage 2 model (fresh init)
     stage2_model = GeneWhispererStage2(
         vocab_size=vocab_size,
-        kmer=3,
         embedding_dim=embedding_dim,
         num_layers=4,
         num_heads=4,
@@ -133,7 +131,6 @@ def test_stage1_overwrites_initial_weights():
     # Create Stage 1 model with known weights
     stage1_model = GeneWhispererStage1(
         vocab_size=vocab_size,
-        kmer=3,
         embedding_dim=embedding_dim,
         num_layers=4,
         num_heads=4,
@@ -148,7 +145,6 @@ def test_stage1_overwrites_initial_weights():
     # Create Stage 2 model
     stage2_model = GeneWhispererStage2(
         vocab_size=vocab_size,
-        kmer=3,
         embedding_dim=embedding_dim,
         num_layers=4,
         num_heads=4,

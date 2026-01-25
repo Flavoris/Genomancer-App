@@ -11,27 +11,28 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
 
-from dataset import KmerVocabulary, reverse_complement
+from bpe_tokenizer import DNABPETokenizer
+from dataset import reverse_complement
 
 LOGGER = logging.getLogger("gene_whisperer.tta")
 
 
 def get_reverse_complement_tokens(
     tokens: torch.Tensor,
-    vocab: KmerVocabulary,
-    max_bp_len: int,
+    vocab: DNABPETokenizer,
+    max_token_len: int,
 ) -> torch.Tensor:
     """Get reverse complement of tokenized DNA sequence.
 
-    For k-mer tokens, we need to:
-    1. Decode tokens back to DNA sequence
+    Steps:
+    1. Decode BPE tokens back to DNA sequence
     2. Compute reverse complement of the sequence
-    3. Re-tokenize the reverse complement
+    3. Re-tokenize the reverse complement with BPE
 
     Args:
         tokens: Tokenized sequences of shape (batch_size, seq_len)
-        vocab: KmerVocabulary instance for encoding/decoding
-        max_bp_len: Maximum base pair length for tokenization
+        vocab: DNABPETokenizer instance for encoding/decoding
+        max_token_len: Maximum token length for padded output
 
     Returns:
         Reverse complement tokens with same shape as input
@@ -46,8 +47,8 @@ def get_reverse_complement_tokens(
         # Compute reverse complement
         rc_seq = reverse_complement(seq)
 
-        # Re-tokenize
-        rc_tokens = vocab.tokenize(rc_seq, max_bp_len)
+        # Re-tokenize with BPE
+        rc_tokens = vocab.tokenize_and_pad(rc_seq, max_token_len)
         batch_rc_tokens.append(rc_tokens)
 
     return torch.stack(batch_rc_tokens, dim=0).to(tokens.device)
@@ -57,8 +58,8 @@ def predict_with_tta(
     model: torch.nn.Module,
     tokens: torch.Tensor,
     engineered_features: torch.Tensor,
-    vocab: KmerVocabulary,
-    max_bp_len: int,
+    vocab: DNABPETokenizer,
+    max_token_len: int,
     compute_features_fn: Optional[Callable[[str], torch.Tensor]] = None,
     aggregation: str = "mean",
 ) -> torch.Tensor:
@@ -72,8 +73,8 @@ def predict_with_tta(
         model: The classification model (in eval mode)
         tokens: Input tokens of shape (batch_size, seq_len)
         engineered_features: Engineered features of shape (batch_size, feature_dim)
-        vocab: KmerVocabulary for decoding/encoding sequences
-        max_bp_len: Maximum base pair length for tokenization
+        vocab: DNABPETokenizer for decoding/encoding sequences
+        max_token_len: Maximum base pair length for tokenization
         compute_features_fn: Optional function to recompute engineered features
             for reverse complement. If None, uses same features (valid since
             most features like GC content are symmetric).
@@ -91,7 +92,7 @@ def predict_with_tta(
         prob_fwd = torch.sigmoid(logits_fwd)
 
         # Get reverse complement tokens
-        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens(tokens, vocab, max_token_len)
         rc_tokens = rc_tokens.to(device)
 
         # Compute features for reverse complement if function provided
@@ -126,8 +127,8 @@ def predict_batch_with_tta(
     model: torch.nn.Module,
     tokens_batch: torch.Tensor,
     features_batch: torch.Tensor,
-    vocab: KmerVocabulary,
-    max_bp_len: int,
+    vocab: DNABPETokenizer,
+    max_token_len: int,
     compute_features_fn: Optional[Callable[[str], torch.Tensor]] = None,
     aggregation: str = "mean",
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -137,8 +138,8 @@ def predict_batch_with_tta(
         model: The classification model
         tokens_batch: Batch of tokens (batch_size, seq_len)
         features_batch: Batch of engineered features (batch_size, feature_dim)
-        vocab: KmerVocabulary for sequence operations
-        max_bp_len: Maximum base pair length
+        vocab: DNABPETokenizer for sequence operations
+        max_token_len: Maximum base pair length
         compute_features_fn: Optional function to compute features for RC
         aggregation: Aggregation method ("mean" or "geometric_mean")
 
@@ -154,7 +155,7 @@ def predict_batch_with_tta(
         prob_fwd = torch.sigmoid(logits_fwd)
 
         # Reverse complement tokens
-        rc_tokens = get_reverse_complement_tokens(tokens_batch, vocab, max_bp_len)
+        rc_tokens = get_reverse_complement_tokens(tokens_batch, vocab, max_token_len)
         rc_tokens = rc_tokens.to(device)
 
         # Features for reverse complement
@@ -190,8 +191,8 @@ class TTAWrapper:
     def __init__(
         self,
         model: torch.nn.Module,
-        vocab: KmerVocabulary,
-        max_bp_len: int,
+        vocab: DNABPETokenizer,
+        max_token_len: int,
         compute_features_fn: Optional[Callable[[str], torch.Tensor]] = None,
         aggregation: str = "mean",
         enabled: bool = True,
@@ -200,15 +201,15 @@ class TTAWrapper:
 
         Args:
             model: The base classification model
-            vocab: KmerVocabulary for token operations
-            max_bp_len: Maximum base pair length
+            vocab: DNABPETokenizer for token operations
+            max_token_len: Maximum base pair length
             compute_features_fn: Optional feature computation function
             aggregation: "mean" or "geometric_mean"
             enabled: Whether TTA is enabled (if False, just runs forward pass)
         """
         self.model = model
         self.vocab = vocab
-        self.max_bp_len = max_bp_len
+        self.max_token_len = max_token_len
         self.compute_features_fn = compute_features_fn
         self.aggregation = aggregation
         self.enabled = enabled
@@ -238,7 +239,7 @@ class TTAWrapper:
             tokens=tokens,
             engineered_features=engineered_features,
             vocab=self.vocab,
-            max_bp_len=self.max_bp_len,
+            max_token_len=self.max_token_len,
             compute_features_fn=self.compute_features_fn,
             aggregation=self.aggregation,
         )
@@ -274,7 +275,7 @@ class TTAWrapper:
             tokens_batch=tokens,
             features_batch=engineered_features,
             vocab=self.vocab,
-            max_bp_len=self.max_bp_len,
+            max_token_len=self.max_token_len,
             compute_features_fn=self.compute_features_fn,
             aggregation=self.aggregation,
         )
