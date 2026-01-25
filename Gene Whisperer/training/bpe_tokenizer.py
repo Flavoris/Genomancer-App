@@ -120,8 +120,74 @@ class DNABPETokenizer:
     def tokenize(self, sequence: str) -> List[int]:
         """Tokenize a DNA sequence using learned BPE vocabulary.
 
-        Uses greedy longest-match strategy: applies merges in the order
-        they were learned during training (priority-based).
+        Uses optimized greedy longest-match strategy that scans the sequence
+        once, matching the longest possible token at each position.
+        This is O(sequence_length * max_token_length) instead of
+        O(sequence_length * num_merges).
+
+        Args:
+            sequence: DNA sequence string (A/T/C/G characters).
+
+        Returns:
+            List of token IDs.
+        """
+        sequence = self._sanitize(sequence)
+        if not sequence:
+            return []
+
+        # Use fast greedy longest-match tokenization
+        return self._tokenize_greedy(sequence)
+
+    def _tokenize_greedy(self, sequence: str) -> List[int]:
+        """Fast greedy longest-match tokenization.
+
+        Scans the sequence left-to-right, always matching the longest
+        token in the vocabulary at each position. This avoids the
+        O(num_merges) loop per sequence.
+
+        Args:
+            sequence: Sanitized DNA sequence string.
+
+        Returns:
+            List of token IDs.
+        """
+        tokens = []
+        i = 0
+        seq_len = len(sequence)
+
+        # Find max token length in vocabulary for search bound
+        if not hasattr(self, "_max_token_len"):
+            self._max_token_len = max(
+                (len(t) for t in self.vocab if t not in SPECIAL_TOKENS),
+                default=1
+            )
+
+        max_len = self._max_token_len
+
+        while i < seq_len:
+            # Try to match the longest token starting at position i
+            matched = False
+            for length in range(min(max_len, seq_len - i), 0, -1):
+                substring = sequence[i:i + length]
+                if substring in self.vocab:
+                    tokens.append(self.vocab[substring])
+                    i += length
+                    matched = True
+                    break
+
+            if not matched:
+                # Fallback to UNK for single character (shouldn't happen for ACGT)
+                tokens.append(self.unk_id)
+                i += 1
+
+        return tokens
+
+    def tokenize_slow(self, sequence: str) -> List[int]:
+        """Original slow tokenization method (for reference/testing).
+
+        Applies merges in the order they were learned during training.
+        This is O(sequence_length * num_merges) and should only be used
+        for verification purposes.
 
         Args:
             sequence: DNA sequence string (A/T/C/G characters).
@@ -235,6 +301,13 @@ class DNABPETokenizer:
         tokenizer.vocab = state["vocab"]
         tokenizer.merges = [tuple(m) for m in state["merges"]]
         tokenizer.id_to_token = {v: k for k, v in tokenizer.vocab.items()}
+
+        # Pre-compute max token length for fast tokenization
+        tokenizer._max_token_len = max(
+            (len(t) for t in tokenizer.vocab if t not in SPECIAL_TOKENS),
+            default=1
+        )
+
         return tokenizer
 
     def _initialize_vocab(self) -> None:

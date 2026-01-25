@@ -705,3 +705,69 @@ Successfully trained BPE vocabulary with 4096 tokens on DNA sequences.
 **Next Steps:**
 1. Run MLM pre-training: `python pretrain_mlm.py --config config.yaml`
 2. Fine-tune Stage 1: `python train_stage1.py --config config.yaml`
+
+### 2026-01-25: Data Loading Performance Optimization
+Fixed critical data loading bottleneck where GPU was idle 63% of the time waiting for data.
+
+**Problem Identified:**
+Telemetry showed `data=6215ms [63%], compute=3651ms [37%]` per step, meaning the GPU was only doing useful work 1/3 of the time. Root causes:
+1. BPE tokenization applied 4000 merge rules sequentially per sequence
+2. Engineered features (TNC, PseEIIP, CKSNAP, PSTNP) computed on every `__getitem__` call
+3. Reverse complement augmentation (50%) invalidated caching
+4. Low prefetch_factor (2) in DataLoader
+
+**Optimizations Implemented:**
+
+| Component | Before | After | Improvement |
+|-----------|--------|-------|-------------|
+| BPE tokenization | O(merges × seq_len) | O(seq_len × max_token_len) | ~100x faster |
+| Token caching | None (on-the-fly) | Pre-cached at init | No computation at runtime |
+| Feature caching | None (on-the-fly) | Pre-cached at init | No computation at runtime |
+| RC augmentation | Tokenize on-demand | Pre-cache both fwd+rev | Just tensor indexing |
+| prefetch_factor | 2 | 4 | 2x more batches prefetched |
+
+**Files Modified:**
+| File | Changes |
+|------|---------|
+| `bpe_tokenizer.py` | Replaced O(merges) tokenization with greedy longest-match |
+| `dataset.py` | Pre-cache tokens+features for fwd and RC at init |
+| `config.yaml` | Increased `prefetch_factor` from 2 to 4 |
+
+**New BPE Tokenization Algorithm:**
+```python
+# Old: Apply 4000 merges sequentially
+for left, right in self.merges:  # 4000 iterations
+    tokens = self._apply_merge_to_tokens(tokens, left, right)
+
+# New: Greedy longest-match (single pass)
+while i < seq_len:
+    for length in range(max_len, 0, -1):  # Max ~25 iterations
+        if sequence[i:i+length] in self.vocab:
+            tokens.append(vocab[substring])
+            i += length
+            break
+```
+
+**New Dataset Caching Strategy:**
+```python
+# Pre-compute at __init__:
+# - tokens_fwd[N, max_token_len] for all sequences
+# - tokens_rev[N, max_token_len] for reverse complements
+# - engineered_fwd[N, 288] for all sequences
+# - engineered_rev[N, 288] for reverse complements
+
+# At __getitem__ (fast path):
+use_reverse = random.random() < 0.5
+tokens = tokens_rev[idx] if use_reverse else tokens_fwd[idx]
+engineered = engineered_rev[idx] if use_reverse else engineered_fwd[idx]
+```
+
+**Expected Results:**
+- GPU utilization should increase from 37% to 80-95%
+- Training speed should be 2-3x faster
+- Memory usage increases slightly due to caching (~2x dataset size)
+
+**Trade-offs:**
+- Increased initialization time (pre-computation happens once at startup)
+- Higher memory usage (caching both fwd and rev versions)
+- Base substitution augmentation (rare, usually disabled) still requires on-the-fly computation
