@@ -870,3 +870,39 @@ The bug was subtle: `window_bp` (DNA base pairs) vs `max_token_len` (BPE tokens)
 - `max_token_len=64`: Target token sequence length after BPE compression (~4x)
 
 Using DNA length for token padding created massive over-padding, severely limiting what could be masked during MLM training.
+
+### 2026-01-26: Mode Collapse Fix (10-11% Accuracy Ceiling)
+
+**Symptom:**
+After padding fix, model still stuck at 10-11% accuracy despite improved masked_fraction (~10%).
+
+**Diagnosis:**
+- Loss = 7.77, but Accuracy = 10.8%
+- This indicates **mode collapse**: model predicting same dominant token for all positions
+- That token appears ~10% in labels, giving 10% accuracy by chance
+- The model wasn't learning meaningful representations
+
+**Root Cause Analysis:**
+The combination of:
+1. Low learning rate (0.0002) - model settling into local minimum
+2. Weight tying (mlm_tie_weights: true) - constraining input/output representations
+3. No label smoothing - allowing overconfident predictions
+
+**Fixes Applied:**
+| Parameter | Old Value | New Value | Rationale |
+|-----------|-----------|-----------|-----------|
+| `mlm_lr` | 0.0002 | 0.0005 | Higher LR to escape local minima |
+| `mlm_tie_weights` | true | false | Allow different input/output representations |
+| Label smoothing | 0.0 | 0.1 | Prevent overconfident predictions |
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `config.yaml:211` | `mlm_lr: 0.0005` |
+| `config.yaml:220` | `mlm_tie_weights: false` |
+| `pretrain_mlm.py:2180` | Added `label_smoothing=0.1` to cross_entropy |
+
+**Expected Results:**
+- Model should start learning and accuracy should steadily increase
+- Watch for accuracy >30% within first 5-10 epochs to confirm fix is working
+- Target accuracy: 70-85% at convergence
