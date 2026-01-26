@@ -208,7 +208,7 @@ mlm: &mlm
   mlm_batch_size: 128
   mlm_epochs: 200
   # MLM-specific learning rate (separate from stage training)
-  mlm_lr: 0.0002
+  mlm_lr: 0.0005  # Increased from 0.0002 to help escape mode collapse
   mlm_weight_decay: 0.01
   mlm_max_span_len: 1        # Independent token masking for BPE (tokens already multi-base)
   mlm_encoder_checkpoint: ../artifacts/mlm_encoder_bpe.pt
@@ -217,7 +217,7 @@ mlm: &mlm
   mlm_transformer_heads: 12
   mlm_transformer_ff_dim: 1536
   mlm_transformer_dropout: 0.1
-  mlm_tie_weights: true
+  mlm_tie_weights: false  # Disabled to help prevent mode collapse (allows different input/output representations)
   mlm_use_output_norm: true
   # CLIP-style projection uses normalized cosine similarity - NOT recommended for MLM
   # Standard linear projection (mlm_use_clip_projection: false) achieves much higher accuracy
