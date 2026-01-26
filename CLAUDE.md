@@ -22,4 +22,4 @@ Fix any test or type errors until the whole suite is green.
 
 Add or update tests for the code you change, even if nobody asked.
 
-Remember what I have told you about this project. Create a MEMORY.MD file to keep context/history of what is going on with project so future models can reference and better understand what is going on. Always check for this file before attempting to create if present just reference and update as necessary. 
+Remember what I have told you about this project. Create a MEMORY.MD file to keep context/history of what is going on with project so future models can reference and better understand what is going on. Always check for this file before attempting to create if present just reference and update as necessary. Every time the MEMORY.MD file hits 1000 lines summarize everything to shorten this file I do not want this file to become excessively large. 

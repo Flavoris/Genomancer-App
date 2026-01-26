@@ -89,13 +89,24 @@ def get_kmer_pretrain_config(cfg: dict, kmer: int) -> dict:
     # Set vocab size
     kmer_cfg["vocab_size"] = (4 ** kmer) + 3
 
-    # Set paths
+    # Set paths - BPE (kmer=1) uses its own paths from config, k-mer uses k-specific paths
     vocab_dir = Path(cfg.get("vocab_cache_dir", "../artifacts/vocabs"))
-    kmer_cfg["mlm_vocab_path"] = str(vocab_dir / f"mlm_k{kmer}_vocab.json")
-
     artifacts_dir = Path("../artifacts")
-    kmer_cfg["mlm_encoder_path"] = str(artifacts_dir / f"mlm_encoder_k{kmer}.pt")
-    kmer_cfg["mlm_metadata_path"] = str(artifacts_dir / f"mlm_encoder_k{kmer}_metadata.json")
+
+    if kmer == 1:
+        # BPE mode: preserve paths from config (don't override to k1)
+        kmer_cfg["mlm_vocab_path"] = cfg.get("bpe_vocab_path", str(vocab_dir / "bpe_vocab.json"))
+        kmer_cfg["mlm_encoder_path"] = cfg.get(
+            "mlm_encoder_checkpoint", str(artifacts_dir / "mlm_encoder_bpe.pt")
+        )
+        kmer_cfg["mlm_metadata_path"] = str(artifacts_dir / "mlm_encoder_bpe.metadata.json")
+        kmer_cfg["tokenizer_type"] = "bpe"
+    else:
+        # K-mer mode: use k-specific paths
+        kmer_cfg["mlm_vocab_path"] = str(vocab_dir / f"mlm_k{kmer}_vocab.json")
+        kmer_cfg["mlm_encoder_path"] = str(artifacts_dir / f"mlm_encoder_k{kmer}.pt")
+        kmer_cfg["mlm_metadata_path"] = str(artifacts_dir / f"mlm_encoder_k{kmer}_metadata.json")
+        kmer_cfg["tokenizer_type"] = "kmer"
 
     return kmer_cfg
 
@@ -2031,18 +2042,20 @@ class DNAMLM(nn.Module):
     """
     
     def __init__(
-        self, 
-        encoder: DNAEncoder, 
+        self,
+        encoder: DNAEncoder,
         vocab_size: int,
         special_token_ids: List[int] | None = None,  # IDs to exclude from predictions
         tie_weights: bool = True,  # CRITICAL: tie embedding weights for better learning
         use_output_norm: bool = True,  # Additional layer norm before LM head
+        use_clip_projection: bool = False,  # CLIP-style normalized projection (NOT recommended for MLM)
     ):
         super().__init__()
         self.encoder = encoder
         self.vocab_size = vocab_size
         self.tie_weights = tie_weights
-        
+        self.use_clip_projection = use_clip_projection
+
         # Store special token IDs to exclude from prediction
         # These will have their logits set to -inf before softmax/loss
         self.special_token_ids = special_token_ids or []
@@ -2051,16 +2064,27 @@ class DNAMLM(nn.Module):
                 "Special token exclusion enabled: IDs %s will be masked from predictions",
                 self.special_token_ids
             )
-        
+
         # Optional output layer norm (helps with distribution matching)
         self.use_output_norm = use_output_norm
         if use_output_norm:
             self.output_norm = nn.LayerNorm(encoder.embedding_dim)
-        
+
         # LM head with bias (bias helps model output distribution)
         self.lm_head = nn.Linear(encoder.embedding_dim, vocab_size, bias=True)
-        self.logit_scale = nn.Parameter(torch.tensor(10.0))
-        
+
+        # CLIP-style projection uses a learnable temperature scale
+        # NOTE: This is NOT recommended for MLM - standard projection works better
+        if use_clip_projection:
+            self.logit_scale = nn.Parameter(torch.tensor(10.0))
+            LOGGER.warning(
+                "CLIP-style projection enabled. This is NOT recommended for MLM - "
+                "consider setting mlm_use_clip_projection: false in config."
+            )
+        else:
+            self.logit_scale = None
+            LOGGER.info("Using standard MLM projection (recommended)")
+
         # Weight tying: share weights between embedding and LM head
         # This is a key technique from BERT that improves MLM loss significantly
         if tie_weights:
@@ -2069,7 +2093,7 @@ class DNAMLM(nn.Module):
         else:
             # If not tying, initialize LM head with scaled init
             nn.init.trunc_normal_(self.lm_head.weight, std=0.02, a=-0.04, b=0.04)
-        
+
         # Initialize bias to zero
         nn.init.zeros_(self.lm_head.bias)
     
@@ -2118,18 +2142,25 @@ class DNAMLM(nn.Module):
             (logits, loss) tuple where loss is None if labels not provided
         """
         x = self.encoder(token_ids, key_padding_mask=key_padding_mask)
-        
+
         # Optional output norm before projection
         if self.use_output_norm:
             x = self.output_norm(x)
 
-        # Normalize MLM head projection to prevent logit explosion (CLIP-style)
-        h = F.normalize(x, dim=-1)
-        w = F.normalize(self.lm_head.weight, dim=-1)
-        logits = self.logit_scale * (h @ w.T)
-        if self.lm_head.bias is not None:
-            logits = logits + self.lm_head.bias
-        
+        # Compute logits using either standard or CLIP-style projection
+        if self.use_clip_projection:
+            # CLIP-style: normalized cosine similarity with learned temperature
+            # NOTE: Not recommended for MLM - constrains logits to bounded range
+            h = F.normalize(x, dim=-1)
+            w = F.normalize(self.lm_head.weight, dim=-1)
+            logits = self.logit_scale * (h @ w.T)
+            if self.lm_head.bias is not None:
+                logits = logits + self.lm_head.bias
+        else:
+            # Standard MLM projection: linear transform (recommended)
+            # logits = x @ W.T + b
+            logits = self.lm_head(x)
+
         # CRITICAL: Mask out special tokens from prediction space
         # This prevents the model from predicting [MASK], <UNK>, <PAD>
         logits = self._mask_special_tokens(logits)
@@ -4044,6 +4075,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             special_token_ids=special_token_ids,
             tie_weights=bool(cfg_run.get("mlm_tie_weights", True)),
             use_output_norm=bool(cfg_run.get("mlm_use_output_norm", True)),
+            use_clip_projection=bool(cfg_run.get("mlm_use_clip_projection", False)),
         )
 
         metadata = {
@@ -4171,6 +4203,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
 
     tie_weights = bool(cfg_run.get("mlm_tie_weights", True))
     use_output_norm = bool(cfg_run.get("mlm_use_output_norm", True))
+    use_clip_projection = bool(cfg_run.get("mlm_use_clip_projection", False))
 
     special_token_ids = [vocab.mask_id, vocab.unk_id, vocab.pad_id]
     LOGGER.info(
@@ -4186,6 +4219,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         special_token_ids=special_token_ids,
         tie_weights=tie_weights,
         use_output_norm=use_output_norm,
+        use_clip_projection=use_clip_projection,
     ).to(device)
 
     # Log model device placement
@@ -4270,18 +4304,21 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     # Early stopping setup with intelligent convergence detection
     early_stopping_enabled = bool(cfg_run.get("mlm_early_stopping_enabled", True))
     if early_stopping_enabled:
+        # Determine tokenizer type from config
+        tokenizer_type = cfg_run.get("tokenizer_type", "bpe")  # Default to BPE
         early_stopper = PretrainingEarlyStopping(
             patience=int(cfg_run.get("mlm_early_stopping_patience", 20)),
             min_delta=float(cfg_run.get("mlm_early_stopping_min_delta", 0.001)),
             min_epochs=int(cfg_run.get("mlm_early_stopping_min_epochs", 30)),
             restore_best=bool(cfg_run.get("mlm_early_stopping_restore_best", True)),
             verbose=True,
+            tokenizer_type=tokenizer_type,
             # New convergence detection parameters
             accuracy_stagnation_window=int(cfg_run.get("mlm_accuracy_stagnation_window", 5)),
             accuracy_stagnation_threshold=float(cfg_run.get("mlm_accuracy_stagnation_threshold", 0.01)),
             rate_of_change_window=int(cfg_run.get("mlm_rate_of_change_window", 10)),
             rate_of_change_min_improvement=float(cfg_run.get("mlm_rate_of_change_min_improvement", 0.005)),
-            target_accuracy=cfg_run.get("mlm_target_accuracy"),  # None means use k-mer defaults
+            target_accuracy=cfg_run.get("mlm_target_accuracy"),  # None means use tokenizer defaults
             target_loss=float(cfg_run.get("mlm_target_loss", 0.5)),
             use_kmer_defaults=bool(cfg_run.get("mlm_use_kmer_defaults", True)),
         )
@@ -5393,6 +5430,7 @@ def main(cfg: dict | None = None) -> dict:
             special_token_ids=special_token_ids,
             tie_weights=bool(cfg.get("mlm_tie_weights", True)),
             use_output_norm=bool(cfg.get("mlm_use_output_norm", True)),
+            use_clip_projection=bool(cfg.get("mlm_use_clip_projection", False)),
         )
 
         metadata = {
@@ -5514,7 +5552,8 @@ def main(cfg: dict | None = None) -> dict:
     # DNAMLM with weight tying (critical for lower loss)
     tie_weights = bool(cfg.get("mlm_tie_weights", True))
     use_output_norm = bool(cfg.get("mlm_use_output_norm", True))
-    
+    use_clip_projection = bool(cfg.get("mlm_use_clip_projection", False))
+
     # CRITICAL: Exclude special tokens from prediction space
     # This prevents the model from "cheating" by predicting [MASK], <UNK>, <PAD>
     # which has been shown to cause models to get stuck at ~30% accuracy
@@ -5523,13 +5562,14 @@ def main(cfg: dict | None = None) -> dict:
                 vocab.mask_id, vocab.unk_id, vocab.pad_id)
     
     model = DNAMLM(
-        encoder, 
+        encoder,
         vocab_size=len(vocab),
         special_token_ids=special_token_ids,
         tie_weights=tie_weights,
         use_output_norm=use_output_norm,
+        use_clip_projection=use_clip_projection,
     ).to(device)
-    
+
     # Count parameters (accounting for weight tying)
     total_params = sum(p.numel() for p in model.parameters())
     unique_params = sum(p.numel() for p in set(model.parameters()))

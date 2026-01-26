@@ -226,17 +226,20 @@ class PretrainingEarlyStopping(EarlyStopping):
     - Rate-of-change detection (stops when improvement rate drops below threshold)
     - Accuracy stagnation detection over a sliding window
     - "Good enough" thresholds for early exit when performance is satisfactory
-    - K-mer aware configuration (smaller k-mers converge faster)
+    - Tokenizer-aware configuration (BPE and k-mer have different convergence patterns)
     - Saves MLM-specific metadata with checkpoints
     """
 
-    # Default k-mer specific settings (smaller k-mers need less training)
-    KMER_DEFAULTS = {
+    # Default tokenizer-specific settings (BPE and smaller k-mers converge faster)
+    TOKENIZER_DEFAULTS = {
+        "bpe": {"min_epochs": 10, "patience": 15, "target_accuracy": 0.75},
         3: {"min_epochs": 5, "patience": 8, "target_accuracy": 0.85},
         4: {"min_epochs": 8, "patience": 10, "target_accuracy": 0.82},
         5: {"min_epochs": 10, "patience": 12, "target_accuracy": 0.80},
         6: {"min_epochs": 12, "patience": 15, "target_accuracy": 0.78},
     }
+    # Backwards compatibility alias
+    KMER_DEFAULTS = TOKENIZER_DEFAULTS
 
     def __init__(
         self,
@@ -244,6 +247,7 @@ class PretrainingEarlyStopping(EarlyStopping):
         min_delta: float = 0.001,
         min_epochs: int = 30,
         kmer: int = 6,
+        tokenizer_type: Optional[str] = None,
         # New convergence detection parameters
         accuracy_stagnation_window: int = 5,
         accuracy_stagnation_threshold: float = 0.01,
@@ -259,26 +263,44 @@ class PretrainingEarlyStopping(EarlyStopping):
             patience: Epochs to wait for improvement before stopping
             min_delta: Minimum change in loss to qualify as improvement
             min_epochs: Minimum epochs before stopping can trigger
-            kmer: K-mer size (used for k-mer aware defaults)
+            kmer: K-mer size (used for k-mer aware defaults, ignored if tokenizer_type="bpe")
+            tokenizer_type: "bpe" or "kmer" - determines defaults and checkpoint naming
             accuracy_stagnation_window: Epochs to check for accuracy stagnation
             accuracy_stagnation_threshold: Min accuracy improvement over window
             rate_of_change_window: Epochs to calculate improvement rate
             rate_of_change_min_improvement: Min improvement rate per epoch
             target_accuracy: Stop if accuracy exceeds this (good enough)
             target_loss: Stop if loss drops below this (good enough)
-            use_kmer_defaults: Whether to use k-mer specific defaults
+            use_kmer_defaults: Whether to use tokenizer-specific defaults
         """
-        # Apply k-mer specific defaults if enabled
-        if use_kmer_defaults and kmer in self.KMER_DEFAULTS:
-            defaults = self.KMER_DEFAULTS[kmer]
+        # Determine tokenizer type: explicit param > kmer=1 means BPE > default to kmer
+        if tokenizer_type is not None:
+            self.tokenizer_type = tokenizer_type
+        elif kmer == 1:
+            self.tokenizer_type = "bpe"
+        else:
+            self.tokenizer_type = "kmer"
+
+        self.kmer = kmer if self.tokenizer_type == "kmer" else None
+
+        # Apply tokenizer-specific defaults if enabled
+        defaults_key = "bpe" if self.tokenizer_type == "bpe" else kmer
+        if use_kmer_defaults and defaults_key in self.TOKENIZER_DEFAULTS:
+            defaults = self.TOKENIZER_DEFAULTS[defaults_key]
             min_epochs = defaults["min_epochs"]
             patience = defaults["patience"]
             if target_accuracy is None:
                 target_accuracy = defaults["target_accuracy"]
-            LOGGER.info(
-                f"Using k={kmer} defaults: min_epochs={min_epochs}, "
-                f"patience={patience}, target_accuracy={target_accuracy}"
-            )
+            if self.tokenizer_type == "bpe":
+                LOGGER.info(
+                    f"Using BPE defaults: min_epochs={min_epochs}, "
+                    f"patience={patience}, target_accuracy={target_accuracy}"
+                )
+            else:
+                LOGGER.info(
+                    f"Using k={kmer} defaults: min_epochs={min_epochs}, "
+                    f"patience={patience}, target_accuracy={target_accuracy}"
+                )
 
         super().__init__(
             patience=patience,
@@ -287,7 +309,6 @@ class PretrainingEarlyStopping(EarlyStopping):
             mode="min",  # Always minimize loss for pretraining
             **kwargs,
         )
-        self.kmer = kmer
 
         # Convergence detection settings
         self.accuracy_stagnation_window = accuracy_stagnation_window
@@ -465,7 +486,13 @@ class PretrainingEarlyStopping(EarlyStopping):
         checkpoint_dir = Path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        checkpoint_path = checkpoint_dir / f"mlm_encoder_k{self.kmer}_best.pt"
+        # Use tokenizer type for checkpoint naming
+        if self.tokenizer_type == "bpe":
+            checkpoint_path = checkpoint_dir / "mlm_encoder_bpe_best.pt"
+            tokenizer_label = "BPE"
+        else:
+            checkpoint_path = checkpoint_dir / f"mlm_encoder_k{self.kmer}_best.pt"
+            tokenizer_label = f"k={self.kmer}"
 
         # Get latest perplexity and accuracy if available
         perplexity = self.perplexity_history[-1] if self.perplexity_history else None
@@ -479,6 +506,7 @@ class PretrainingEarlyStopping(EarlyStopping):
             "best_perplexity": perplexity,
             "best_accuracy": accuracy,
             "kmer": self.kmer,
+            "tokenizer_type": self.tokenizer_type,
         }, checkpoint_path)
 
         self.best_checkpoint_path = checkpoint_path
@@ -487,7 +515,7 @@ class PretrainingEarlyStopping(EarlyStopping):
             perplexity_str = f"{perplexity:.2f}" if perplexity is not None else "N/A"
             accuracy_str = f"{accuracy:.1%}" if accuracy is not None else "N/A"
             LOGGER.info(
-                f"Saved k={self.kmer} MLM checkpoint (epoch {epoch}, "
+                f"Saved {tokenizer_label} MLM checkpoint (epoch {epoch}, "
                 f"val_loss={score:.6f}, perplexity={perplexity_str}, accuracy={accuracy_str})"
             )
 
@@ -496,6 +524,7 @@ class PretrainingEarlyStopping(EarlyStopping):
         base_summary = super().get_summary()
         base_summary.update({
             "kmer": self.kmer,
+            "tokenizer_type": self.tokenizer_type,
             "stop_reason": self.stop_reason,
             "final_accuracy": self.accuracy_history[-1] if self.accuracy_history else None,
             "accuracy_history_len": len(self.accuracy_history),

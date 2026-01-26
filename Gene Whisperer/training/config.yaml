@@ -219,6 +219,9 @@ mlm: &mlm
   mlm_transformer_dropout: 0.1
   mlm_tie_weights: true
   mlm_use_output_norm: true
+  # CLIP-style projection uses normalized cosine similarity - NOT recommended for MLM
+  # Standard linear projection (mlm_use_clip_projection: false) achieves much higher accuracy
+  mlm_use_clip_projection: false
   mlm_use_layer_lr_decay: false
   mlm_layer_lr_decay: 0.9
   mlm_val_ratio: 0.1
@@ -242,7 +245,10 @@ mlm: &mlm
     span_distribution: "geometric"
     mean_span: 3.0
     exclude_special_from_labels: true
-  mlm_length_curriculum_enabled: true
+  # Length curriculum: gradually increases sequence length during training
+  # NOTE: Automatically disabled when using streaming datasets (mlm_fasta_paths + mlm_steps_per_epoch)
+  # Set to false to avoid the warning when using streaming
+  mlm_length_curriculum_enabled: false
   mlm_length_curriculum_start_tokens: 32
   mlm_length_curriculum_end_tokens: 229  # 234 - k + 1 for k=6 (matches mlm_window_size)
   mlm_length_curriculum_start_pct: 0.0

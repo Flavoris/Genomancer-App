@@ -771,3 +771,54 @@ engineered = engineered_rev[idx] if use_reverse else engineered_fwd[idx]
 - Increased initialization time (pre-computation happens once at startup)
 - Higher memory usage (caching both fwd and rev versions)
 - Base substitution augmentation (rare, usually disabled) still requires on-the-fly computation
+
+### 2026-01-25: MLM Pretraining Fixes (BPE Naming & CLIP Projection)
+Fixed multiple issues discovered after first BPE pretraining run that achieved only 11% accuracy.
+
+**Issues Fixed:**
+
+1. **Checkpoint Naming Bug (k=6 / k=1 confusion)**
+   - `PretrainingEarlyStopping` was logging "Saved k=6 MLM checkpoint" even when using BPE
+   - `get_kmer_pretrain_config()` was generating `mlm_encoder_k1.pt` paths for BPE
+   - **Fix**: Added `tokenizer_type` parameter to `PretrainingEarlyStopping`, updated checkpoint naming to use "BPE" label
+   - **Fix**: Modified `get_kmer_pretrain_config()` to preserve BPE paths from config when `kmer=1`
+
+2. **Low Accuracy Root Cause: CLIP-Style Projection**
+   - DNAMLM was using CLIP-style normalized cosine similarity projection:
+     ```python
+     h = F.normalize(x, dim=-1)
+     w = F.normalize(self.lm_head.weight, dim=-1)
+     logits = logit_scale * (h @ w.T)  # Bounded to [-scale, +scale]
+     ```
+   - This is designed for contrastive learning (image-text), NOT masked language modeling
+   - The normalization constrains logits to a bounded range, limiting learning capacity
+   - **Fix**: Added `use_clip_projection` parameter (default: `False`)
+   - Standard MLM projection now used by default: `logits = lm_head(x)`
+
+3. **Length Curriculum Warning**
+   - Warning "Length curriculum disabled for streaming datasets" always appeared
+   - This is expected behavior (length curriculum incompatible with streaming)
+   - **Fix**: Set `mlm_length_curriculum_enabled: false` in config since streaming is used
+
+**Files Modified:**
+| File | Changes |
+|------|---------|
+| `pretrain_mlm.py` | Added `use_clip_projection` param to DNAMLM, updated `get_kmer_pretrain_config()` for BPE paths |
+| `early_stopping.py` | Added `tokenizer_type` param to `PretrainingEarlyStopping`, updated checkpoint naming/logging |
+| `config.yaml` | Added `mlm_use_clip_projection: false`, disabled length curriculum |
+
+**Config Changes:**
+| Parameter | Old Value | New Value | Purpose |
+|-----------|-----------|-----------|---------|
+| `mlm_use_clip_projection` | N/A (always on) | `false` | Use standard MLM projection |
+| `mlm_length_curriculum_enabled` | `true` | `false` | Avoid warning with streaming |
+
+**Expected Improvement:**
+- Accuracy should improve significantly (target: 70-85%) with standard projection
+- No more confusing k=6/k=1 naming in logs
+- No more length curriculum warning
+
+**Next Steps:**
+1. Re-run MLM pretraining with fixed configuration
+2. Monitor accuracy - should see steady improvement above 50% within first few epochs
+3. If accuracy still low, investigate masking strategy or learning rate
