@@ -496,6 +496,7 @@ class GenomeMLMIterableDataset(IterableDataset):
         reverse_complement_prob: float,
         unknown_base_strategy: Any,
         *,
+        max_token_len: int | None = None,
         species_weights: Dict[str, float] | None = None,
         return_metadata: bool = False,
     ) -> None:
@@ -523,6 +524,10 @@ class GenomeMLMIterableDataset(IterableDataset):
         self.kmer = int(kmer)
         self.steps_per_epoch = steps_per_epoch
         self.vocab = vocab
+        # max_token_len: target length for tokenized sequences (for BPE padding)
+        # If not provided, defaults to window_bp (legacy k-mer behavior)
+        # CRITICAL: For BPE, this should be mlm_max_token_len (e.g., 64), NOT window_bp (e.g., 234)
+        self.max_token_len = int(max_token_len) if max_token_len is not None else self.window_bp
         self.mask_prob = float(mask_config.get("mask_prob", 0.15))
         self.max_span_len = int(mask_config.get("max_span_len", 3))
         self.span_distribution = str(mask_config.get("span_distribution", "geometric"))
@@ -624,7 +629,7 @@ class GenomeMLMIterableDataset(IterableDataset):
         if self.reverse_complement_prob > 0 and random.random() < self.reverse_complement_prob:
             window = reverse_complement(window)
             rc_used = True
-        tokens = self.vocab.tokenize_and_pad(window, self.window_bp)
+        tokens = self.vocab.tokenize_and_pad(window, self.max_token_len)
         metadata = {
             "species": species_name,
             "record_id": record_id,
@@ -2793,6 +2798,8 @@ def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
     seed = int(cfg.get("seed", 1337) or 1337)
     # Use MLM-specific window size, fallback to max_bp_len for backward compatibility
     window_bp = int(cfg.get("mlm_window_size", cfg.get("max_bp_len", 234)))
+    # CRITICAL: max_token_len for BPE tokenized sequences (NOT window_bp!)
+    max_token_len = int(cfg.get("mlm_max_token_len", 64))
     train_corpus, val_corpus, species_names, split_counts = _split_mlm_corpus_by_record(
         fasta_paths,
         window_bp=window_bp,
@@ -2855,6 +2862,7 @@ def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
         mask_config=mask_config,
         reverse_complement_prob=reverse_complement_prob,
         unknown_base_strategy=unknown_base_strategy,
+        max_token_len=max_token_len,
         species_weights=species_weights,
         return_metadata=True,
     )
@@ -2867,6 +2875,7 @@ def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
         mask_config=mask_config,
         reverse_complement_prob=reverse_complement_prob,
         unknown_base_strategy=unknown_base_strategy,
+        max_token_len=max_token_len,
         species_weights=species_weights,
         return_metadata=True,
     )
@@ -3702,6 +3711,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         fasta_paths = _resolve_mlm_fasta_paths(cfg_run, base_dir=script_dir)
         # Use MLM-specific window size, fallback to max_bp_len for backward compatibility
         window_bp = int(cfg_run.get("mlm_window_size", cfg_run.get("max_bp_len", 234)))
+        # CRITICAL: max_token_len controls BPE tokenized sequence length (NOT window_bp!)
+        # For BPE, 234bp compresses to ~60 tokens, so mlm_max_token_len=64 is appropriate
+        max_token_len = int(cfg_run.get("mlm_max_token_len", 64))
         single_record_val_ratio = float(cfg_run.get("mlm_single_record_val_ratio", val_ratio))
         exclude_patterns = cfg_run.get("mlm_val_exclude_patterns", ["mitochond"])
         min_val_records = int(cfg_run.get("mlm_min_val_records_per_species", 1))
@@ -3781,6 +3793,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             mask_config=train_mask_config,
             reverse_complement_prob=reverse_complement_prob,
             unknown_base_strategy=unknown_base_strategy,
+            max_token_len=max_token_len,
             species_weights=species_weights,
         )
 
@@ -3799,12 +3812,16 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             mask_config=val_mask_config,
             reverse_complement_prob=reverse_complement_prob,
             unknown_base_strategy=unknown_base_strategy,
+            max_token_len=max_token_len,
             species_weights=species_weights,
         )
         LOGGER.info(
-            "Streaming dataset: steps_per_epoch=%d, val_steps_per_epoch=%d",
+            "Streaming dataset: steps_per_epoch=%d, val_steps_per_epoch=%d, "
+            "window_bp=%d (DNA length), max_token_len=%d (BPE tokens)",
             steps_per_epoch,
             val_steps_per_epoch,
+            window_bp,
+            max_token_len,
         )
     else:
         fasta_path = _resolve_cfg_path(cfg_run.get("mlm_fasta_path"), base_dir=script_dir)

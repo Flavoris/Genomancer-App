@@ -822,3 +822,51 @@ Fixed multiple issues discovered after first BPE pretraining run that achieved o
 1. Re-run MLM pretraining with fixed configuration
 2. Monitor accuracy - should see steady improvement above 50% within first few epochs
 3. If accuracy still low, investigate masking strategy or learning rate
+
+### 2026-01-26: CRITICAL FIX - BPE Token Padding Bug (Root Cause of 11% Accuracy)
+
+**The Real Problem:**
+After first fix attempt, model still stuck at 11.4% accuracy. Investigation revealed:
+- `masked_fraction` was only **2.67%** instead of expected **15%**
+- This indicated massive over-padding
+
+**Root Cause Found:**
+In `GenomeMLMIterableDataset._sample_tokens()` (line 632):
+```python
+# BUG: Using window_bp (234) instead of max_token_len (64)
+tokens = self.vocab.tokenize_and_pad(window, self.window_bp)  # WRONG!
+```
+
+This caused:
+- 234bp DNA sequence → ~60 BPE tokens
+- But padded to **234 tokens** (using `window_bp` instead of `max_token_len`)
+- Result: **174 PAD tokens** out of 234 = **74% padding!**
+- Only 26% non-PAD tokens × 15% mask rate = **3.9% masked** (matches observed 2.67%)
+
+**The Fix:**
+1. Added `max_token_len` parameter to `GenomeMLMIterableDataset.__init__`
+2. Changed tokenization call to use `self.max_token_len` instead of `self.window_bp`
+3. Updated all call sites to pass `mlm_max_token_len` from config (default: 64)
+4. Added logging to show both `window_bp` and `max_token_len` during training
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `pretrain_mlm.py:499` | Added `max_token_len` parameter to `GenomeMLMIterableDataset.__init__` |
+| `pretrain_mlm.py:527-530` | Store `max_token_len` with fallback to `window_bp` for legacy compatibility |
+| `pretrain_mlm.py:632` | Use `self.max_token_len` for tokenization padding |
+| `pretrain_mlm.py:3712` | Read `mlm_max_token_len` from config for streaming training |
+| `pretrain_mlm.py:3793,3807` | Pass `max_token_len` to train/val dataset constructors |
+| `pretrain_mlm.py:2802,2861,2875` | Same for dry run function |
+
+**Expected Results After Fix:**
+- `masked_fraction` should be ~15% (was 2.67%)
+- With proper masking, accuracy should improve significantly (target: 70-85%)
+- Perplexity should drop from ~770 to under 50
+
+**Key Insight:**
+The bug was subtle: `window_bp` (DNA base pairs) vs `max_token_len` (BPE tokens) have different meanings:
+- `window_bp=234`: DNA sequence length in base pairs
+- `max_token_len=64`: Target token sequence length after BPE compression (~4x)
+
+Using DNA length for token padding created massive over-padding, severely limiting what could be masked during MLM training.
