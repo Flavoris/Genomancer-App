@@ -906,3 +906,50 @@ The combination of:
 - Model should start learning and accuracy should steadily increase
 - Watch for accuracy >30% within first 5-10 epochs to confirm fix is working
 - Target accuracy: 70-85% at convergence
+
+### 2026-01-27: CRITICAL BUG FIX - Special Tokens in Random MLM Replacement
+
+**THE ROOT CAUSE (Finally Found!):**
+After previous fixes only improved accuracy to 13.7%, deep investigation revealed the true bug: The 80/10/10 masking strategy was corrupting training data by including special tokens in random replacements.
+
+**The Bug (pretrain_mlm.py, mask_tokens_span(), lines 943-949):**
+```python
+# BEFORE (BUGGY):
+random_ids = torch.randint(
+    low=0,              # INCLUDES SPECIAL TOKENS!
+    high=vocab_size,
+    ...
+)
+```
+
+This meant 10% of masked positions could randomly receive:
+- PAD (ID 0), UNK (ID 1), CLS (ID 2), SEP (ID 3), or MASK (ID 4)
+- These special tokens corrupted the training signal
+- Model received garbage input and couldn't learn meaningful patterns
+
+**The Fix:**
+```python
+# AFTER (FIXED):
+num_special_tokens = 5  # PAD, UNK, CLS, SEP, MASK
+random_ids = torch.randint(
+    low=num_special_tokens,  # Start from ID 5 (skip special tokens)
+    high=vocab_size,
+    ...
+)
+```
+
+**Additional Changes:**
+- Added `_base_token_ids` attribute to DNABPETokenizer for robustness
+- Added `_update_base_token_ids()` method called after vocab changes
+- This ensures the preferred code path (using `_base_token_ids`) works correctly
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `pretrain_mlm.py:944` | Changed `low=0` to `low=num_special_tokens` (5) |
+| `bpe_tokenizer.py` | Added `_base_token_ids` and `_update_base_token_ids()` |
+
+**Expected Results:**
+- Accuracy should jump from ~13% to **60-75%** within first 10 epochs
+- Target: **80-85%** accuracy at convergence
+- Loss should drop significantly as model receives clean training signals
