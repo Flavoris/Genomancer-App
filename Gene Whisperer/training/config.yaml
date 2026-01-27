@@ -236,14 +236,16 @@ mlm: &mlm
   mlm_checkpoint_keep_last: 2
   mlm_mask_prob: 0.15
   mlm_masking:
-    # Contiguous span masking (DNABERT-style)
+    # Masking configuration for BPE tokenization
+    # For BPE, use max_span_len=1 (independent token masking) since each token already
+    # represents a variable-length DNA segment. Using span masking would remove too much context.
     progressive: false
     initial_mask_rate: 0.15
     final_mask_rate: 0.20
     transition_start_ratio: 0.8
-    max_span_len: 3
+    max_span_len: 1  # IMPORTANT: Use 1 for BPE (tokens are already multi-base)
     span_distribution: "geometric"
-    mean_span: 3.0
+    mean_span: 1.0  # With max_span_len=1, this doesn't matter but set to 1 for clarity
     exclude_special_from_labels: true
   # Length curriculum: gradually increases sequence length during training
   # NOTE: Automatically disabled when using streaming datasets (mlm_fasta_paths + mlm_steps_per_epoch)

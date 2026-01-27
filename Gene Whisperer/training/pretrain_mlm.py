@@ -2854,9 +2854,19 @@ def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
 
     batch_size = int(cfg.get("mlm_batch_size", 128))
     mask_prob = float(cfg.get("mlm_mask_prob", 0.15))
+    # Read masking parameters from config for consistency with main training
+    masking_cfg = cfg.get("mlm_masking", {})
+    max_span_len = int(cfg.get("mlm_max_span_len", masking_cfg.get("max_span_len", 1)))
+    span_distribution = str(masking_cfg.get("span_distribution", "geometric"))
+    mean_span = float(masking_cfg.get("mean_span", 3.0))
+    exclude_special_from_labels = bool(masking_cfg.get("exclude_special_from_labels", True))
     mask_config = {
         "vocab": vocab,
         "mask_prob": mask_prob,
+        "max_span_len": max_span_len,
+        "span_distribution": span_distribution,
+        "mean_span": mean_span,
+        "exclude_special_from_labels": exclude_special_from_labels,
         "track_spans": False,
         "batch_size": batch_size,
     }
@@ -3617,7 +3627,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         "weight_decay": float(cfg_run.get("mlm_weight_decay", 0.01)),
         # MLM-specific
         "mask_prob": mask_prob,
-        "max_span_len": 3,  # Fixed in mask_tokens_span
+        "max_span_len": int(cfg_run.get("mlm_max_span_len", cfg_run.get("mlm_masking", {}).get("max_span_len", 1))),
         # Data
         "batch_size": int(cfg_run.get("mlm_batch_size", 128)),
         "max_bp_len": int(cfg_run.get("mlm_window_size", cfg_run.get("max_bp_len", 234))),
@@ -3784,9 +3794,26 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
                 val_skipped_short,
             )
 
+        # Read masking parameters from config - CRITICAL for BPE tokenization
+        # For BPE, use max_span_len=1 (independent token masking) since tokens are already multi-base
+        masking_cfg = cfg_run.get("mlm_masking", {})
+        max_span_len = int(cfg_run.get("mlm_max_span_len", masking_cfg.get("max_span_len", 1)))
+        span_distribution = str(masking_cfg.get("span_distribution", "geometric"))
+        mean_span = float(masking_cfg.get("mean_span", 3.0))
+        exclude_special_from_labels = bool(masking_cfg.get("exclude_special_from_labels", True))
+
+        LOGGER.info(
+            "Masking config: max_span_len=%d, span_distribution=%s, mean_span=%.1f",
+            max_span_len, span_distribution, mean_span
+        )
+
         train_mask_config = {
             "vocab": vocab,
             "mask_prob": mask_prob,
+            "max_span_len": max_span_len,
+            "span_distribution": span_distribution,
+            "mean_span": mean_span,
+            "exclude_special_from_labels": exclude_special_from_labels,
             "track_spans": True,
             "batch_size": batch_size,
             "debug": label_debug,
@@ -3807,6 +3834,10 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         val_mask_config = {
             "vocab": vocab,
             "mask_prob": mask_prob,
+            "max_span_len": max_span_len,
+            "span_distribution": span_distribution,
+            "mean_span": mean_span,
+            "exclude_special_from_labels": exclude_special_from_labels,
             "track_spans": False,
             "batch_size": batch_size,
         }
@@ -4690,10 +4721,12 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             else:
                 logits, _ = model(inputs, labels=None)
 
+            # Label smoothing=0.1 helps prevent mode collapse by distributing probability mass
             loss_unscaled = F.cross_entropy(
                 logits.float().view(-1, logits.size(-1)),
                 labels.view(-1),
                 ignore_index=-100,
+                label_smoothing=0.1,
             )
             numerics_checker.check_forward(logits, loss_unscaled)
 

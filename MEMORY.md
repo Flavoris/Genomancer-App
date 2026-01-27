@@ -953,3 +953,94 @@ random_ids = torch.randint(
 - Accuracy should jump from ~13% to **60-75%** within first 10 epochs
 - Target: **80-85%** accuracy at convergence
 - Loss should drop significantly as model receives clean training signals
+
+### 2026-01-27: CRITICAL FIX - Masking Configuration Not Being Passed
+
+**THE ROOT CAUSE (Finally Found!):**
+After the special tokens fix, model was still stuck at 13.7% accuracy. Investigation revealed two major issues:
+
+**Issue 1: Masking Parameters Not Passed to Dataset**
+
+The `train_mask_config` and `val_mask_config` dicts were missing critical parameters from config:
+
+```python
+# BEFORE (BUGGY):
+train_mask_config = {
+    "vocab": vocab,
+    "mask_prob": mask_prob,
+    "track_spans": True,
+    "batch_size": batch_size,
+    "debug": label_debug,
+}
+# Missing: max_span_len, span_distribution, mean_span, exclude_special_from_labels
+```
+
+This caused `GenomeMLMIterableDataset` to use defaults:
+- `max_span_len=3` instead of configured `mlm_max_span_len=1`
+- With BPE tokens (each representing 3-25 nucleotides), masking 3 tokens = 9-75 nucleotides!
+- This removes too much context, making the prediction task nearly impossible.
+
+**The Fix:**
+```python
+# AFTER (FIXED):
+masking_cfg = cfg_run.get("mlm_masking", {})
+max_span_len = int(cfg_run.get("mlm_max_span_len", masking_cfg.get("max_span_len", 1)))
+span_distribution = str(masking_cfg.get("span_distribution", "geometric"))
+mean_span = float(masking_cfg.get("mean_span", 3.0))
+exclude_special_from_labels = bool(masking_cfg.get("exclude_special_from_labels", True))
+
+train_mask_config = {
+    "vocab": vocab,
+    "mask_prob": mask_prob,
+    "max_span_len": max_span_len,  # Now properly read from config!
+    "span_distribution": span_distribution,
+    "mean_span": mean_span,
+    "exclude_special_from_labels": exclude_special_from_labels,
+    ...
+}
+```
+
+**Issue 2: Training Loss Missing Label Smoothing**
+
+The training loop computed loss WITHOUT label_smoothing:
+```python
+# BEFORE:
+loss_unscaled = F.cross_entropy(logits, labels, ignore_index=-100)
+
+# AFTER:
+loss_unscaled = F.cross_entropy(logits, labels, ignore_index=-100, label_smoothing=0.1)
+```
+
+Label smoothing helps prevent mode collapse by distributing probability mass.
+
+**Issue 3: Config Inconsistency**
+
+Config had conflicting values:
+- `mlm_max_span_len: 1` (top-level, correct for BPE)
+- `mlm_masking.max_span_len: 3` (nested, wrong for BPE)
+
+Fixed nested config to also use `max_span_len: 1`.
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `pretrain_mlm.py:3787-3812` | Added masking config parameters to train/val_mask_config |
+| `pretrain_mlm.py:2855-2862` | Same fix for dry run function |
+| `pretrain_mlm.py:4693-4697` | Added label_smoothing=0.1 to training loss |
+| `pretrain_mlm.py:3630` | Fixed hardcoded max_span_len=3 in resolved_config |
+| `config.yaml:238-247` | Fixed mlm_masking.max_span_len from 3 to 1 |
+
+**Why This Caused 13% Accuracy:**
+With `max_span_len=3` on BPE tokens:
+1. Each BPE token represents ~5 nucleotides on average (4x compression)
+2. Masking a span of 3 BPE tokens = masking ~15 nucleotides
+3. With 15% masking rate, each 64-token sequence has ~10 masked positions
+4. These masked positions often cluster into spans of 3, removing huge context windows
+5. Model can only learn to predict dominant tokens (A, T, C, G) which appear ~25% each
+6. Predicting these 4 tokens gets ~13% accuracy (weighted by actual frequency)
+
+**Expected Results After Fix:**
+- With `max_span_len=1`, each masked position is independent
+- Model has full context from surrounding tokens to predict each mask
+- Accuracy should improve to **60-85%** within 10-15 epochs
+- Target perplexity: <50 (down from 478)
