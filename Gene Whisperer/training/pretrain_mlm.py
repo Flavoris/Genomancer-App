@@ -934,14 +934,18 @@ def mask_tokens_span(
         flat = random_token_indices.view(-1)
         num_rand = flat.sum().item()
         # Use vocab's base token IDs (excludes special tokens)
-        # Vectorized: torch sampling instead of Python loop
+        # CRITICAL: Must NEVER sample special tokens (IDs 0-4) as random replacements
+        # Special tokens: PAD=0, UNK=1, CLS=2, SEP=3, MASK=4
         if hasattr(vocab, '_base_token_ids') and vocab._base_token_ids:
             base_ids = torch.as_tensor(vocab._base_token_ids, device=device, dtype=inputs.dtype)
             rand_idx = torch.randint(0, base_ids.numel(), (num_rand,), device=device)
             random_ids = base_ids[rand_idx]
         else:
+            # FIXED: Start from ID 5 (after special tokens) to avoid corrupting training data
+            # Previously started from 0, which included special tokens and caused mode collapse
+            num_special_tokens = 5  # PAD, UNK, CLS, SEP, MASK
             random_ids = torch.randint(
-                low=0,
+                low=num_special_tokens,  # Skip special tokens (IDs 0-4)
                 high=vocab_size,
                 size=(num_rand,),
                 device=device,

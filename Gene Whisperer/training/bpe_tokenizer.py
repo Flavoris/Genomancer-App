@@ -117,6 +117,9 @@ class DNABPETokenizer:
                     f"'{best_pair[0]}' + '{best_pair[1]}' -> '{merged_token}'"
                 )
 
+        # Update base token IDs after training is complete
+        self._update_base_token_ids()
+
     def tokenize(self, sequence: str) -> List[int]:
         """Tokenize a DNA sequence using learned BPE vocabulary.
 
@@ -308,6 +311,9 @@ class DNABPETokenizer:
             default=1
         )
 
+        # Initialize base token IDs for MLM random replacement
+        tokenizer._update_base_token_ids()
+
         return tokenizer
 
     def _initialize_vocab(self) -> None:
@@ -317,6 +323,14 @@ class DNABPETokenizer:
             idx = len(SPECIAL_TOKENS) + i
             self.vocab[base] = idx
         self.id_to_token = {v: k for k, v in self.vocab.items()}
+        # Base token IDs: all non-special tokens (for MLM random replacement)
+        # This excludes special tokens (PAD, UNK, CLS, SEP, MASK) from random sampling
+        self._update_base_token_ids()
+
+    def _update_base_token_ids(self) -> None:
+        """Update the list of base (non-special) token IDs for MLM random replacement."""
+        num_special = len(SPECIAL_TOKENS)
+        self._base_token_ids = list(range(num_special, len(self.vocab)))
 
     def _sanitize(self, sequence: str) -> str:
         """Normalize a DNA sequence: uppercase, keep only A/T/C/G."""
