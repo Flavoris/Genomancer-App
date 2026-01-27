@@ -729,28 +729,41 @@ class GenomeMLMIterableDataset(IterableDataset):
 def sample_span_length_geometric(max_span_len: int, mean_span: float = 3.0) -> int:
     """
     Sample span length from geometric distribution (DNABERT-style).
-    
+
     The geometric distribution naturally generates span lengths where shorter
     spans are more common than longer ones, which matches the intuition that
     most masked regions should be small.
-    
+
     Args:
         max_span_len: Maximum allowed span length
         mean_span: Target mean span length (controls distribution)
-        
+
     Returns:
         Sampled span length in [1, max_span_len]
     """
+    # Edge case: if max_span_len is 1, always return 1 (no sampling needed)
+    # This is common for BPE tokenization where we want independent token masking
+    if max_span_len <= 1:
+        return 1
+
+    # Edge case: if mean_span <= 1, always return 1 to avoid math domain error
+    # (p = 1/mean_span would be >= 1, making log(1-p) undefined)
+    if mean_span <= 1.0:
+        return 1
+
     # Geometric distribution: P(X=k) = p * (1-p)^(k-1)
     # Mean = 1/p, so p = 1/mean_span
     p = 1.0 / mean_span
-    
+
+    # Clamp p to avoid log(0) when p approaches 1
+    p = min(p, 0.99)
+
     # Sample from geometric distribution and clamp to [1, max_span_len]
     # Use inverse CDF method: X = ceil(log(1-U) / log(1-p))
     u = random.random()
     if u == 0:
         u = 1e-10  # Avoid log(0)
-    
+
     span_len = int(math.ceil(math.log(1 - u) / math.log(1 - p)))
     return max(1, min(span_len, max_span_len))
 

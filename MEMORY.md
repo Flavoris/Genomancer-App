@@ -1044,3 +1044,32 @@ With `max_span_len=3` on BPE tokens:
 - Model has full context from surrounding tokens to predict each mask
 - Accuracy should improve to **60-85%** within 10-15 epochs
 - Target perplexity: <50 (down from 478)
+
+### 2026-01-27: Fix Math Domain Error in sample_span_length_geometric
+
+**Issue:**
+With `max_span_len=1` and `mean_span=1.0` (both set for BPE), the `sample_span_length_geometric` function crashed with "math domain error":
+```python
+# p = 1.0 / mean_span = 1.0 / 1.0 = 1.0
+# log(1 - p) = log(1 - 1) = log(0) → UNDEFINED!
+```
+
+**Fix:**
+Added edge case handling at the start of the function:
+```python
+def sample_span_length_geometric(max_span_len: int, mean_span: float = 3.0) -> int:
+    # Edge case: if max_span_len is 1, always return 1 (no sampling needed)
+    if max_span_len <= 1:
+        return 1
+
+    # Edge case: if mean_span <= 1, always return 1 to avoid math domain error
+    if mean_span <= 1.0:
+        return 1
+
+    # ... rest of function
+```
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `pretrain_mlm.py:729-765` | Added edge case handling for max_span_len=1 and mean_span<=1.0 |
