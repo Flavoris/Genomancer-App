@@ -2190,8 +2190,10 @@ class DNAMLM(nn.Module):
         if labels is None:
             return logits, None
 
-        # Cross entropy with label smoothing to prevent mode collapse
-        # Label smoothing distributes probability mass, discouraging overconfident predictions
+        # Cross entropy loss computation
+        # NOTE: Do NOT use label_smoothing when special tokens are masked to -inf
+        # Label smoothing distributes probability mass to ALL classes including special tokens,
+        # and computing -smooth_target * log_softmax(-inf) = +inf causes numerical instability
         # CRITICAL: Force logits + loss to fp32 for numerical stability in mixed precision
         logits = logits.float()
         assert logits.dtype == torch.float32
@@ -2199,7 +2201,6 @@ class DNAMLM(nn.Module):
             logits.view(-1, logits.size(-1)),
             labels.view(-1),
             ignore_index=-100,
-            label_smoothing=0.1,  # Helps prevent mode collapse
         )
         return logits, loss
     
@@ -4734,12 +4735,13 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             else:
                 logits, _ = model(inputs, labels=None)
 
-            # Label smoothing=0.1 helps prevent mode collapse by distributing probability mass
+            # NOTE: Do NOT use label_smoothing here because the model masks special tokens
+            # by setting their logits to -inf. Label smoothing distributes probability mass
+            # to ALL classes, and -inf logits cause: -smooth_target * log(-inf) = +inf
             loss_unscaled = F.cross_entropy(
                 logits.float().view(-1, logits.size(-1)),
                 labels.view(-1),
                 ignore_index=-100,
-                label_smoothing=0.1,
             )
             numerics_checker.check_forward(logits, loss_unscaled)
 

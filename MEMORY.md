@@ -1073,3 +1073,28 @@ def sample_span_length_geometric(max_span_len: int, mean_span: float = 3.0) -> i
 | File | Change |
 |------|--------|
 | `pretrain_mlm.py:729-765` | Added edge case handling for max_span_len=1 and mean_span<=1.0 |
+
+### 2026-01-27: Fix +Inf Loss from Label Smoothing + Special Token Masking
+
+**Issue:**
+Training crashed with "NUMERICAL INSTABILITY DETECTED in 'loss'" showing `+Inf`.
+
+**Root Cause:**
+The model masks special tokens (IDs 0-4) by setting their logits to `-inf`. When combined with `label_smoothing=0.1`:
+```python
+# Label smoothing distributes 0.1/vocab_size probability to ALL classes
+# For special tokens: -smooth_target * log_softmax(-inf) = -0.0001 * (-inf) = +inf
+```
+
+**Fix:**
+Removed `label_smoothing=0.1` from cross_entropy loss computation in:
+1. Training loop (`pretrain_mlm.py:4737-4743`)
+2. Model's forward method (`pretrain_mlm.py:2193-2203`)
+
+The special token masking (setting logits to -inf) already prevents the model from predicting special tokens, so label smoothing is unnecessary and harmful.
+
+**Files Modified:**
+| File | Change |
+|------|--------|
+| `pretrain_mlm.py:4737-4743` | Removed label_smoothing from training loss |
+| `pretrain_mlm.py:2193-2203` | Removed label_smoothing from model forward |
