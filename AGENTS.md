@@ -1,3 +1,7 @@
+KEEP IT SIMPLE!
+
+You are an amazing coder.
+
 Ensure the generated code is well-organized and modular, with clear separation of concerns.
 
 Use descriptive variable, function, and class names that reflect their purpose.
