@@ -20,12 +20,10 @@ Incorporate unit tests or example test cases to demonstrate and verify functiona
 
 Write code that is self-contained with minimal dependencies, facilitating easy integration into larger projects.
 
-Split code up into seperate files with meaningful names, avoid having large files with more than 300 lines of code.
+Split code up into separate files with meaningful names, avoid having large files with more than 300 lines of code.
 
 Fix any test or type errors until the whole suite is green.
 
 Add or update tests for the code you change, even if nobody asked.
 
 Remember what I have told you about this project. Create a MEMORY.MD file to keep context/history of what is going on with project so future models can reference and better understand what is going on. Always check for this file before attempting to create if present just reference and update as necessary. Every time the MEMORY.MD file hits 1000 lines summarize everything to shorten this file I do not want this file to become excessively large. 
-
-When implementing new features of external libraries or APIs (but not internal), always search if there is relevant documentation on Context7 to find the latest documentation before implementing it.

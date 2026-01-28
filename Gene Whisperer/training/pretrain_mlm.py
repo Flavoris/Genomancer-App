@@ -4122,6 +4122,13 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         relative_position_num_buckets = int(cfg_run.get("relative_position_num_buckets", 32))
         relative_position_max_distance = int(cfg_run.get("relative_position_max_distance", 128))
 
+        # Modern architecture settings (RoPE, SwiGLU, RMSNorm)
+        use_rope = bool(cfg_run.get("use_rope", True))
+        rope_base = float(cfg_run.get("rope_base", 10000.0))
+        ffn_type = str(cfg_run.get("ffn_type", "swiglu"))
+        norm_type = str(cfg_run.get("norm_type", "rmsnorm"))
+        ffn_mult = float(cfg_run.get("ffn_mult", 2.67))
+
         encoder = DNAEncoder(
             vocab_size=len(vocab),
             embedding_dim=embedding_dim,
@@ -4134,6 +4141,11 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             use_relative_position_bias=use_relative_position_bias,
             relative_position_num_buckets=relative_position_num_buckets,
             relative_position_max_distance=relative_position_max_distance,
+            use_rope=use_rope,
+            rope_base=rope_base,
+            ffn_type=ffn_type,
+            norm_type=norm_type,
+            ffn_mult=ffn_mult,
         )
 
         special_token_ids = [vocab.mask_id, vocab.unk_id, vocab.pad_id]
@@ -4255,6 +4267,17 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     relative_position_num_buckets = int(cfg_run.get("relative_position_num_buckets", 32))
     relative_position_max_distance = int(cfg_run.get("relative_position_max_distance", 128))
 
+    # Modern architecture settings (RoPE, SwiGLU, RMSNorm)
+    # CRITICAL: These must be enabled for good MLM accuracy
+    use_rope = bool(cfg_run.get("use_rope", True))  # Default to True - RoPE is critical for MLM
+    rope_base = float(cfg_run.get("rope_base", 10000.0))
+    ffn_type = str(cfg_run.get("ffn_type", "swiglu"))  # Default to SwiGLU for better gradient flow
+    norm_type = str(cfg_run.get("norm_type", "rmsnorm"))  # Default to RMSNorm for faster training
+    ffn_mult = float(cfg_run.get("ffn_mult", 2.67))  # SwiGLU expansion ratio
+
+    LOGGER.info("Modern architecture: use_rope=%s, ffn_type=%s, norm_type=%s, ffn_mult=%.2f",
+                use_rope, ffn_type, norm_type, ffn_mult)
+
     encoder = DNAEncoder(
         vocab_size=len(vocab),
         embedding_dim=embedding_dim,
@@ -4267,6 +4290,11 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         use_relative_position_bias=use_relative_position_bias,
         relative_position_num_buckets=relative_position_num_buckets,
         relative_position_max_distance=relative_position_max_distance,
+        use_rope=use_rope,
+        rope_base=rope_base,
+        ffn_type=ffn_type,
+        norm_type=norm_type,
+        ffn_mult=ffn_mult,
     )
 
     tie_weights = bool(cfg_run.get("mlm_tie_weights", True))
@@ -5480,6 +5508,13 @@ def main(cfg: dict | None = None) -> dict:
         relative_position_num_buckets = int(cfg.get("relative_position_num_buckets", 32))
         relative_position_max_distance = int(cfg.get("relative_position_max_distance", 128))
 
+        # Modern architecture settings (RoPE, SwiGLU, RMSNorm)
+        use_rope = bool(cfg.get("use_rope", True))
+        rope_base = float(cfg.get("rope_base", 10000.0))
+        ffn_type = str(cfg.get("ffn_type", "swiglu"))
+        norm_type = str(cfg.get("norm_type", "rmsnorm"))
+        ffn_mult = float(cfg.get("ffn_mult", 2.67))
+
         encoder = DNAEncoder(
             vocab_size=len(vocab),
             embedding_dim=embedding_dim,
@@ -5492,6 +5527,11 @@ def main(cfg: dict | None = None) -> dict:
             use_relative_position_bias=use_relative_position_bias,
             relative_position_num_buckets=relative_position_num_buckets,
             relative_position_max_distance=relative_position_max_distance,
+            use_rope=use_rope,
+            rope_base=rope_base,
+            ffn_type=ffn_type,
+            norm_type=norm_type,
+            ffn_mult=ffn_mult,
         )
 
         special_token_ids = [vocab.mask_id, vocab.unk_id, vocab.pad_id]
@@ -5606,6 +5646,16 @@ def main(cfg: dict | None = None) -> dict:
     relative_position_num_buckets = int(cfg.get("relative_position_num_buckets", 32))
     relative_position_max_distance = int(cfg.get("relative_position_max_distance", 128))
 
+    # Modern architecture settings (RoPE, SwiGLU, RMSNorm) - CRITICAL for MLM accuracy
+    use_rope = bool(cfg.get("use_rope", True))
+    rope_base = float(cfg.get("rope_base", 10000.0))
+    ffn_type = str(cfg.get("ffn_type", "swiglu"))
+    norm_type = str(cfg.get("norm_type", "rmsnorm"))
+    ffn_mult = float(cfg.get("ffn_mult", 2.67))
+
+    LOGGER.info("Modern architecture: use_rope=%s, ffn_type=%s, norm_type=%s, ffn_mult=%.2f",
+                use_rope, ffn_type, norm_type, ffn_mult)
+
     encoder = DNAEncoder(
         vocab_size=len(vocab),
         embedding_dim=embedding_dim,
@@ -5618,6 +5668,11 @@ def main(cfg: dict | None = None) -> dict:
         use_relative_position_bias=use_relative_position_bias,
         relative_position_num_buckets=relative_position_num_buckets,
         relative_position_max_distance=relative_position_max_distance,
+        use_rope=use_rope,
+        rope_base=rope_base,
+        ffn_type=ffn_type,
+        norm_type=norm_type,
+        ffn_mult=ffn_mult,
     )
 
     # DNAMLM with weight tying (critical for lower loss)
