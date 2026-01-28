@@ -2311,6 +2311,8 @@ def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], DNABPETokenizer]:
         raise FileNotFoundError(f"FASTA file not found at {fasta_path}")
     # Use MLM-specific window size, fallback to max_bp_len for backward compatibility
     window_size = int(cfg.get("mlm_window_size", cfg.get("max_bp_len", 234)))
+    # CRITICAL: BPE tokenization must pad to mlm_max_token_len (token count), not window_size (bp)
+    max_token_len = int(cfg.get("mlm_max_token_len", 64))
     stride = int(cfg.get("mlm_stride", 20))
     k = 1  # BPE tokens are variable-length; k is unused but kept for call compatibility
     unknown_base_strategy = _normalize_unknown_base_strategy(cfg.get("mlm_unknown_base_strategy"))
@@ -2347,7 +2349,7 @@ def prepare_dataset(cfg) -> Tuple[List[torch.LongTensor], DNABPETokenizer]:
         include_reverse_complements=include_reverse_complements,
     )
     vocab = load_or_build_vocab(windows, k=k, vocab_path=vocab_path)
-    token_tensors = [vocab.tokenize_and_pad(window, window_size) for window in windows]
+    token_tensors = [vocab.tokenize_and_pad(window, max_token_len) for window in windows]
     return token_tensors, vocab
 
 
@@ -2857,7 +2859,7 @@ def run_streaming_dry_run(cfg: Dict[str, Any]) -> None:
 
     # Sample tokenization for a short sequence
     sample_seq = "ATGCATGCATGCATGCATGC"  # 20bp sample
-    sample_tokens = vocab.tokenize_and_pad(sample_seq, max_bp_len=len(sample_seq))
+    sample_tokens = vocab.tokenize_and_pad(sample_seq, max_token_len=len(sample_seq))
     print(f"sample_seq: '{sample_seq}' ({len(sample_seq)} bp)")
     print(f"sample_tokenization_length: {len(sample_tokens)} tokens")
 
@@ -3950,8 +3952,9 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             val_windows = train_windows
 
         vocab = load_or_build_vocab(train_windows, k=k, vocab_path=vocab_path)
-        train_token_tensors = [vocab.tokenize_and_pad(window, window_size) for window in train_windows]
-        val_token_tensors = [vocab.tokenize_and_pad(window, window_size) for window in val_windows]
+        max_token_len = int(cfg_run.get("mlm_max_token_len", 64))
+        train_token_tensors = [vocab.tokenize_and_pad(window, max_token_len) for window in train_windows]
+        val_token_tensors = [vocab.tokenize_and_pad(window, max_token_len) for window in val_windows]
         token_tensors = train_token_tensors
         train_dataset = MLMDataset(train_token_tensors)
         val_dataset = MLMDataset(val_token_tensors)
