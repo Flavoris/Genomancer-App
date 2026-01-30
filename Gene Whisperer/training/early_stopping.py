@@ -348,6 +348,10 @@ class PretrainingEarlyStopping(EarlyStopping):
             val_perplexity: Optional validation perplexity
             val_accuracy: Validation accuracy (required for smart stopping)
         """
+        # If already stopped in a previous epoch, keep the original stop reason.
+        if self.should_stop:
+            return True
+
         # Track metrics history
         if val_perplexity is not None:
             self.perplexity_history.append(val_perplexity)
@@ -426,20 +430,37 @@ class PretrainingEarlyStopping(EarlyStopping):
         max_in_window = max(recent_accuracies)
         range_in_window = max_in_window - min_in_window
 
-        if improvement < self.accuracy_stagnation_threshold and \
-           range_in_window < self.accuracy_stagnation_threshold * 2:
-            self.stop_reason = (
-                f"accuracy_stagnation (improvement={improvement:.4f} < "
-                f"{self.accuracy_stagnation_threshold:.4f} over {self.accuracy_stagnation_window} epochs)"
-            )
-            LOGGER.info(
-                f"Epoch {epoch}: Accuracy stagnation detected! "
-                f"Improvement over last {self.accuracy_stagnation_window} epochs: "
-                f"{improvement:.4f} (threshold: {self.accuracy_stagnation_threshold:.4f})"
-            )
-            return True
+        if not (
+            improvement < self.accuracy_stagnation_threshold
+            and range_in_window < self.accuracy_stagnation_threshold * 2
+        ):
+            return False
 
-        return False
+        # Guardrail: don't stop on accuracy stagnation if loss is still improving meaningfully
+        if len(self.loss_history) >= self.accuracy_stagnation_window:
+            recent_losses = list(self.loss_history)[-self.accuracy_stagnation_window:]
+            loss_improvement = recent_losses[0] - recent_losses[-1]
+            min_loss_improvement = self.min_delta * self.accuracy_stagnation_window
+            if loss_improvement >= min_loss_improvement:
+                LOGGER.info(
+                    "Epoch %d: Accuracy stagnation detected but loss improved by %.6f "
+                    "(>= %.6f); continuing training.",
+                    epoch,
+                    loss_improvement,
+                    min_loss_improvement,
+                )
+                return False
+
+        self.stop_reason = (
+            f"accuracy_stagnation (improvement={improvement:.4f} < "
+            f"{self.accuracy_stagnation_threshold:.4f} over {self.accuracy_stagnation_window} epochs)"
+        )
+        LOGGER.info(
+            f"Epoch {epoch}: Accuracy stagnation detected! "
+            f"Improvement over last {self.accuracy_stagnation_window} epochs: "
+            f"{improvement:.4f} (threshold: {self.accuracy_stagnation_threshold:.4f})"
+        )
+        return True
 
     def _check_diminishing_returns(self, epoch: int) -> bool:
         """Check if improvement rate has dropped below threshold (diminishing returns)."""

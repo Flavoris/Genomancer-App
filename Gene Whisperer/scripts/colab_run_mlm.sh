@@ -8,7 +8,7 @@
 #   # Auto mode (uses config; multi-kmer sequential if enabled):
 #   !bash "Gene Whisperer/scripts/colab_run_mlm.sh" --run_name my_experiment
 #
-#   # Force single k-mer pretraining:
+#   # Force single-tokenizer (BPE) pretraining:
 #   !bash "Gene Whisperer/scripts/colab_run_mlm.sh" --single_kmer --run_name my_single_run
 #
 #   # Force multi-kmer sequential pretraining (k=3,4,5,6):
@@ -107,10 +107,10 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --drive_dir DIR   Google Drive output directory (default: $DEFAULT_DRIVE_DIR)"
             echo "  --config PATH     Config file path relative to git root (default: $DEFAULT_CONFIG)"
-            echo "  --kmer K          K-mer size for single-kmer mode (optional)"
+            echo "  --kmer K          Legacy k-mer size flag (ignored for BPE single-tokenizer mode)"
             echo "  --run_name NAME   Run name for output directory (default: mlm_YYYYMMDD_HHMMSS)"
             echo "  --multi_kmer      Force multi-kmer sequential pretraining"
-            echo "  --single_kmer     Force single-kmer pretraining"
+            echo "  --single_kmer     Force single-tokenizer (BPE) pretraining"
             echo "  --kmers K1 K2     Specific k-mers to train (e.g., 3 4). Multi-kmer mode only"
             echo "  --resume          Resume from existing checkpoints (single) or skip existing (multi)"
             echo "  --force           Force retrain even if checkpoints exist (for multi-kmer mode)"
@@ -127,7 +127,7 @@ while [[ $# -gt 0 ]]; do
             echo "  # Multi-kmer with specific k-mers:"
             echo "  $0 --multi_kmer --kmers 3 4 --run_name my_run"
             echo ""
-            echo "  # Force single k-mer pretraining:"
+            echo "  # Force single-tokenizer (BPE) pretraining:"
             echo "  $0 --single_kmer --run_name my_single_run"
             echo ""
             echo "  # Resume interrupted multi-kmer training:"
@@ -334,7 +334,7 @@ if [[ "$PRETRAIN_MODE" == "auto" ]]; then
 fi
 
 if [[ "$PRETRAIN_MODE" == "multi" && -n "$KMER" ]]; then
-    log_error "--kmer is only valid in single-kmer mode"
+    log_error "--kmer is only valid in single-tokenizer mode (BPE); flag is legacy"
     exit 1
 fi
 
@@ -355,7 +355,7 @@ if [[ "$PRETRAIN_MODE" == "multi" ]]; then
         log_warn "Config pretrain_mode=$CONFIG_PRETRAIN_MODE (script runs sequential mode)"
     fi
 else
-    log_info "Mode: Single k-mer pretraining"
+    log_info "Mode: Single-tokenizer pretraining (BPE)"
 fi
 echo ""
 
@@ -374,7 +374,7 @@ if [[ "$PRETRAIN_MODE" == "single" ]]; then
         log_info "Found training checkpoint: $LATEST_CHECKPOINT"
         if [[ "$RESUME" == true ]]; then
             RESUME_ARG="--resume_path \"$LATEST_CHECKPOINT\""
-            log_info "Resume enabled for single-kmer pretraining"
+            log_info "Resume enabled for single-tokenizer pretraining"
         else
             log_info "Resume disabled; starting fresh"
         fi
@@ -430,8 +430,8 @@ if [[ "$PRETRAIN_MODE" == "multi" ]]; then
         TRAIN_CMD="$TRAIN_CMD --force"
     fi
 else
-    # Single k-mer mode: use pretrain_mlm.py
-    log_info "Mode: Single k-mer pretraining"
+    # Single-tokenizer mode (BPE): use pretrain_mlm.py
+    log_info "Mode: Single-tokenizer pretraining (BPE)"
     TRAIN_CMD="python pretrain_mlm.py --config \"$CONFIG_PATH\""
 
     # Add kmer argument if specified

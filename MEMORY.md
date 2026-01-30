@@ -57,3 +57,4 @@ _Last summarized: 2026-01-28_
 ## Recent Decisions / Notes
 - 2026-01-28: Biopython is helpful for parsing/annotation pipelines, but not required for core training/inference. Prefer keeping core loops dependency-light and performance-focused.
 - 2026-01-28: Fixed BPE MLM padding in non-streaming paths to use `mlm_max_token_len` (token count) instead of `mlm_window_size` (bp), and corrected dry-run sample tokenization arg; added unit test for padding length.
+- 2026-01-30: Pretraining early stopping no longer halts on accuracy stagnation while loss is still improving; added tests and preserved stop_reason once triggered. Colab MLM script logs now say single-tokenizer (BPE) instead of single k-mer.
