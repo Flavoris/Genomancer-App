@@ -210,8 +210,9 @@ mlm: &mlm
   mlm_batch_size: 128
   mlm_epochs: 200
   # MLM-specific learning rate (separate from stage training)
-  mlm_lr: 0.0005  # Increased from 0.0002 to help escape mode collapse
-  mlm_weight_decay: 0.01
+  # BERT uses 1e-4. Higher LR (5e-4) was causing convergence to suboptimal solutions.
+  mlm_lr: 0.0001  # Lowered from 0.0005 to match BERT's learning rate
+  mlm_weight_decay: 0.05  # Increased from 0.01 to prevent embedding weight explosion
   mlm_max_span_len: 1        # Independent token masking for BPE (tokens already multi-base)
   mlm_encoder_checkpoint: ../artifacts/mlm_encoder_bpe.pt
   mlm_embedding_dim: 384
@@ -219,6 +220,13 @@ mlm: &mlm
   mlm_transformer_heads: 12
   mlm_transformer_ff_dim: 1536
   mlm_transformer_dropout: 0.1
+  # MLM-specific architecture settings (override global model settings for pretraining)
+  # Modern LLM features (RoPE, SwiGLU, RMSNorm) were designed for autoregressive models.
+  # For bidirectional MLM, BERT-style architecture might work better.
+  # Set these to null to use global model settings, or override for MLM-specific config.
+  mlm_use_rope: false  # Disable RoPE for MLM - use learned position embeddings instead (BERT-style)
+  mlm_ffn_type: "gelu"  # Use standard GELU FFN instead of SwiGLU (BERT-style)
+  mlm_norm_type: "layernorm"  # Use LayerNorm instead of RMSNorm (BERT-style)
   mlm_tie_weights: true  # CRITICAL: Enable weight tying - shares embeddings between input/output for better MLM learning
   mlm_use_output_norm: true
   # BERT-style transform layer: Dense -> GELU -> LayerNorm before projection

@@ -151,7 +151,7 @@ def test_separate_training_phase_settings() -> None:
         f"mlm_window_size should be 234, got {cfg.get('mlm_window_size')}"
     )
     assert cfg.get("lr") == 0.00002, f"lr should be 0.00002, got {cfg.get('lr')}"
-    assert cfg.get("mlm_lr") == 0.0005, f"mlm_lr should be 0.0005, got {cfg.get('mlm_lr')}"
+    assert cfg.get("mlm_lr") == 0.0001, f"mlm_lr should be 0.0001 (BERT-style), got {cfg.get('mlm_lr')}"
     assert cfg.get("stage1_lr") == 0.00002, "stage1_lr should be 0.00002"
     assert cfg.get("stage2_lr") == 0.00001, "stage2_lr should be 0.00001"
 

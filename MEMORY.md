@@ -27,7 +27,8 @@ _Last summarized: 2026-01-28_
 - Early stopping: patience=10, min_delta=0.001, restore_best=true (SWA extends patience +10).
 - Model arch: use_rope=true, rope_base=10000.0, ffn_type="swiglu", ffn_mult=4.0, norm_type="rmsnorm".
 - Positional motif bias enabled with TATA, -10, TSS regions.
-- MLM pretraining: mlm_tie_weights=true (CRITICAL for learning), mlm_lr=0.0005.
+- MLM pretraining: mlm_tie_weights=true, mlm_lr=0.0001 (BERT-style), mlm_weight_decay=0.05.
+- MLM architecture: mlm_use_rope=false, mlm_ffn_type="gelu", mlm_norm_type="layernorm" (BERT-style for bidirectional).
 
 ## Inference/Robustness
 - TTA: average forward + reverse complement probabilities; configurable aggregation (mean or geometric mean).
@@ -63,15 +64,18 @@ _Last summarized: 2026-01-28_
   1. **Weight tying disabled** (`mlm_tie_weights: false`) - Now enabled.
   2. **FFN dimension too small** - `ffn_mult` was 2.67; increased to 4.0.
   - *Result: Performance did not improve (still 18% accuracy, loss 5.31)*
-- 2026-01-31: **MLM Performance Fix (Attempt 2) - CRITICAL**: Added BERT-style transform layer to DNAMLM head.
-  - **Root cause**: The MLM head was too simple - just `hidden -> output_norm -> lm_head`. BERT uses `hidden -> Dense -> GELU -> LayerNorm -> lm_head`.
-  - **Fix**: Added `use_transform_layer` parameter (default: True) that adds:
-    - `transform_dense`: Linear(hidden_dim, hidden_dim)
-    - `transform_act`: GELU activation
-    - `transform_norm`: LayerNorm(hidden_dim)
-  - **Config option**: `mlm_use_transform_layer: true` (added to config.yaml)
-  - **Files modified**: pretrain_mlm.py (DNAMLM class), pretrain_components/mlm_model.py, config.yaml, golden_batch.py, test_weight_tying.py, test_reproducibility.py
-  - This non-linearity before the output projection is CRITICAL for MLM - it gives the model capacity to learn the mapping from hidden states to vocabulary.
+- 2026-01-31: **MLM Performance Fix (Attempt 2)**: Added BERT-style transform layer (Dense+GELU+LN) to DNAMLM head.
+  - *Result: Performance still did not improve (18% accuracy, loss 5.32)*
+- 2026-01-31: **MLM Performance Fix (Attempt 3) - BERT-STYLE ARCHITECTURE**:
+  - **Hypothesis**: Modern LLM features (RoPE, SwiGLU, RMSNorm) were designed for AUTOREGRESSIVE models, not bidirectional MLM.
+  - **Changes**:
+    1. Lowered LR: 0.0005 → 0.0001 (match BERT)
+    2. Increased weight decay: 0.01 → 0.05 (prevent embedding explosion - was growing 3x)
+    3. Added MLM-specific architecture overrides in config.yaml:
+       - `mlm_use_rope: false` - Use learned position embeddings (BERT-style)
+       - `mlm_ffn_type: "gelu"` - Standard GELU FFN instead of SwiGLU
+       - `mlm_norm_type: "layernorm"` - LayerNorm instead of RMSNorm
+  - **Files modified**: config.yaml, pretrain_mlm.py (4 encoder sites), tests/test_config.py
 - 2026-01-30: **Code Refactoring**: Split large files into modular components for maintainability:
   - `model_components/` package: norm.py, ffn.py, layers.py, encoder.py, features.py, classifier.py (imports: `from model_components import DNAEncoder, RMSNorm, SwiGLU`)
   - `pretrain_components/` package: mlm_model.py with DNAMLM class (imports: `from pretrain_components import DNAMLM`)
