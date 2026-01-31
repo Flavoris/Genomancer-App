@@ -86,8 +86,8 @@ model: &model
   bpe_vocab_path: ../artifacts/vocabs/bpe_vocab.json
   vocab_size: 4096
   pad_token_id: 0
-  max_token_len: 24          # For 81bp fine-tuning sequences (~4x BPE compression + headroom)
-  mlm_max_token_len: 64      # For 234bp MLM pre-training sequences
+  max_token_len: 20          # For 81bp fine-tuning sequences (max_tokens + 10% headroom)
+  mlm_max_token_len: 53      # For 234bp MLM pre-training sequences (max_tokens + 10% headroom)
 
 # == SIMPLIFIED MODEL SETTINGS ==
 # The simplified architecture removes CNN/TCN layers which were shown
