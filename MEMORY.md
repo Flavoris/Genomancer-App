@@ -22,11 +22,12 @@ _Last summarized: 2026-01-28_
 - `Gene Whisperer/training/tta.py` (TTA/RC)
 - `Gene Whisperer/training/ensemble_infer.py`, `evaluate_ensemble.py`, `ensemble_weights.py`
 
-## Current Defaults / Recommended Config (as of 2026-01-28)
+## Current Defaults / Recommended Config (as of 2026-01-30)
 - Regularization: transformer_dropout=0.20, classifier_dropout=0.20, weight_decay=0.05, label_smoothing=0.1, mixup_alpha=0.2.
 - Early stopping: patience=10, min_delta=0.001, restore_best=true (SWA extends patience +10).
-- Model arch: use_rope=true, rope_base=10000.0, ffn_type="swiglu", ffn_mult=2.67, norm_type="rmsnorm".
+- Model arch: use_rope=true, rope_base=10000.0, ffn_type="swiglu", ffn_mult=4.0, norm_type="rmsnorm".
 - Positional motif bias enabled with TATA, -10, TSS regions.
+- MLM pretraining: mlm_tie_weights=true (CRITICAL for learning), mlm_lr=0.0005.
 
 ## Inference/Robustness
 - TTA: average forward + reverse complement probabilities; configurable aggregation (mean or geometric mean).
@@ -58,3 +59,14 @@ _Last summarized: 2026-01-28_
 - 2026-01-28: Biopython is helpful for parsing/annotation pipelines, but not required for core training/inference. Prefer keeping core loops dependency-light and performance-focused.
 - 2026-01-28: Fixed BPE MLM padding in non-streaming paths to use `mlm_max_token_len` (token count) instead of `mlm_window_size` (bp), and corrected dry-run sample tokenization arg; added unit test for padding length.
 - 2026-01-30: Pretraining early stopping no longer halts on accuracy stagnation while loss is still improving; added tests and preserved stop_reason once triggered. Colab MLM script logs now say single-tokenizer (BPE) instead of single k-mer.
+- 2026-01-30: **MLM Performance Fix**: Identified root causes of poor MLM performance (18% accuracy, loss 5.29):
+  1. **Weight tying disabled** (`mlm_tie_weights: false`) - Now enabled. Weight tying is CRITICAL for MLM as it shares embeddings between input and output, making learning easier.
+  2. **FFN dimension too small** - `ffn_mult` was 2.67 giving ~1025 hidden dim; increased to 4.0 to match intended 1536 FFN dim.
+- 2026-01-30: **Code Refactoring**: Split large files into modular components for maintainability:
+  - `model_components/` package: norm.py, ffn.py, layers.py, encoder.py, features.py, classifier.py (imports: `from model_components import DNAEncoder, RMSNorm, SwiGLU`)
+  - `pretrain_components/` package: mlm_model.py with DNAMLM class (imports: `from pretrain_components import DNAMLM`)
+  - Original `model.py` and `pretrain_mlm.py` unchanged for backward compatibility; new modules provide cleaner imports.
+- 2026-01-30: **Added new genomes**: C_elegans_genome and H_influenzae_genome added to:
+  - `colab_download_genomes.sh` for Google Drive download
+  - `config.yaml` mlm_fasta_paths for MLM pretraining
+  - Deleted old BPE vocab (`bpe_vocab.json`) - **must recreate vocab** before next training run to capture patterns from new species.

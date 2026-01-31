@@ -58,7 +58,7 @@ model: &model
   glu_activation: "gelu"  # Legacy param for GLU FFN
   # SwiGLU and RMSNorm settings (modern LLM architecture from LLaMA/PaLM)
   ffn_type: "swiglu"  # Options: "gelu" (standard), "glu" (GLUFFN), "swiglu" (LLaMA/PaLM style)
-  ffn_mult: 2.67  # SwiGLU expansion ratio (2.67x instead of 4x due to gating)
+  ffn_mult: 4.0  # SwiGLU expansion ratio - 4x gives ~1536 FFN dim with 384 embedding for better capacity
   norm_type: "rmsnorm"  # Options: "layernorm", "rmsnorm" (LLaMA/Mistral style)
   use_relative_position_bias: false  # Disabled when using RoPE
   relative_position_num_buckets: 32
@@ -200,7 +200,9 @@ mlm: &mlm
     - ../data/human_genome
     - ../data/pseudomonas_genome
     - ../data/japanese_rice_genome
-  mlm_species_weights: [0.45, 0.35, 0.20, 0.20, 0.20, 0.20]
+    - ../data/C_elegans_genome
+    - ../data/H_influenzae_genome
+  mlm_species_weights: [0.45, 0.35, 0.20, 0.20, 0.20, 0.20, 0.20, 0.20]
   mlm_steps_per_epoch: 5000
   mlm_unknown_base_strategy: "skip"
   mlm_window_size: 234  # DNABERT style: pretrain on longer sequences (10-510bp), fine-tune on task-specific
@@ -217,7 +219,7 @@ mlm: &mlm
   mlm_transformer_heads: 12
   mlm_transformer_ff_dim: 1536
   mlm_transformer_dropout: 0.1
-  mlm_tie_weights: false  # Disabled to help prevent mode collapse (allows different input/output representations)
+  mlm_tie_weights: true  # CRITICAL: Enable weight tying - shares embeddings between input/output for better MLM learning
   mlm_use_output_norm: true
   # CLIP-style projection uses normalized cosine similarity - NOT recommended for MLM
   # Standard linear projection (mlm_use_clip_projection: false) achieves much higher accuracy

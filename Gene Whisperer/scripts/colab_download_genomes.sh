@@ -52,6 +52,8 @@ done
 declare -a LARGE_GENOMES=(
     "human_genome"
     "japanese_rice_genome"
+    "C_elegans_genome"
+    "H_influenzae_genome"
 )
 
 # =============================================================================
