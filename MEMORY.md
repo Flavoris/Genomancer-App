@@ -59,9 +59,19 @@ _Last summarized: 2026-01-28_
 - 2026-01-28: Biopython is helpful for parsing/annotation pipelines, but not required for core training/inference. Prefer keeping core loops dependency-light and performance-focused.
 - 2026-01-28: Fixed BPE MLM padding in non-streaming paths to use `mlm_max_token_len` (token count) instead of `mlm_window_size` (bp), and corrected dry-run sample tokenization arg; added unit test for padding length.
 - 2026-01-30: Pretraining early stopping no longer halts on accuracy stagnation while loss is still improving; added tests and preserved stop_reason once triggered. Colab MLM script logs now say single-tokenizer (BPE) instead of single k-mer.
-- 2026-01-30: **MLM Performance Fix**: Identified root causes of poor MLM performance (18% accuracy, loss 5.29):
-  1. **Weight tying disabled** (`mlm_tie_weights: false`) - Now enabled. Weight tying is CRITICAL for MLM as it shares embeddings between input and output, making learning easier.
-  2. **FFN dimension too small** - `ffn_mult` was 2.67 giving ~1025 hidden dim; increased to 4.0 to match intended 1536 FFN dim.
+- 2026-01-30: **MLM Performance Fix (Attempt 1)**: Identified initial issues:
+  1. **Weight tying disabled** (`mlm_tie_weights: false`) - Now enabled.
+  2. **FFN dimension too small** - `ffn_mult` was 2.67; increased to 4.0.
+  - *Result: Performance did not improve (still 18% accuracy, loss 5.31)*
+- 2026-01-31: **MLM Performance Fix (Attempt 2) - CRITICAL**: Added BERT-style transform layer to DNAMLM head.
+  - **Root cause**: The MLM head was too simple - just `hidden -> output_norm -> lm_head`. BERT uses `hidden -> Dense -> GELU -> LayerNorm -> lm_head`.
+  - **Fix**: Added `use_transform_layer` parameter (default: True) that adds:
+    - `transform_dense`: Linear(hidden_dim, hidden_dim)
+    - `transform_act`: GELU activation
+    - `transform_norm`: LayerNorm(hidden_dim)
+  - **Config option**: `mlm_use_transform_layer: true` (added to config.yaml)
+  - **Files modified**: pretrain_mlm.py (DNAMLM class), pretrain_components/mlm_model.py, config.yaml, golden_batch.py, test_weight_tying.py, test_reproducibility.py
+  - This non-linearity before the output projection is CRITICAL for MLM - it gives the model capacity to learn the mapping from hidden states to vocabulary.
 - 2026-01-30: **Code Refactoring**: Split large files into modular components for maintainability:
   - `model_components/` package: norm.py, ffn.py, layers.py, encoder.py, features.py, classifier.py (imports: `from model_components import DNAEncoder, RMSNorm, SwiGLU`)
   - `pretrain_components/` package: mlm_model.py with DNAMLM class (imports: `from pretrain_components import DNAMLM`)

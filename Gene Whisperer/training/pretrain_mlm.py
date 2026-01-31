@@ -2053,16 +2053,18 @@ def verify_no_leakage(
 class DNAMLM(nn.Module):
     """
     Masked Language Model wrapper around DNAEncoder.
-    
+
     Key improvements for lower loss:
     1. Weight tying between embedding and LM head (BERT-style)
     2. Bias in LM head for better output distribution modeling
     3. Optional output layer norm before projection
-    4. **Special token exclusion**: [MASK], <UNK>, <PAD> are excluded from 
+    4. **BERT-style transform layer**: Dense + GELU + LayerNorm before projection
+       This is CRITICAL - BERT uses this to add non-linearity before the output
+    5. **Special token exclusion**: [MASK], <UNK>, <PAD> are excluded from
        prediction space by setting their logits to -inf. This prevents the
        model from "cheating" by predicting special tokens.
     """
-    
+
     def __init__(
         self,
         encoder: DNAEncoder,
@@ -2071,12 +2073,14 @@ class DNAMLM(nn.Module):
         tie_weights: bool = True,  # CRITICAL: tie embedding weights for better learning
         use_output_norm: bool = True,  # Additional layer norm before LM head
         use_clip_projection: bool = False,  # CLIP-style normalized projection (NOT recommended for MLM)
+        use_transform_layer: bool = True,  # BERT-style Dense+GELU+LN before projection (CRITICAL)
     ):
         super().__init__()
         self.encoder = encoder
         self.vocab_size = vocab_size
         self.tie_weights = tie_weights
         self.use_clip_projection = use_clip_projection
+        self.use_transform_layer = use_transform_layer
 
         # Store special token IDs to exclude from prediction
         # These will have their logits set to -inf before softmax/loss
@@ -2087,13 +2091,39 @@ class DNAMLM(nn.Module):
                 self.special_token_ids
             )
 
+        hidden_dim = encoder.embedding_dim
+
+        # BERT-style transform layer: Dense -> GELU -> LayerNorm
+        # This is CRITICAL for good MLM performance - BERT uses this to add
+        # non-linearity before the output projection. Without this, the model
+        # struggles to learn the mapping from hidden states to vocabulary.
+        if use_transform_layer:
+            self.transform_dense = nn.Linear(hidden_dim, hidden_dim)
+            self.transform_act = nn.GELU()
+            self.transform_norm = nn.LayerNorm(hidden_dim)
+            LOGGER.info("BERT-style transform layer enabled (Dense -> GELU -> LayerNorm)")
+            # Initialize transform layer
+            nn.init.trunc_normal_(self.transform_dense.weight, std=0.02, a=-0.04, b=0.04)
+            nn.init.zeros_(self.transform_dense.bias)
+        else:
+            self.transform_dense = None
+            self.transform_act = None
+            self.transform_norm = None
+            LOGGER.warning(
+                "Transform layer disabled. This is NOT recommended - "
+                "BERT uses Dense+GELU+LN before projection for better performance."
+            )
+
         # Optional output layer norm (helps with distribution matching)
+        # Note: If transform_layer is used, this is redundant but kept for compatibility
         self.use_output_norm = use_output_norm
-        if use_output_norm:
-            self.output_norm = nn.LayerNorm(encoder.embedding_dim)
+        if use_output_norm and not use_transform_layer:
+            self.output_norm = nn.LayerNorm(hidden_dim)
+        else:
+            self.output_norm = None
 
         # LM head with bias (bias helps model output distribution)
-        self.lm_head = nn.Linear(encoder.embedding_dim, vocab_size, bias=True)
+        self.lm_head = nn.Linear(hidden_dim, vocab_size, bias=True)
 
         # CLIP-style projection uses a learnable temperature scale
         # NOTE: This is NOT recommended for MLM - standard projection works better
@@ -2165,8 +2195,14 @@ class DNAMLM(nn.Module):
         """
         x = self.encoder(token_ids, key_padding_mask=key_padding_mask)
 
-        # Optional output norm before projection
-        if self.use_output_norm:
+        # BERT-style transform: Dense -> GELU -> LayerNorm
+        # This is CRITICAL for good MLM performance
+        if self.use_transform_layer:
+            x = self.transform_dense(x)
+            x = self.transform_act(x)
+            x = self.transform_norm(x)
+        elif self.use_output_norm and self.output_norm is not None:
+            # Fallback: just output norm (legacy behavior, not recommended)
             x = self.output_norm(x)
 
         # Compute logits using either standard or CLIP-style projection
@@ -4159,6 +4195,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
             tie_weights=bool(cfg_run.get("mlm_tie_weights", True)),
             use_output_norm=bool(cfg_run.get("mlm_use_output_norm", True)),
             use_clip_projection=bool(cfg_run.get("mlm_use_clip_projection", False)),
+            use_transform_layer=bool(cfg_run.get("mlm_use_transform_layer", True)),
         )
 
         metadata = {
@@ -4303,6 +4340,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
     tie_weights = bool(cfg_run.get("mlm_tie_weights", True))
     use_output_norm = bool(cfg_run.get("mlm_use_output_norm", True))
     use_clip_projection = bool(cfg_run.get("mlm_use_clip_projection", False))
+    use_transform_layer = bool(cfg_run.get("mlm_use_transform_layer", True))
 
     special_token_ids = [vocab.mask_id, vocab.unk_id, vocab.pad_id]
     LOGGER.info(
@@ -4319,6 +4357,7 @@ def run_mlm_pretrain(cfg: dict, *, overrides: dict | None = None) -> dict:
         tie_weights=tie_weights,
         use_output_norm=use_output_norm,
         use_clip_projection=use_clip_projection,
+        use_transform_layer=use_transform_layer,
     ).to(device)
 
     # Log model device placement
@@ -5545,6 +5584,7 @@ def main(cfg: dict | None = None) -> dict:
             tie_weights=bool(cfg.get("mlm_tie_weights", True)),
             use_output_norm=bool(cfg.get("mlm_use_output_norm", True)),
             use_clip_projection=bool(cfg.get("mlm_use_clip_projection", False)),
+            use_transform_layer=bool(cfg.get("mlm_use_transform_layer", True)),
         )
 
         metadata = {
@@ -5682,6 +5722,7 @@ def main(cfg: dict | None = None) -> dict:
     tie_weights = bool(cfg.get("mlm_tie_weights", True))
     use_output_norm = bool(cfg.get("mlm_use_output_norm", True))
     use_clip_projection = bool(cfg.get("mlm_use_clip_projection", False))
+    use_transform_layer = bool(cfg.get("mlm_use_transform_layer", True))
 
     # CRITICAL: Exclude special tokens from prediction space
     # This prevents the model from "cheating" by predicting [MASK], <UNK>, <PAD>
@@ -5689,7 +5730,7 @@ def main(cfg: dict | None = None) -> dict:
     special_token_ids = [vocab.mask_id, vocab.unk_id, vocab.pad_id]
     LOGGER.info("Special tokens excluded from predictions: [MASK]=%d, <UNK>=%d, <PAD>=%d",
                 vocab.mask_id, vocab.unk_id, vocab.pad_id)
-    
+
     model = DNAMLM(
         encoder,
         vocab_size=len(vocab),
@@ -5697,6 +5738,7 @@ def main(cfg: dict | None = None) -> dict:
         tie_weights=tie_weights,
         use_output_norm=use_output_norm,
         use_clip_projection=use_clip_projection,
+        use_transform_layer=use_transform_layer,
     ).to(device)
 
     # Count parameters (accounting for weight tying)

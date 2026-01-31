@@ -43,6 +43,7 @@ def create_test_model(
         special_token_ids=[vocab_size - 1, vocab_size - 2, vocab_size - 3],
         tie_weights=tie_weights,
         use_output_norm=True,
+        use_transform_layer=True,  # BERT-style Dense+GELU+LN before projection
     )
     
     return model

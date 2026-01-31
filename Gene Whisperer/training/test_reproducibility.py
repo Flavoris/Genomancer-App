@@ -148,6 +148,7 @@ class TestGoldenBatch(unittest.TestCase):
             special_token_ids=special_token_ids,
             tie_weights=True,
             use_output_norm=True,
+            use_transform_layer=True,  # BERT-style Dense+GELU+LN before projection
         )
         
         return model, train_loader, vocab

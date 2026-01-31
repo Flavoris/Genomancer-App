@@ -474,6 +474,7 @@ def main() -> None:
         special_token_ids=special_token_ids,
         tie_weights=True,
         use_output_norm=True,
+        use_transform_layer=True,  # BERT-style Dense+GELU+LN before projection
     )
     
     if args.generate:

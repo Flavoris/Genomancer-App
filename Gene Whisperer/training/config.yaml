@@ -221,6 +221,9 @@ mlm: &mlm
   mlm_transformer_dropout: 0.1
   mlm_tie_weights: true  # CRITICAL: Enable weight tying - shares embeddings between input/output for better MLM learning
   mlm_use_output_norm: true
+  # BERT-style transform layer: Dense -> GELU -> LayerNorm before projection
+  # This is CRITICAL for good MLM performance - BERT uses this for non-linearity before output
+  mlm_use_transform_layer: true
   # CLIP-style projection uses normalized cosine similarity - NOT recommended for MLM
   # Standard linear projection (mlm_use_clip_projection: false) achieves much higher accuracy
   mlm_use_clip_projection: false

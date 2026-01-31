@@ -28,7 +28,9 @@ class DNAMLM(nn.Module):
     1. Weight tying between embedding and LM head (BERT-style)
     2. Bias in LM head for better output distribution modeling
     3. Optional output layer norm before projection
-    4. Special token exclusion: [MASK], <UNK>, <PAD> are excluded from
+    4. **BERT-style transform layer**: Dense + GELU + LayerNorm before projection
+       This is CRITICAL - BERT uses this to add non-linearity before the output
+    5. Special token exclusion: [MASK], <UNK>, <PAD> are excluded from
        prediction space by setting their logits to -inf.
     """
 
@@ -40,12 +42,14 @@ class DNAMLM(nn.Module):
         tie_weights: bool = True,
         use_output_norm: bool = True,
         use_clip_projection: bool = False,
+        use_transform_layer: bool = True,  # BERT-style Dense+GELU+LN before projection (CRITICAL)
     ):
         super().__init__()
         self.encoder = encoder
         self.vocab_size = vocab_size
         self.tie_weights = tie_weights
         self.use_clip_projection = use_clip_projection
+        self.use_transform_layer = use_transform_layer
 
         self.special_token_ids = special_token_ids or []
         if self.special_token_ids:
@@ -54,11 +58,34 @@ class DNAMLM(nn.Module):
                 self.special_token_ids
             )
 
-        self.use_output_norm = use_output_norm
-        if use_output_norm:
-            self.output_norm = nn.LayerNorm(encoder.embedding_dim)
+        hidden_dim = encoder.embedding_dim
 
-        self.lm_head = nn.Linear(encoder.embedding_dim, vocab_size, bias=True)
+        # BERT-style transform layer: Dense -> GELU -> LayerNorm
+        # This is CRITICAL for good MLM performance
+        if use_transform_layer:
+            self.transform_dense = nn.Linear(hidden_dim, hidden_dim)
+            self.transform_act = nn.GELU()
+            self.transform_norm = nn.LayerNorm(hidden_dim)
+            LOGGER.info("BERT-style transform layer enabled (Dense -> GELU -> LayerNorm)")
+            nn.init.trunc_normal_(self.transform_dense.weight, std=0.02, a=-0.04, b=0.04)
+            nn.init.zeros_(self.transform_dense.bias)
+        else:
+            self.transform_dense = None
+            self.transform_act = None
+            self.transform_norm = None
+            LOGGER.warning(
+                "Transform layer disabled. This is NOT recommended - "
+                "BERT uses Dense+GELU+LN before projection for better performance."
+            )
+
+        # Optional output layer norm (helps with distribution matching)
+        self.use_output_norm = use_output_norm
+        if use_output_norm and not use_transform_layer:
+            self.output_norm = nn.LayerNorm(hidden_dim)
+        else:
+            self.output_norm = None
+
+        self.lm_head = nn.Linear(hidden_dim, vocab_size, bias=True)
 
         if use_clip_projection:
             self.logit_scale = nn.Parameter(torch.tensor(10.0))
@@ -108,7 +135,12 @@ class DNAMLM(nn.Module):
         """
         x = self.encoder(token_ids, key_padding_mask=key_padding_mask)
 
-        if self.use_output_norm:
+        # BERT-style transform: Dense -> GELU -> LayerNorm
+        if self.use_transform_layer:
+            x = self.transform_dense(x)
+            x = self.transform_act(x)
+            x = self.transform_norm(x)
+        elif self.use_output_norm and self.output_norm is not None:
             x = self.output_norm(x)
 
         if self.use_clip_projection:
