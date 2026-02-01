@@ -30,7 +30,7 @@ Remember what I have told you about this project. Create a MEMORY.MD file to kee
 
 The memory will take on two layers. If there is not a memory folder create one. Within the memory folder there should be:
 - memory/YYYY-MM-DD.md
-    - Daily log (append-only)
+    - Daily log
     - Read today + yesterday
 
 - MEMORY.md

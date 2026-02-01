@@ -1,86 +1,58 @@
-# Gene Whisperer Project Memory (Condensed)
+# Genomancer Long-Term Memory
 
-_Last summarized: 2026-01-28_
+## Project Overview
+Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transformer-based models for promoter prediction. The project uses:
+- BPE tokenization (DNABERT-2 style) with 4096 vocabulary
+- 12-layer transformer encoder with 384 embedding dim
+- Two-stage training: MLM pretraining → supervised fine-tuning
 
-## Overview
-- DNA promoter classification with a transformer-only architecture.
-- Stage 1: promoter vs non-promoter. Stage 2: strong vs weak promoters.
-- Primary model variants: v5 (simplified transformer-only) and v6 (modern transformer with RoPE/SwiGLU/RMSNorm/positional bias/GQA).
+## Key Architecture Decisions
 
-## Architecture Highlights
-- Embedding -> N transformer blocks -> attention pooling -> classifier.
-- Optional engineered features concatenated pre-classifier in combined variants.
-- V6: ModernTransformerBlock with RoPE attention, optional GQA, SwiGLU FFN, RMSNorm, positional motif bias (first layer).
-- RoPE and positional motif bias are compatible; relative position bias is disabled when RoPE is on.
+### MLM Pretraining Settings (Updated 2026-02-01)
+- **LR**: 0.0005 (increased from 0.0001 - too conservative for DNA)
+- **Weight Decay**: 0.01 (reduced from 0.05 - was slowing learning)
+- **Effective Batch**: 512 (reduced from 2048 for faster learning)
+- **Warmup**: 2% of training (reduced from 6%)
+- **Architecture**: BERT-style (LayerNorm, GELU, no RoPE) for bidirectional MLM
 
-## Key Files
-- `Gene Whisperer/training/config.yaml`
-- `Gene Whisperer/training/model.py` (v5 + common blocks)
-- `Gene Whisperer/training/model_v6.py` (v6)
-- `Gene Whisperer/training/train_stage1.py` (Stage 1 training)
-- `Gene Whisperer/training/pretrain_mlm.py` (MLM pretraining)
-- `Gene Whisperer/training/tta.py` (TTA/RC)
-- `Gene Whisperer/training/ensemble_infer.py`, `evaluate_ensemble.py`, `ensemble_weights.py`
+### Why 18% MLM Accuracy is Hard to Improve
+1. **DNA is fundamentally harder than text for MLM**
+   - Random baseline: 0.02% (1/4091 tokens)
+   - Text has strong grammar patterns; DNA has weaker biological patterns
+   - BPE tokens may not capture biological motifs well
 
-## Current Defaults / Recommended Config (as of 2026-01-30)
-- Regularization: transformer_dropout=0.20, classifier_dropout=0.20, weight_decay=0.05, label_smoothing=0.1, mixup_alpha=0.2.
-- Early stopping: patience=10, min_delta=0.001, restore_best=true (SWA extends patience +10).
-- Model arch: use_rope=true, rope_base=10000.0, ffn_type="swiglu", ffn_mult=4.0, norm_type="rmsnorm".
-- Positional motif bias enabled with TATA, -10, TSS regions.
-- MLM pretraining: mlm_tie_weights=true, mlm_lr=0.0001 (BERT-style), mlm_weight_decay=0.05.
-- MLM architecture: mlm_use_rope=false, mlm_ffn_type="gelu", mlm_norm_type="layernorm" (BERT-style for bidirectional).
+2. **Masking strategy creates a hard problem**
+   - 80% [MASK]: must predict from context (hardest)
+   - 10% random: must ignore misleading input
+   - 10% unchanged: theoretically easy but model doesn't know which is which
 
-## Inference/Robustness
-- TTA: average forward + reverse complement probabilities; configurable aggregation (mean or geometric mean).
-- Bidirectional consistency loss for training (alpha=0.3) to enforce strand agreement.
+3. **Diagnostic findings (2026-02-01)**
+   - Model CAN overfit to 100% on fixed batch (architecture works)
+   - Model struggles on random DNA (no patterns to learn)
+   - Real DNA reaches 18% (learning biological patterns)
 
-## Ensemble
-- Soft-voting weights optimized and persisted in `artifacts/ensemble_weights.json`.
-- `ensemble_infer.py` can load optimized weights and apply TTA.
+## Current Issues
 
-## Data Pipeline & Performance
-- BPE tokenizer uses greedy longest-match (fast) rather than merge-iteration.
-- Dataset pre-caches tokens and engineered features for forward and reverse complement.
-- DataLoader prefetch_factor increased to 4 to improve GPU utilization.
+### MLM Accuracy Plateau (18%)
+- **Status**: Being addressed
+- **Root Cause**: Combination of low LR, large effective batch, and inherent difficulty of DNA MLM
+- **Fix Applied**: Increased LR 5x, reduced batch 4x, faster warmup
 
-## MLM Pretraining (BPE) — Critical Fixes Summary
-- BPE vocab: 4096 tokens; default `mlm_max_token_len=64` for 234bp windows.
-- Fixed padding bug: tokenization now pads to `max_token_len`, not `window_bp`.
-- Fixed 80/10/10 masking: random replacement excludes special tokens (IDs 0-4).
-- Masking config now passes `max_span_len`, `span_distribution`, `mean_span`, `exclude_special_from_labels`.
-- Removed label_smoothing in MLM loss due to `-inf` logits for special tokens.
-- Disabled CLIP-style projection for MLM (`mlm_use_clip_projection=false`).
-- Modern arch params (RoPE/SwiGLU/RMSNorm/ffn_mult) are now passed into MLM encoders.
+## Important Files
+- config.yaml - Main training configuration
+- pretrain_mlm.py - MLM pretraining script
+- pretrain_components/mlm_model.py - DNAMLM model
+- bpe_tokenizer.py - BPE tokenizer
+- diagnose_mlm_issue.py - Diagnostic tool
 
-## Known Gotchas
-- RoPE and relative position bias are mutually exclusive (bias is ignored when RoPE is on).
-- For BPE MLM, `mlm_max_span_len=1` is important to avoid masking too much context.
+## Test Commands
+\`\`\`bash
+# Run all tests
+python -m pytest tests/ -x -q
 
-## Recent Decisions / Notes
-- 2026-01-28: Biopython is helpful for parsing/annotation pipelines, but not required for core training/inference. Prefer keeping core loops dependency-light and performance-focused.
-- 2026-01-28: Fixed BPE MLM padding in non-streaming paths to use `mlm_max_token_len` (token count) instead of `mlm_window_size` (bp), and corrected dry-run sample tokenization arg; added unit test for padding length.
-- 2026-01-30: Pretraining early stopping no longer halts on accuracy stagnation while loss is still improving; added tests and preserved stop_reason once triggered. Colab MLM script logs now say single-tokenizer (BPE) instead of single k-mer.
-- 2026-01-30: **MLM Performance Fix (Attempt 1)**: Identified initial issues:
-  1. **Weight tying disabled** (`mlm_tie_weights: false`) - Now enabled.
-  2. **FFN dimension too small** - `ffn_mult` was 2.67; increased to 4.0.
-  - *Result: Performance did not improve (still 18% accuracy, loss 5.31)*
-- 2026-01-31: **MLM Performance Fix (Attempt 2)**: Added BERT-style transform layer (Dense+GELU+LN) to DNAMLM head.
-  - *Result: Performance still did not improve (18% accuracy, loss 5.32)*
-- 2026-01-31: **MLM Performance Fix (Attempt 3) - BERT-STYLE ARCHITECTURE**:
-  - **Hypothesis**: Modern LLM features (RoPE, SwiGLU, RMSNorm) were designed for AUTOREGRESSIVE models, not bidirectional MLM.
-  - **Changes**:
-    1. Lowered LR: 0.0005 → 0.0001 (match BERT)
-    2. Increased weight decay: 0.01 → 0.05 (prevent embedding explosion - was growing 3x)
-    3. Added MLM-specific architecture overrides in config.yaml:
-       - `mlm_use_rope: false` - Use learned position embeddings (BERT-style)
-       - `mlm_ffn_type: "gelu"` - Standard GELU FFN instead of SwiGLU
-       - `mlm_norm_type: "layernorm"` - LayerNorm instead of RMSNorm
-  - **Files modified**: config.yaml, pretrain_mlm.py (4 encoder sites), tests/test_config.py
-- 2026-01-30: **Code Refactoring**: Split large files into modular components for maintainability:
-  - `model_components/` package: norm.py, ffn.py, layers.py, encoder.py, features.py, classifier.py (imports: `from model_components import DNAEncoder, RMSNorm, SwiGLU`)
-  - `pretrain_components/` package: mlm_model.py with DNAMLM class (imports: `from pretrain_components import DNAMLM`)
-  - Original `model.py` and `pretrain_mlm.py` unchanged for backward compatibility; new modules provide cleaner imports.
-- 2026-01-30: **Added new genomes**: C_elegans_genome and H_influenzae_genome added to:
-  - `colab_download_genomes.sh` for Google Drive download
-  - `config.yaml` mlm_fasta_paths for MLM pretraining
-  - Deleted old BPE vocab (`bpe_vocab.json`) - **must recreate vocab** before next training run to capture patterns from new species.
+# Run MLM-specific tests
+python -m pytest training/tests/test_mlm_quality.py training/tests/test_colab_run_mlm.py -x -q
+
+# Run diagnostic
+python Gene\ Whisperer/training/diagnose_mlm_issue.py
+\`\`\`

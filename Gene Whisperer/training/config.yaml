@@ -210,9 +210,11 @@ mlm: &mlm
   mlm_batch_size: 128
   mlm_epochs: 200
   # MLM-specific learning rate (separate from stage training)
-  # BERT uses 1e-4. Higher LR (5e-4) was causing convergence to suboptimal solutions.
-  mlm_lr: 0.0001  # Lowered from 0.0005 to match BERT's learning rate
-  mlm_weight_decay: 0.05  # Increased from 0.01 to prevent embedding weight explosion
+  # Linear scaling rule: LR ∝ effective_batch. BERT uses 1e-4 with batch 256.
+  # With effective batch 512 (128 * 4), we use 2e-4.
+  # Previously 1e-4 was too conservative and caused slow convergence.
+  mlm_lr: 0.0005  # Increased from 0.0001 - linear scaling for effective batch 512
+  mlm_weight_decay: 0.01  # Reduced from 0.05 - too high weight decay slows learning
   mlm_max_span_len: 1        # Independent token masking for BPE (tokens already multi-base)
   mlm_encoder_checkpoint: ../artifacts/mlm_encoder_bpe.pt
   mlm_embedding_dim: 384
@@ -241,9 +243,9 @@ mlm: &mlm
   mlm_val_exclude_patterns: ["mitochond", "plastid", "chloroplast"]
   mlm_min_val_records_per_species: 1
   mlm_single_record_val_ratio: 0.1
-  mlm_grad_accum_steps: 16  # Effective batch = 128 * 16 = 2048 (DNABERT uses 2000)
-  mlm_warmup_ratio: 0.06
-  mlm_final_lr_ratio: 0.1
+  mlm_grad_accum_steps: 4   # Effective batch = 128 * 4 = 512 (reduced from 2048 for faster learning)
+  mlm_warmup_ratio: 0.02    # Reduced from 0.06 - faster ramp-up to peak LR
+  mlm_final_lr_ratio: 0.05  # Reduced from 0.1 - allows more learning before full decay
   mlm_lr_log_interval: 50
   mlm_patience: 30
   mlm_checkpoint_keep_last: 2
