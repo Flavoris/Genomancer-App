@@ -8,7 +8,7 @@ import numpy as np
 
 def _load_compute_pseeiip():
     project_root = Path(__file__).resolve().parent
-    training_dir = project_root / "Gene Whisperer" / "training"
+    training_dir = project_root / "gene_whisperer" / "training"
     if not training_dir.exists():
         raise SystemExit(f"Training directory not found: {training_dir}")
     sys.path.insert(0, str(training_dir))

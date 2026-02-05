@@ -1,5 +1,0 @@
-Variant,Val Acc,Val MCC,Val AUC,Params,Time (s),Best Epoch,Best Threshold
-transformer_only,0.8234,0.6486,0.8945,23023873,1077.8,12,0.6100
-features_only,0.8285,0.6582,0.8875,345345,165.6,39,0.5000
-combined,0.8307,0.6644,0.8940,23516289,1264.9,16,0.4700
-original,0.8293,0.6587,0.8954,39934436,1265.6,21,0.7000

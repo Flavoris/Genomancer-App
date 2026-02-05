@@ -1,0 +1,29 @@
+mlm:
+  fasta_paths:
+    - gene_whisperer/data/GCF_000005845.2_ASM584v2_genomic.fna
+    - gene_whisperer/data/B_subtilis_genome
+    - gene_whisperer/data/S_cerevisiae_genome
+    - gene_whisperer/data/human_genome
+    - gene_whisperer/data/pseudomonas_genome
+    - gene_whisperer/data/japanese_rice_genome
+  tokenizer_path: gene_whisperer/artifacts/bpe_tokenizer.json
+  vocab_size: 4096
+  max_length: 256
+  window_size: 234
+  mask_prob: 0.15
+
+model:
+  embedding_dim: 256
+  num_layers: 6
+  num_heads: 8
+  ff_dim: 1024
+  dropout: 0.1
+
+training:
+  batch_size: 64
+  epochs: 5
+  lr: 0.0005
+  weight_decay: 0.01
+  grad_accum_steps: 1
+  seed: 1337
+  output_dir: gene_whisperer/artifacts/mlm

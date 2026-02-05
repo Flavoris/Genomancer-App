@@ -1,1 +1,0 @@
-epoch,train_loss,val_loss,gap_loss,train_masked_acc,val_masked_acc,gap_acc,embedding_weight_norm,grad_norm,lr

@@ -73,7 +73,7 @@ def main() -> int:
 
     initial_cwd = Path.cwd()
     repo_root = Path(__file__).resolve().parents[1]
-    training_dir = repo_root / "Gene Whisperer" / "training"
+    training_dir = repo_root / "gene_whisperer" / "training"
     if not training_dir.exists():
         raise SystemExit(f"Training dir not found: {training_dir}")
 

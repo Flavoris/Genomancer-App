@@ -16,14 +16,12 @@ def test_pre_training_checklist_passes_default_config() -> None:
 def test_pre_training_checklist_fails_for_bad_config(tmp_path: Path) -> None:
     bad_config = {
         "training": {
-            "stage1_lr": 0.00003,
+            "lr": 0.0001,
             "grad_accum_steps": 2,
-            "warmup_ratio": 0.05,
-            "early_stopping_patience": 30,
-            "layer_lr_decay": 1.0,
+            "batch_size": 32,
         },
-        "data": {"batch_size": 8},
-        "loss": {"stage1_use_focal_loss": False},
+        "mlm": {"mask_prob": 0.1, "vocab_size": 1024},
+        "model": {"embedding_dim": 128, "num_layers": 4},
     }
     config_path = tmp_path / "config.yaml"
     with config_path.open("w", encoding="utf-8") as handle:

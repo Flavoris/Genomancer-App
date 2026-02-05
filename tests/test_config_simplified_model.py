@@ -18,14 +18,13 @@ REMOVED_MODEL_KEYS = (
 )
 
 
-def test_simplified_model_block_present() -> None:
+def test_model_block_present() -> None:
     config = load_config(DEFAULT_CONFIG_PATH)
-    simplified = config.get("simplified_model")
-    assert isinstance(simplified, dict)
-    assert simplified["pooling_type"] == "attention"
-    assert simplified["classifier_hidden"] == 256
-    assert simplified["classifier_dropout"] == 0.15
-    assert simplified["fusion_method"] == "concat"
+    model = config.get("model")
+    assert isinstance(model, dict)
+    assert model["embedding_dim"] == 256
+    assert model["num_layers"] == 6
+    assert model["max_length"] == 128
 
 
 def test_removed_model_options_absent() -> None:

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+__test__ = False
+
 import argparse
 from pathlib import Path
 from typing import Any
@@ -72,7 +74,7 @@ def main() -> int:
 
     script_dir = Path(__file__).resolve().parent
     repo_root = script_dir.parent
-    training_dir = repo_root / "Gene Whisperer" / "training"
+    training_dir = repo_root / "gene_whisperer" / "training"
     if not training_dir.exists():
         raise SystemExit(f"Training dir not found: {training_dir}")
 

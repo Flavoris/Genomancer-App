@@ -1,7 +1,0 @@
-{
-  "avg_dataloader_time_ms": 3.5106941778212786,
-  "avg_forward_backward_time_ms": 107.60754997842014,
-  "avg_optimizer_step_time_ms": 23.07428795999537,
-  "num_profile_steps": 50,
-  "profile_trace_path": "/Users/flavorisbelue/Desktop/Genomancer/Gene Whisperer/runs/stage1_20251225_180953/profile_trace.json"
-}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Validate Gene Whisperer training config against msBERT-aligned settings.
+Validate gene_whisperer fine-tuning config defaults.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ except ImportError as exc:  # pragma: no cover - exercised in CLI usage
 
 CHECK_MARK = "\u2713"
 DEFAULT_CONFIG_PATH = (
-    Path(__file__).resolve().parent / "Gene Whisperer" / "training" / "config.yaml"
+    Path(__file__).resolve().parent / "gene_whisperer" / "configs" / "finetune.yaml"
 )
 FLOAT_TOLERANCE = 1e-12
 
@@ -31,18 +31,14 @@ class ConfigCheck:
 
 CONFIG_CHECKS: Sequence[ConfigCheck] = (
     ConfigCheck("lr", 0.00002, ("training",)),
-    ConfigCheck("stage1_lr", 0.00002, ("training",)),
-    ConfigCheck("stage2_lr", 0.00001, ("training",)),
-    ConfigCheck("batch_size", 16, ("data",)),
-    ConfigCheck("grad_accum_steps", 4, ("training",)),
-    ConfigCheck("stage1_use_focal_loss", False, ("loss",)),
-    ConfigCheck("stage1_focal_alpha", 0.25, ("loss",)),
-    ConfigCheck("stage1_focal_gamma", 2.0, ("loss",)),
-    ConfigCheck("label_smoothing", 0.1, ("loss",)),
-    ConfigCheck("warmup_ratio", 0.10, ("training",)),
-    ConfigCheck("early_stopping_patience", 10, ("training",)),
-    ConfigCheck("mlm_max_bp_len", 234, ("mlm_data", "mlm")),
-    ConfigCheck("mlm_window_size", 234, ("mlm_data", "mlm")),
+    ConfigCheck("batch_size", 64, ("training",)),
+    ConfigCheck("grad_accum_steps", 1, ("training",)),
+    ConfigCheck("use_llrd", True, ("training",)),
+    ConfigCheck("layer_decay", 0.9, ("training",)),
+    ConfigCheck("embedding_dim", 256, ("model",)),
+    ConfigCheck("num_layers", 6, ("model",)),
+    ConfigCheck("max_length", 128, ("model",)),
+    ConfigCheck("use_pstnp", True, ("stage1",)),
 )
 
 
@@ -138,22 +134,15 @@ def validate_config_values(config: dict[str, Any]) -> tuple[list[str], dict[str,
 def print_success(values: dict[str, Any]) -> None:
     print("CONFIG VALIDATION PASSED")
     print()
-    print(f"stage1_lr: {_format_scalar(values.get('stage1_lr'))} {CHECK_MARK}")
+    print(f"lr: {_format_scalar(values.get('lr'))} {CHECK_MARK}")
     print(f"batch_size: {_format_scalar(values.get('batch_size'))} {CHECK_MARK}")
     print(f"grad_accum_steps: {_format_scalar(values.get('grad_accum_steps'))} {CHECK_MARK}")
     print(
         "effective_batch_size: "
         f"{_format_scalar(values.get('effective_batch_size'))} {CHECK_MARK}"
     )
-    print(
-        "stage1_use_focal_loss: "
-        f"{_format_scalar(values.get('stage1_use_focal_loss'))} {CHECK_MARK}"
-    )
-    print(f"warmup_ratio: {_format_scalar(values.get('warmup_ratio'))} {CHECK_MARK}")
-    print(
-        "early_stopping_patience: "
-        f"{_format_scalar(values.get('early_stopping_patience'))} {CHECK_MARK}"
-    )
+    print(f"use_llrd: {_format_scalar(values.get('use_llrd'))} {CHECK_MARK}")
+    print(f"layer_decay: {_format_scalar(values.get('layer_decay'))} {CHECK_MARK}")
 
 
 def print_errors(errors: Sequence[str]) -> None:
@@ -164,7 +153,7 @@ def print_errors(errors: Sequence[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Validate config.yaml against msBERT-aligned settings"
+        description="Validate finetune.yaml defaults for gene_whisperer"
     )
     parser.add_argument(
         "--config",

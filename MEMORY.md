@@ -1,19 +1,19 @@
 # Genomancer Long-Term Memory
 
 ## Project Overview
-Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transformer-based models for promoter prediction. The project uses:
-- BPE tokenization (DNABERT-2 style) with 4096 vocabulary
-- 12-layer transformer encoder with 384 embedding dim
-- Two-stage training: MLM pretraining → supervised fine-tuning
+Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transformer-based models for promoter prediction. The current (2026-02-04) rebuild uses:
+- Custom BPE tokenizer (DNABERT2-inspired) with 4096 vocab
+- Lightweight transformer encoder (default: 6 layers, 256 embedding dim) for mobile-friendly deployment
+- Two-stage training: MLM pretraining → supervised fine-tuning (stage1 promoter vs non, stage2 strong vs weak)
+- PROCABLES-style engineered features (CKSNAP, TNC, PseEIIP, PSTNP, GC/AT) fused with transformer embeddings
 
 ## Key Architecture Decisions
 
-### MLM Pretraining Settings (Updated 2026-02-01)
-- **LR**: 0.0005 (increased from 0.0001 - too conservative for DNA)
-- **Weight Decay**: 0.01 (reduced from 0.05 - was slowing learning)
-- **Effective Batch**: 512 (reduced from 2048 for faster learning)
-- **Warmup**: 2% of training (reduced from 6%)
-- **Architecture**: BERT-style (LayerNorm, GELU, no RoPE) for bidirectional MLM
+### Current Config Locations (2026-02-04)
+- `gene_whisperer/configs/pretrain.yaml` - MLM pretraining config
+- `gene_whisperer/configs/finetune.yaml` - stage1/stage2 fine-tuning config
+- `gene_whisperer/artifacts/bpe_tokenizer.json` - saved tokenizer
+- `gene_whisperer/artifacts/finetune/pstnp_stage*.json` - saved PSTNP matrices
 
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
@@ -31,28 +31,18 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
    - Model struggles on random DNA (no patterns to learn)
    - Real DNA reaches 18% (learning biological patterns)
 
-## Current Issues
-
-### MLM Accuracy Plateau (18%)
-- **Status**: Being addressed
-- **Root Cause**: Combination of low LR, large effective batch, and inherent difficulty of DNA MLM
-- **Fix Applied**: Increased LR 5x, reduced batch 4x, faster warmup
+## Legacy Notes (Before Reset)
+The previous Gene Whisperer folder was moved out of the repo for a clean rebuild. Older notes about MLM accuracy plateaus (18%) and 12-layer/384-dim configs are retained only as historical context.
 
 ## Important Files
-- config.yaml - Main training configuration
-- pretrain_mlm.py - MLM pretraining script
-- pretrain_components/mlm_model.py - DNAMLM model
-- bpe_tokenizer.py - BPE tokenizer
-- diagnose_mlm_issue.py - Diagnostic tool
+- `gene_whisperer/tokenization/bpe.py` - BPE tokenizer implementation
+- `gene_whisperer/features/engineered.py` - engineered features + PSTNP
+- `gene_whisperer/models/` - transformer, MLM head, promoter classifier
+- `gene_whisperer/training/pretrain_mlm.py` - MLM pretraining script
+- `gene_whisperer/training/finetune_promoter.py` - fine-tuning script
 
 ## Test Commands
 \`\`\`bash
 # Run all tests
-python -m pytest tests/ -x -q
-
-# Run MLM-specific tests
-python -m pytest training/tests/test_mlm_quality.py training/tests/test_colab_run_mlm.py -x -q
-
-# Run diagnostic
-python Gene\ Whisperer/training/diagnose_mlm_issue.py
+python -m pytest -q
 \`\`\`

@@ -16,7 +16,7 @@ import yaml
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-TRAINING_DIR = REPO_ROOT / "Gene Whisperer" / "training"
+TRAINING_DIR = REPO_ROOT / "gene_whisperer" / "training"
 sys.path.insert(0, str(TRAINING_DIR))
 
 from dataset import KmerVocabulary  # noqa: E402

@@ -1,1 +1,0 @@
-{"step": 50, "epoch": 2, "loss": 3.892205046415329, "masked_accuracy": 0.12020737137203166, "unk_rate": 0.0, "pad_masked_rate": 0.0, "mask_coverage": 0.1413124533929903, "grad_norm": 0.0, "param_norm": 111.87501776038702, "lr": 0.00017513606342945632, "span_histogram": {"1": 41852, "2": 25062, "3": 34024}, "avg_span_length": 1.9224474429848026}

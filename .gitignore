@@ -3,6 +3,15 @@
 Gene Whisperer/data/human_genome
 Gene Whisperer/data/japanese_rice_genome
 
+# Large genome files - new Gene Whisperer layout
+gene_whisperer/data/*_genome
+gene_whisperer/data/*.fna
+gene_whisperer/data/*.fa
+gene_whisperer/data/*.fasta
+gene_whisperer/data/*.fna.gz
+gene_whisperer/data/*.fa.gz
+gene_whisperer/data/*.fasta.gz
+
 # Python
 __pycache__/
 *.py[cod]
@@ -28,10 +37,15 @@ Thumbs.db
 # Training artifacts (large files)
 Gene Whisperer/artifacts/checkpoints/
 Gene Whisperer/artifacts/mlm_encoder_k*.pt
+gene_whisperer/artifacts/
+gene_whisperer/runs/
 
 # Logs
 *.log
 runs/
+
+# Build outputs
+.build/
 
 # Local prompt scratchpad
 prompt.txt

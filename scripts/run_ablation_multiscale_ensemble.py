@@ -266,7 +266,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    training_dir = REPO_ROOT / "Gene Whisperer" / "training"
+    training_dir = REPO_ROOT / "gene_whisperer" / "training"
     if not training_dir.exists():
         raise SystemExit(f"Training dir not found: {training_dir}")
 

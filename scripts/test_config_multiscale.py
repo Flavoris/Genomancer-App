@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+__test__ = False
+
 from pathlib import Path
 
 import yaml
@@ -7,7 +9,7 @@ import yaml
 def _load_config() -> tuple[dict, Path]:
     script_dir = Path(__file__).resolve().parent
     repo_root = script_dir.parent
-    cfg_path = repo_root / "Gene Whisperer" / "training" / "config.yaml"
+    cfg_path = repo_root / "gene_whisperer" / "training" / "config.yaml"
     if not cfg_path.exists():
         raise FileNotFoundError(f"config.yaml not found at {cfg_path}")
     with cfg_path.open("r", encoding="utf-8") as handle:

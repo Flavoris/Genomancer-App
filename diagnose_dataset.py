@@ -195,7 +195,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("Gene Whisperer/training/config.yaml"),
+        default=Path("gene_whisperer/configs/finetune.yaml"),
         help="Path to config.yaml containing stage1 dataset locations.",
     )
     parser.add_argument(

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pre-training checklist for Gene Whisperer configuration values.
+Pre-training checklist for gene_whisperer configuration values.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ except ImportError as exc:  # pragma: no cover - exercised in CLI usage
 
 
 DEFAULT_CONFIG_PATH = (
-    Path(__file__).resolve().parent / "Gene Whisperer" / "training" / "config.yaml"
+    Path(__file__).resolve().parent / "gene_whisperer" / "configs" / "pretrain.yaml"
 )
 FLOAT_TOLERANCE = 1e-12
 
@@ -32,53 +32,53 @@ class ConfigCheck:
 
 CHECKS: Sequence[ConfigCheck] = (
     ConfigCheck(
-        label="stage1_lr",
-        keys=("stage1_lr", "lr"),
-        expected=0.00002,
+        label="mlm_lr",
+        keys=("lr",),
+        expected=0.0005,
         operator="==",
         sections=("training",),
     ),
     ConfigCheck(
         label="batch_size",
         keys=("batch_size",),
-        expected=16,
+        expected=64,
         operator="==",
-        sections=("data",),
+        sections=("training",),
     ),
     ConfigCheck(
         label="grad_accum_steps",
         keys=("grad_accum_steps",),
-        expected=4,
+        expected=1,
         operator="==",
         sections=("training",),
     ),
     ConfigCheck(
-        label="stage1_use_focal_loss",
-        keys=("stage1_use_focal_loss",),
-        expected=False,
-        operator="==",
-        sections=("loss",),
-    ),
-    ConfigCheck(
-        label="warmup_ratio",
-        keys=("warmup_ratio",),
-        expected=0.10,
+        label="mask_prob",
+        keys=("mask_prob",),
+        expected=0.15,
         operator=">=",
-        sections=("training",),
+        sections=("mlm",),
     ),
     ConfigCheck(
-        label="early_stopping_patience",
-        keys=("early_stopping_patience",),
-        expected=15,
-        operator="<=",
-        sections=("training",),
+        label="vocab_size",
+        keys=("vocab_size",),
+        expected=4096,
+        operator="==",
+        sections=("mlm",),
     ),
     ConfigCheck(
-        label="layer_lr_decay",
-        keys=("layer_lr_decay",),
-        expected=1.0,
-        operator="<",
-        sections=("training",),
+        label="embedding_dim",
+        keys=("embedding_dim",),
+        expected=256,
+        operator="==",
+        sections=("model",),
+    ),
+    ConfigCheck(
+        label="num_layers",
+        keys=("num_layers",),
+        expected=6,
+        operator="==",
+        sections=("model",),
     ),
 )
 

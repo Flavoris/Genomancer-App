@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+__test__ = False
+
 import argparse
 import json
 import math
@@ -11,7 +13,7 @@ import yaml
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-TRAINING_DIR = REPO_ROOT / "Gene Whisperer" / "training"
+TRAINING_DIR = REPO_ROOT / "gene_whisperer" / "training"
 
 
 def _load_config(config_path: Path) -> dict[str, Any]:
