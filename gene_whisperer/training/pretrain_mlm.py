@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -32,8 +32,12 @@ class PretrainConfig:
     max_length: int
     window_size: int
     mask_prob: float
+    max_bases_per_file: int | None
     batch_size: int
     epochs: int
+    samples_per_epoch: int
+    log_interval: int
+    num_workers: int
     lr: float
     weight_decay: float
     grad_accum_steps: int
@@ -46,21 +50,39 @@ class PretrainConfig:
     output_dir: Path
 
 
+def _resolve_path(path_str: str, base_dir: Path) -> Path:
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+    return (base_dir / path).resolve()
+
+
 def _load_config(path: Path) -> PretrainConfig:
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
+
+    config_dir = path.parent
     mlm = data["mlm"]
     model = data["model"]
     training = data["training"]
+
+    max_bases_per_file = mlm.get("max_bases_per_file")
+    if max_bases_per_file is not None:
+        max_bases_per_file = int(max_bases_per_file)
+
     return PretrainConfig(
-        fasta_paths=[Path(p) for p in mlm["fasta_paths"]],
-        tokenizer_path=Path(mlm["tokenizer_path"]),
+        fasta_paths=[_resolve_path(str(p), config_dir) for p in mlm["fasta_paths"]],
+        tokenizer_path=_resolve_path(str(mlm["tokenizer_path"]), config_dir),
         vocab_size=int(mlm["vocab_size"]),
         max_length=int(mlm["max_length"]),
         window_size=int(mlm["window_size"]),
         mask_prob=float(mlm.get("mask_prob", 0.15)),
+        max_bases_per_file=max_bases_per_file,
         batch_size=int(training["batch_size"]),
         epochs=int(training["epochs"]),
+        samples_per_epoch=int(training.get("samples_per_epoch", 4096)),
+        log_interval=max(1, int(training.get("log_interval", 50))),
+        num_workers=max(0, int(training.get("num_workers", 0))),
         lr=float(training["lr"]),
         weight_decay=float(training["weight_decay"]),
         grad_accum_steps=int(training.get("grad_accum_steps", 1)),
@@ -70,23 +92,52 @@ def _load_config(path: Path) -> PretrainConfig:
         ff_dim=int(model["ff_dim"]),
         dropout=float(model.get("dropout", 0.1)),
         seed=int(training.get("seed", 1337)),
-        output_dir=Path(training["output_dir"]),
+        output_dir=_resolve_path(str(training["output_dir"]), config_dir),
     )
 
 
 def _maybe_train_tokenizer(config: PretrainConfig, sequences: List[str]) -> BPETokenizer:
     if config.tokenizer_path.exists():
+        print(f"Loading tokenizer: {config.tokenizer_path}", flush=True)
         return BPETokenizer.load(config.tokenizer_path)
+
+    print(
+        f"Training tokenizer with vocab_size={config.vocab_size} on {len(sequences)} sequences",
+        flush=True,
+    )
     tokenizer = BPETokenizer.train(sequences, vocab_size=config.vocab_size)
     tokenizer.save(config.tokenizer_path)
+    print(f"Saved tokenizer: {config.tokenizer_path}", flush=True)
     return tokenizer
+
+
+def _print_device_info(device: torch.device) -> None:
+    print(f"Using device: {device}", flush=True)
+    if device.type == "cuda":
+        gpu_name = torch.cuda.get_device_name(0)
+        print(f"GPU: {gpu_name}", flush=True)
 
 
 def train(config: PretrainConfig) -> None:
     set_seed(config.seed)
-    sequences = load_fasta_sequences(config.fasta_paths)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _print_device_info(device)
+
+    print("Loading genome sequences...", flush=True)
+    load_start = time.time()
+    sequences = load_fasta_sequences(
+        config.fasta_paths,
+        max_bases_per_file=config.max_bases_per_file,
+        verbose=True,
+    )
     if not sequences:
         raise ValueError("No genome sequences loaded for MLM")
+
+    total_bases = sum(len(sequence) for sequence in sequences)
+    print(
+        f"Loaded {len(sequences)} sequences ({total_bases:,} bases) in {time.time() - load_start:.1f}s",
+        flush=True,
+    )
 
     tokenizer = _maybe_train_tokenizer(config, sequences)
 
@@ -96,9 +147,19 @@ def train(config: PretrainConfig) -> None:
         window_size=config.window_size,
         max_length=config.max_length,
         mask_prob=config.mask_prob,
+        num_samples=config.samples_per_epoch,
         seed=config.seed,
     )
-    loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
+
+    pin_memory = device.type == "cuda"
+    loader = DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=config.num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=config.num_workers > 0,
+    )
 
     transformer_cfg = TransformerConfig(
         vocab_size=len(tokenizer.vocab),
@@ -110,46 +171,78 @@ def train(config: PretrainConfig) -> None:
         dropout=config.dropout,
         pad_token_id=tokenizer.pad_token_id,
     )
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = DNAMLMModel(MLMConfig(transformer=transformer_cfg)).to(device)
 
     optimizer = build_optimizer(
-        model, TrainingConfig(lr=config.lr, weight_decay=config.weight_decay)
+        model,
+        TrainingConfig(lr=config.lr, weight_decay=config.weight_decay),
     )
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
-    step = 0
-    for epoch in range(config.epochs):
+    batches_per_epoch = len(loader)
+    print(
+        "Training setup: "
+        f"epochs={config.epochs} batches_per_epoch={batches_per_epoch} "
+        f"batch_size={config.batch_size} grad_accum={config.grad_accum_steps}",
+        flush=True,
+    )
+
+    global_step = 0
+    for epoch in range(1, config.epochs + 1):
+        epoch_start = time.time()
         model.train()
         total_loss = 0.0
         optimizer.zero_grad()
-        for batch in loader:
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device)
+
+        for batch_idx, batch in enumerate(loader, start=1):
+            input_ids = batch["input_ids"].to(device, non_blocking=pin_memory)
+            attention_mask = batch["attention_mask"].to(device, non_blocking=pin_memory)
+            labels = batch["labels"].to(device, non_blocking=pin_memory)
+
             logits = model(input_ids, attention_mask)
-            loss = loss_fn(
-                logits.view(-1, logits.size(-1)), labels.view(-1)
-            )
-            loss = loss / config.grad_accum_steps
-            loss.backward()
+            loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
+            scaled_loss = loss / config.grad_accum_steps
+            scaled_loss.backward()
             total_loss += loss.item()
-            if (step + 1) % config.grad_accum_steps == 0:
+
+            if batch_idx % config.grad_accum_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-            step += 1
-        avg_loss = total_loss / max(1, len(loader))
-        print(f"Epoch {epoch + 1}/{config.epochs} - loss: {avg_loss:.4f}")
+                global_step += 1
+
+            if batch_idx % config.log_interval == 0 or batch_idx == batches_per_epoch:
+                print(
+                    f"Epoch {epoch}/{config.epochs} "
+                    f"batch {batch_idx}/{batches_per_epoch} "
+                    f"loss={loss.item():.4f}",
+                    flush=True,
+                )
+
+        if batches_per_epoch % config.grad_accum_steps != 0:
+            optimizer.step()
+            optimizer.zero_grad()
+            global_step += 1
+
+        avg_loss = total_loss / max(1, batches_per_epoch)
+        elapsed = time.time() - epoch_start
+        print(
+            f"Epoch {epoch}/{config.epochs} complete "
+            f"avg_loss={avg_loss:.4f} epoch_time={elapsed:.1f}s global_step={global_step}",
+            flush=True,
+        )
 
         checkpoint = {
             "model_state": model.state_dict(),
-            "epoch": epoch + 1,
+            "epoch": epoch,
             "loss": avg_loss,
+            "global_step": global_step,
             "config": config.__dict__,
         }
-        torch.save(checkpoint, config.output_dir / f"mlm_epoch_{epoch + 1}.pt")
+        checkpoint_path = config.output_dir / f"mlm_epoch_{epoch}.pt"
+        torch.save(checkpoint, checkpoint_path)
+        print(f"Saved checkpoint: {checkpoint_path}", flush=True)
 
 
 def main() -> None:
@@ -161,7 +254,7 @@ def main() -> None:
         help="Path to pretraining config",
     )
     args = parser.parse_args()
-    config = _load_config(args.config)
+    config = _load_config(args.config.resolve())
     train(config)
 
 

@@ -23,6 +23,8 @@ python gene_whisperer/training/finetune_promoter.py --config gene_whisperer/conf
 ## Notes
 
 - Genome FASTA paths are configured in `gene_whisperer/configs/pretrain.yaml`.
+- `training.samples_per_epoch` controls how many random MLM windows are trained per epoch.
+- `mlm.max_bases_per_file` can cap FASTA read size for faster Colab bring-up runs.
 - The tokenizer is saved to `gene_whisperer/artifacts/bpe_tokenizer.json`.
 - PSTNP matrices are saved to `gene_whisperer/artifacts/finetune/pstnp_stage*.json`.
 - Keep configs small for iPhone deployment; the defaults target a lightweight encoder.

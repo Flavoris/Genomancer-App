@@ -15,6 +15,12 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
 - `gene_whisperer/artifacts/bpe_tokenizer.json` - saved tokenizer
 - `gene_whisperer/artifacts/finetune/pstnp_stage*.json` - saved PSTNP matrices
 
+### Colab Pretraining Notes (2026-02-08)
+- MLM pretraining now prints startup/device and per-batch progress logs.
+- Pretraining config now includes `training.samples_per_epoch`, `training.log_interval`, and `training.num_workers`.
+- FASTA loading supports `mlm.max_bases_per_file` for faster smoke runs on very large genomes.
+- Config paths are resolved relative to the YAML file location to avoid Colab cwd issues.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)
