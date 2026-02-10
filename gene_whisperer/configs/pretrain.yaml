@@ -25,7 +25,11 @@ model:
 
 training:
   batch_size: 64
-  epochs: 5
+  epochs: 100
+  min_epochs: 10
+  early_stopping_patience: 8
+  early_stopping_min_delta: 0.01
+  save_best_only: true
   samples_per_epoch: 5000
   log_interval: 20
   num_workers: 2

@@ -29,6 +29,11 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
   - `mlm.tokenizer_window_size`
 - These tokenizer limits improve runtime stability and do not cap MLM pretraining data unless `mlm.max_bases_per_file` is set.
 
+### MLM Stop/Save Policy (2026-02-10)
+- MLM pretraining no longer stops at a fixed small epoch count by default.
+- Training now uses early stopping on loss with configurable `min_epochs`, `early_stopping_patience`, and `early_stopping_min_delta`.
+- Checkpoint policy defaults to best-only (`save_best_only: true`), writing `mlm_best.pt` instead of saving every epoch checkpoint.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)

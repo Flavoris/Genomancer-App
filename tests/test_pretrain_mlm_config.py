@@ -6,7 +6,10 @@ import yaml
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
 
-from gene_whisperer.training.pretrain_mlm import _load_config, _sample_tokenizer_corpus
+from gene_whisperer.training.pretrain_config import (
+    load_pretrain_config,
+    sample_tokenizer_corpus,
+)
 
 
 def test_load_config_defaults_and_relative_paths(tmp_path: Path) -> None:
@@ -43,7 +46,7 @@ def test_load_config_defaults_and_relative_paths(tmp_path: Path) -> None:
     with config_path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(config_data, handle, sort_keys=False)
 
-    config = _load_config(config_path)
+    config = load_pretrain_config(config_path)
 
     assert config.fasta_paths[0] == (tmp_path / "data" / "test.fna").resolve()
     assert config.tokenizer_path == (tmp_path / "artifacts" / "tokenizer.json").resolve()
@@ -55,6 +58,10 @@ def test_load_config_defaults_and_relative_paths(tmp_path: Path) -> None:
     assert config.tokenizer_max_bases is None
     assert config.tokenizer_max_sequences is None
     assert config.tokenizer_window_size == 2048
+    assert config.min_epochs == 1
+    assert config.early_stopping_patience == 10
+    assert config.early_stopping_min_delta == 0.0
+    assert config.save_best_only is True
 
 
 def test_load_config_with_optional_fields(tmp_path: Path) -> None:
@@ -82,6 +89,10 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
         "training": {
             "batch_size": 16,
             "epochs": 3,
+            "min_epochs": 2,
+            "early_stopping_patience": 4,
+            "early_stopping_min_delta": 0.05,
+            "save_best_only": False,
             "samples_per_epoch": 500,
             "log_interval": 10,
             "num_workers": 2,
@@ -95,7 +106,7 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
     with config_path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(config_data, handle, sort_keys=False)
 
-    config = _load_config(config_path)
+    config = load_pretrain_config(config_path)
 
     assert config.max_bases_per_file == 1000
     assert config.samples_per_epoch == 500
@@ -104,11 +115,15 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
     assert config.tokenizer_max_bases == 2048
     assert config.tokenizer_max_sequences == 100
     assert config.tokenizer_window_size == 512
+    assert config.min_epochs == 2
+    assert config.early_stopping_patience == 4
+    assert config.early_stopping_min_delta == 0.05
+    assert config.save_best_only is False
 
 
 def test_sample_tokenizer_corpus_respects_limits() -> None:
     sequences = ["A" * 4000, "C" * 4000, "G" * 4000, "T" * 4000]
-    sampled = _sample_tokenizer_corpus(
+    sampled = sample_tokenizer_corpus(
         sequences=sequences,
         seed=7,
         max_bases=5000,

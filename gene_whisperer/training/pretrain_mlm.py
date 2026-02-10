@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import argparse
-import random
+import math
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
@@ -12,158 +11,41 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-try:
-    import yaml
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit("PyYAML is required (pip install pyyaml).") from exc
-
 from gene_whisperer.datasets.fasta import load_fasta_sequences
 from gene_whisperer.datasets.mlm_dataset import MLMDataset
 from gene_whisperer.models.mlm_model import DNAMLMModel, MLMConfig
 from gene_whisperer.models.transformer import TransformerConfig
 from gene_whisperer.tokenization.bpe import BPETokenizer
+from gene_whisperer.training.pretrain_config import (
+    PretrainConfig,
+    load_pretrain_config,
+    sample_tokenizer_corpus,
+)
 from gene_whisperer.training.train_utils import TrainingConfig, build_optimizer, set_seed
 
 
-@dataclass
-class PretrainConfig:
-    fasta_paths: List[Path]
-    tokenizer_path: Path
-    vocab_size: int
-    max_length: int
-    window_size: int
-    mask_prob: float
-    max_bases_per_file: int | None
-    tokenizer_max_bases: int | None
-    tokenizer_max_sequences: int | None
-    tokenizer_window_size: int
-    batch_size: int
-    epochs: int
-    samples_per_epoch: int
-    log_interval: int
-    num_workers: int
-    lr: float
-    weight_decay: float
-    grad_accum_steps: int
-    embedding_dim: int
-    num_layers: int
-    num_heads: int
-    ff_dim: int
-    dropout: float
-    seed: int
-    output_dir: Path
+def _is_improvement(current_loss: float, best_loss: float, min_delta: float) -> bool:
+    return current_loss < (best_loss - min_delta)
 
 
-def _resolve_path(path_str: str, base_dir: Path) -> Path:
-    path = Path(path_str)
-    if path.is_absolute():
-        return path
-    return (base_dir / path).resolve()
-
-
-def _load_config(path: Path) -> PretrainConfig:
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
-
-    config_dir = path.parent
-    mlm = data["mlm"]
-    model = data["model"]
-    training = data["training"]
-
-    max_bases_per_file = mlm.get("max_bases_per_file")
-    if max_bases_per_file is not None:
-        max_bases_per_file = int(max_bases_per_file)
-    tokenizer_max_bases = mlm.get("tokenizer_max_bases")
-    if tokenizer_max_bases is not None:
-        tokenizer_max_bases = int(tokenizer_max_bases)
-    tokenizer_max_sequences = mlm.get("tokenizer_max_sequences")
-    if tokenizer_max_sequences is not None:
-        tokenizer_max_sequences = int(tokenizer_max_sequences)
-
-    return PretrainConfig(
-        fasta_paths=[_resolve_path(str(p), config_dir) for p in mlm["fasta_paths"]],
-        tokenizer_path=_resolve_path(str(mlm["tokenizer_path"]), config_dir),
-        vocab_size=int(mlm["vocab_size"]),
-        max_length=int(mlm["max_length"]),
-        window_size=int(mlm["window_size"]),
-        mask_prob=float(mlm.get("mask_prob", 0.15)),
-        max_bases_per_file=max_bases_per_file,
-        tokenizer_max_bases=tokenizer_max_bases,
-        tokenizer_max_sequences=tokenizer_max_sequences,
-        tokenizer_window_size=max(64, int(mlm.get("tokenizer_window_size", 2048))),
-        batch_size=int(training["batch_size"]),
-        epochs=int(training["epochs"]),
-        samples_per_epoch=int(training.get("samples_per_epoch", 4096)),
-        log_interval=max(1, int(training.get("log_interval", 50))),
-        num_workers=max(0, int(training.get("num_workers", 0))),
-        lr=float(training["lr"]),
-        weight_decay=float(training["weight_decay"]),
-        grad_accum_steps=int(training.get("grad_accum_steps", 1)),
-        embedding_dim=int(model["embedding_dim"]),
-        num_layers=int(model["num_layers"]),
-        num_heads=int(model["num_heads"]),
-        ff_dim=int(model["ff_dim"]),
-        dropout=float(model.get("dropout", 0.1)),
-        seed=int(training.get("seed", 1337)),
-        output_dir=_resolve_path(str(training["output_dir"]), config_dir),
-    )
-
-
-def _sample_tokenizer_corpus(
-    sequences: List[str],
-    seed: int,
-    max_bases: int | None,
-    max_sequences: int | None,
-    window_size: int,
-) -> List[str]:
-    if max_bases is None and max_sequences is None:
-        return sequences
-
-    if not sequences:
-        return []
-
-    rng = random.Random(seed)
-    indices = list(range(len(sequences)))
-    rng.shuffle(indices)
-
-    sampled: List[str] = []
-    consumed_bases = 0
-    sampled_sequences = 0
-
-    for idx in indices:
-        if max_sequences is not None and sampled_sequences >= max_sequences:
-            break
-        if max_bases is not None and consumed_bases >= max_bases:
-            break
-
-        seq = sequences[idx]
-        if not seq:
-            continue
-
-        span = min(window_size, len(seq))
-        if span <= 0:
-            continue
-        if len(seq) == span:
-            window = seq
-        else:
-            start = rng.randint(0, len(seq) - span)
-            window = seq[start : start + span]
-
-        if max_bases is not None:
-            remaining = max_bases - consumed_bases
-            if remaining <= 0:
-                break
-            if len(window) > remaining:
-                window = window[:remaining]
-
-        if not window:
-            continue
-
-        sampled.append(window)
-        consumed_bases += len(window)
-        sampled_sequences += 1
-
-    return sampled
+def _build_checkpoint(
+    model: DNAMLMModel,
+    config: PretrainConfig,
+    epoch: int,
+    loss: float,
+    global_step: int,
+    best_loss: float,
+    best_epoch: int,
+) -> dict:
+    return {
+        "model_state": model.state_dict(),
+        "epoch": epoch,
+        "loss": loss,
+        "global_step": global_step,
+        "best_loss": best_loss,
+        "best_epoch": best_epoch,
+        "config": config.__dict__,
+    }
 
 
 def _maybe_train_tokenizer(config: PretrainConfig, sequences: List[str]) -> BPETokenizer:
@@ -171,7 +53,7 @@ def _maybe_train_tokenizer(config: PretrainConfig, sequences: List[str]) -> BPET
         print(f"Loading tokenizer: {config.tokenizer_path}", flush=True)
         return BPETokenizer.load(config.tokenizer_path)
 
-    tokenizer_sequences = _sample_tokenizer_corpus(
+    tokenizer_sequences = sample_tokenizer_corpus(
         sequences=sequences,
         seed=config.seed,
         max_bases=config.tokenizer_max_bases,
@@ -223,7 +105,8 @@ def train(config: PretrainConfig) -> None:
 
     total_bases = sum(len(sequence) for sequence in sequences)
     print(
-        f"Loaded {len(sequences)} sequences ({total_bases:,} bases) in {time.time() - load_start:.1f}s",
+        f"Loaded {len(sequences)} sequences ({total_bases:,} bases) "
+        f"in {time.time() - load_start:.1f}s",
         flush=True,
     )
 
@@ -268,16 +151,24 @@ def train(config: PretrainConfig) -> None:
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    best_checkpoint_path = config.output_dir / "mlm_best.pt"
 
     batches_per_epoch = len(loader)
     print(
         "Training setup: "
-        f"epochs={config.epochs} batches_per_epoch={batches_per_epoch} "
-        f"batch_size={config.batch_size} grad_accum={config.grad_accum_steps}",
+        f"max_epochs={config.epochs} batches_per_epoch={batches_per_epoch} "
+        f"batch_size={config.batch_size} grad_accum={config.grad_accum_steps} "
+        f"min_epochs={config.min_epochs} "
+        f"patience={config.early_stopping_patience} "
+        f"min_delta={config.early_stopping_min_delta}",
         flush=True,
     )
 
     global_step = 0
+    best_loss = math.inf
+    best_epoch = 0
+    no_improve_epochs = 0
+
     for epoch in range(1, config.epochs + 1):
         epoch_start = time.time()
         model.train()
@@ -321,16 +212,62 @@ def train(config: PretrainConfig) -> None:
             flush=True,
         )
 
-        checkpoint = {
-            "model_state": model.state_dict(),
-            "epoch": epoch,
-            "loss": avg_loss,
-            "global_step": global_step,
-            "config": config.__dict__,
-        }
-        checkpoint_path = config.output_dir / f"mlm_epoch_{epoch}.pt"
-        torch.save(checkpoint, checkpoint_path)
-        print(f"Saved checkpoint: {checkpoint_path}", flush=True)
+        if _is_improvement(avg_loss, best_loss, config.early_stopping_min_delta):
+            best_loss = avg_loss
+            best_epoch = epoch
+            no_improve_epochs = 0
+            checkpoint = _build_checkpoint(
+                model=model,
+                config=config,
+                epoch=epoch,
+                loss=avg_loss,
+                global_step=global_step,
+                best_loss=best_loss,
+                best_epoch=best_epoch,
+            )
+            torch.save(checkpoint, best_checkpoint_path)
+            print(
+                f"Saved best checkpoint: {best_checkpoint_path} (loss={best_loss:.4f})",
+                flush=True,
+            )
+        else:
+            no_improve_epochs += 1
+            print(
+                f"No improvement for {no_improve_epochs}/{config.early_stopping_patience} "
+                f"epochs (best_loss={best_loss:.4f} at epoch {best_epoch})",
+                flush=True,
+            )
+
+        if not config.save_best_only:
+            checkpoint = _build_checkpoint(
+                model=model,
+                config=config,
+                epoch=epoch,
+                loss=avg_loss,
+                global_step=global_step,
+                best_loss=best_loss,
+                best_epoch=best_epoch,
+            )
+            epoch_checkpoint = config.output_dir / f"mlm_epoch_{epoch}.pt"
+            torch.save(checkpoint, epoch_checkpoint)
+            print(f"Saved epoch checkpoint: {epoch_checkpoint}", flush=True)
+
+        if (
+            epoch >= config.min_epochs
+            and no_improve_epochs >= config.early_stopping_patience
+        ):
+            print(
+                f"Early stopping triggered at epoch {epoch}. "
+                f"Best epoch={best_epoch} best_loss={best_loss:.4f}",
+                flush=True,
+            )
+            break
+
+    print(
+        f"Training complete. Best epoch={best_epoch} best_loss={best_loss:.4f} "
+        f"checkpoint={best_checkpoint_path}",
+        flush=True,
+    )
 
 
 def main() -> None:
@@ -342,7 +279,7 @@ def main() -> None:
         help="Path to pretraining config",
     )
     args = parser.parse_args()
-    config = _load_config(args.config.resolve())
+    config = load_pretrain_config(args.config.resolve())
     train(config)
 
 
