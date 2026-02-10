@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,9 @@ class PretrainConfig:
     window_size: int
     mask_prob: float
     max_bases_per_file: int | None
+    tokenizer_max_bases: int | None
+    tokenizer_max_sequences: int | None
+    tokenizer_window_size: int
     batch_size: int
     epochs: int
     samples_per_epoch: int
@@ -69,6 +73,12 @@ def _load_config(path: Path) -> PretrainConfig:
     max_bases_per_file = mlm.get("max_bases_per_file")
     if max_bases_per_file is not None:
         max_bases_per_file = int(max_bases_per_file)
+    tokenizer_max_bases = mlm.get("tokenizer_max_bases")
+    if tokenizer_max_bases is not None:
+        tokenizer_max_bases = int(tokenizer_max_bases)
+    tokenizer_max_sequences = mlm.get("tokenizer_max_sequences")
+    if tokenizer_max_sequences is not None:
+        tokenizer_max_sequences = int(tokenizer_max_sequences)
 
     return PretrainConfig(
         fasta_paths=[_resolve_path(str(p), config_dir) for p in mlm["fasta_paths"]],
@@ -78,6 +88,9 @@ def _load_config(path: Path) -> PretrainConfig:
         window_size=int(mlm["window_size"]),
         mask_prob=float(mlm.get("mask_prob", 0.15)),
         max_bases_per_file=max_bases_per_file,
+        tokenizer_max_bases=tokenizer_max_bases,
+        tokenizer_max_sequences=tokenizer_max_sequences,
+        tokenizer_window_size=max(64, int(mlm.get("tokenizer_window_size", 2048))),
         batch_size=int(training["batch_size"]),
         epochs=int(training["epochs"]),
         samples_per_epoch=int(training.get("samples_per_epoch", 4096)),
@@ -96,16 +109,91 @@ def _load_config(path: Path) -> PretrainConfig:
     )
 
 
+def _sample_tokenizer_corpus(
+    sequences: List[str],
+    seed: int,
+    max_bases: int | None,
+    max_sequences: int | None,
+    window_size: int,
+) -> List[str]:
+    if max_bases is None and max_sequences is None:
+        return sequences
+
+    if not sequences:
+        return []
+
+    rng = random.Random(seed)
+    indices = list(range(len(sequences)))
+    rng.shuffle(indices)
+
+    sampled: List[str] = []
+    consumed_bases = 0
+    sampled_sequences = 0
+
+    for idx in indices:
+        if max_sequences is not None and sampled_sequences >= max_sequences:
+            break
+        if max_bases is not None and consumed_bases >= max_bases:
+            break
+
+        seq = sequences[idx]
+        if not seq:
+            continue
+
+        span = min(window_size, len(seq))
+        if span <= 0:
+            continue
+        if len(seq) == span:
+            window = seq
+        else:
+            start = rng.randint(0, len(seq) - span)
+            window = seq[start : start + span]
+
+        if max_bases is not None:
+            remaining = max_bases - consumed_bases
+            if remaining <= 0:
+                break
+            if len(window) > remaining:
+                window = window[:remaining]
+
+        if not window:
+            continue
+
+        sampled.append(window)
+        consumed_bases += len(window)
+        sampled_sequences += 1
+
+    return sampled
+
+
 def _maybe_train_tokenizer(config: PretrainConfig, sequences: List[str]) -> BPETokenizer:
     if config.tokenizer_path.exists():
         print(f"Loading tokenizer: {config.tokenizer_path}", flush=True)
         return BPETokenizer.load(config.tokenizer_path)
 
+    tokenizer_sequences = _sample_tokenizer_corpus(
+        sequences=sequences,
+        seed=config.seed,
+        max_bases=config.tokenizer_max_bases,
+        max_sequences=config.tokenizer_max_sequences,
+        window_size=config.tokenizer_window_size,
+    )
+    if not tokenizer_sequences:
+        raise ValueError("Tokenizer corpus sampling produced zero sequences.")
+
+    tokenizer_bases = sum(len(seq) for seq in tokenizer_sequences)
     print(
-        f"Training tokenizer with vocab_size={config.vocab_size} on {len(sequences)} sequences",
+        "Training tokenizer with "
+        f"vocab_size={config.vocab_size} "
+        f"on {len(tokenizer_sequences)} sampled sequences ({tokenizer_bases:,} bases)",
         flush=True,
     )
-    tokenizer = BPETokenizer.train(sequences, vocab_size=config.vocab_size)
+    tokenizer = BPETokenizer.train(
+        tokenizer_sequences,
+        vocab_size=config.vocab_size,
+        verbose=True,
+        log_interval=100,
+    )
     tokenizer.save(config.tokenizer_path)
     print(f"Saved tokenizer: {config.tokenizer_path}", flush=True)
     return tokenizer

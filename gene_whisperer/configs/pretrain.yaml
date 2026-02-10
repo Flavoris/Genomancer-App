@@ -12,6 +12,9 @@ mlm:
   window_size: 234
   mask_prob: 0.15
   max_bases_per_file: null
+  tokenizer_max_bases: 10000000
+  tokenizer_max_sequences: 5000
+  tokenizer_window_size: 2048
 
 model:
   embedding_dim: 256

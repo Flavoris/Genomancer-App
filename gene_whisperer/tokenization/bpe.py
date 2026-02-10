@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
@@ -73,6 +74,8 @@ class BPETokenizer:
         vocab_size: int = 4096,
         min_freq: int = 2,
         reserved_tokens: Sequence[str] = DEFAULT_RESERVED_TOKENS,
+        verbose: bool = False,
+        log_interval: int = 100,
     ) -> "BPETokenizer":
         if vocab_size <= len(reserved_tokens):
             raise ValueError("vocab_size must exceed number of reserved tokens")
@@ -88,6 +91,14 @@ class BPETokenizer:
                 vocab[base] = len(vocab)
 
         merges: List[Tuple[str, str]] = []
+        merge_count = 0
+        start_time = time.time()
+        if verbose:
+            print(
+                f"BPE tokenizer: {len(token_seqs)} sequences, target_vocab={vocab_size}",
+                flush=True,
+            )
+
         while len(vocab) < vocab_size:
             pair_counts = _get_pair_counts(token_seqs)
             if not pair_counts:
@@ -103,6 +114,17 @@ class BPETokenizer:
             token_seqs = [_merge_pair(tokens, best_pair) for tokens in token_seqs]
             vocab[merged_token] = len(vocab)
             merges.append(best_pair)
+            merge_count += 1
+
+            if verbose and (
+                merge_count % max(1, log_interval) == 0 or len(vocab) == vocab_size
+            ):
+                elapsed = time.time() - start_time
+                print(
+                    f"BPE merge {merge_count} vocab={len(vocab)} "
+                    f"best_pair_freq={best_count} elapsed={elapsed:.1f}s",
+                    flush=True,
+                )
 
         return cls(vocab=vocab, merges=merges, reserved_tokens=reserved_tokens)
 

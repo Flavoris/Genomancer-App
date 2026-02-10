@@ -21,6 +21,14 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
 - FASTA loading supports `mlm.max_bases_per_file` for faster smoke runs on very large genomes.
 - Config paths are resolved relative to the YAML file location to avoid Colab cwd issues.
 
+### Tokenizer Reliability Notes (2026-02-10)
+- BPE tokenizer training now logs merge progress to avoid "silent" long-running Colab cells.
+- Tokenizer fitting now supports bounded sampled corpora via:
+  - `mlm.tokenizer_max_bases`
+  - `mlm.tokenizer_max_sequences`
+  - `mlm.tokenizer_window_size`
+- These tokenizer limits improve runtime stability and do not cap MLM pretraining data unless `mlm.max_bases_per_file` is set.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)
