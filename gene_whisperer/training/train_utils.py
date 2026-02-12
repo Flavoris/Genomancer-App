@@ -29,6 +29,30 @@ def _collect_params(module: nn.Module) -> List[nn.Parameter]:
     return [param for param in module.parameters() if param.requires_grad]
 
 
+def _build_weight_decay_groups(model: nn.Module, weight_decay: float) -> List[dict]:
+    decay_params: List[nn.Parameter] = []
+    no_decay_params: List[nn.Parameter] = []
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+
+        is_bias = name.endswith(".bias")
+        is_norm = "norm" in name.lower()
+        is_vector = param.ndim == 1
+        if is_bias or is_norm or is_vector:
+            no_decay_params.append(param)
+        else:
+            decay_params.append(param)
+
+    groups: List[dict] = []
+    if decay_params:
+        groups.append({"params": decay_params, "weight_decay": weight_decay})
+    if no_decay_params:
+        groups.append({"params": no_decay_params, "weight_decay": 0.0})
+    return groups
+
+
 def get_parameter_groups_with_llrd(
     model: nn.Module,
     base_lr: float,
@@ -107,7 +131,8 @@ def build_optimizer(model: nn.Module, config: TrainingConfig) -> torch.optim.Opt
             model, base_lr=config.lr, weight_decay=config.weight_decay, layer_decay=config.layer_decay
         )
         return torch.optim.AdamW(groups)
-    return torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+    param_groups = _build_weight_decay_groups(model, config.weight_decay)
+    return torch.optim.AdamW(param_groups, lr=config.lr)
 
 
 def cycle_batches(loader: Iterable):

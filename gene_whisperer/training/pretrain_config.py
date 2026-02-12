@@ -21,6 +21,7 @@ class PretrainConfig:
     tokenizer_max_bases: int | None
     tokenizer_max_sequences: int | None
     tokenizer_window_size: int
+    sample_by_length: bool
     batch_size: int
     epochs: int
     min_epochs: int
@@ -30,6 +31,10 @@ class PretrainConfig:
     samples_per_epoch: int
     log_interval: int
     num_workers: int
+    warmup_ratio: float
+    min_lr_ratio: float
+    max_grad_norm: float
+    use_amp: bool
     lr: float
     weight_decay: float
     grad_accum_steps: int
@@ -75,6 +80,7 @@ def load_pretrain_config(path: Path) -> PretrainConfig:
         tokenizer_max_bases=_optional_int(mlm.get("tokenizer_max_bases")),
         tokenizer_max_sequences=_optional_int(mlm.get("tokenizer_max_sequences")),
         tokenizer_window_size=max(64, int(mlm.get("tokenizer_window_size", 2048))),
+        sample_by_length=bool(mlm.get("sample_by_length", True)),
         batch_size=int(training["batch_size"]),
         epochs=max(1, int(training["epochs"])),
         min_epochs=max(1, int(training.get("min_epochs", 1))),
@@ -84,6 +90,10 @@ def load_pretrain_config(path: Path) -> PretrainConfig:
         samples_per_epoch=max(1, int(training.get("samples_per_epoch", 4096))),
         log_interval=max(1, int(training.get("log_interval", 50))),
         num_workers=max(0, int(training.get("num_workers", 0))),
+        warmup_ratio=min(max(float(training.get("warmup_ratio", 0.03)), 0.0), 0.5),
+        min_lr_ratio=min(max(float(training.get("min_lr_ratio", 0.05)), 0.0), 1.0),
+        max_grad_norm=max(0.0, float(training.get("max_grad_norm", 1.0))),
+        use_amp=bool(training.get("use_amp", True)),
         lr=float(training["lr"]),
         weight_decay=float(training["weight_decay"]),
         grad_accum_steps=max(1, int(training.get("grad_accum_steps", 1))),

@@ -76,6 +76,8 @@ def test_mlm_forward_shape() -> None:
     attention_mask = torch.ones((2, 16), dtype=torch.long)
     logits = model(input_ids, attention_mask=attention_mask)
     assert logits.shape == (2, 16, 128)
+    assert model.lm_head.weight.data_ptr() == model.encoder.token_embed.weight.data_ptr()
+    assert model.lm_bias.shape == (128,)
 
 
 def test_parameter_budget_mobile_friendly() -> None:

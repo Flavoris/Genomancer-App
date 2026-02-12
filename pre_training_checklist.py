@@ -34,7 +34,7 @@ CHECKS: Sequence[ConfigCheck] = (
     ConfigCheck(
         label="mlm_lr",
         keys=("lr",),
-        expected=0.0005,
+        expected=0.0003,
         operator="==",
         sections=("training",),
     ),
@@ -48,7 +48,7 @@ CHECKS: Sequence[ConfigCheck] = (
     ConfigCheck(
         label="grad_accum_steps",
         keys=("grad_accum_steps",),
-        expected=1,
+        expected=2,
         operator="==",
         sections=("training",),
     ),
@@ -69,14 +69,14 @@ CHECKS: Sequence[ConfigCheck] = (
     ConfigCheck(
         label="embedding_dim",
         keys=("embedding_dim",),
-        expected=256,
+        expected=320,
         operator="==",
         sections=("model",),
     ),
     ConfigCheck(
         label="num_layers",
         keys=("num_layers",),
-        expected=6,
+        expected=8,
         operator="==",
         sections=("model",),
     ),

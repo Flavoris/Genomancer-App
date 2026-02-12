@@ -34,6 +34,17 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
 - Training now uses early stopping on loss with configurable `min_epochs`, `early_stopping_patience`, and `early_stopping_min_delta`.
 - Checkpoint policy defaults to best-only (`save_best_only: true`), writing `mlm_best.pt` instead of saving every epoch checkpoint.
 
+### MLM Convergence Upgrade (2026-02-12)
+- Pretraining now uses warmup + cosine LR decay, gradient clipping, and AMP controls from config.
+- Optimizer now excludes bias/normalization vectors from weight decay (AdamW best practice) to improve convergence.
+- MLM dataset now:
+  - samples genomes proportional to sequence length (`mlm.sample_by_length`)
+  - seeds RNG per worker to avoid duplicated random streams with `num_workers > 0`
+  - guarantees at least one masked token per sample
+  - avoids reserved tokens for 10% random replacement in MLM masking.
+- MLM head upgraded to BERT-style transform (`Linear -> GELU -> LayerNorm -> Dropout -> vocab projection + bias`) with tied token embeddings.
+- Default pretrain config moved to a stronger recipe (larger encoder + longer schedule + lower LR + larger effective batch) to push loss lower before early stopping.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)

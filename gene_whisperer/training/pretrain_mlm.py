@@ -5,7 +5,6 @@ import argparse
 import math
 import time
 from pathlib import Path
-from typing import List
 
 import torch
 from torch import nn
@@ -15,11 +14,19 @@ from gene_whisperer.datasets.fasta import load_fasta_sequences
 from gene_whisperer.datasets.mlm_dataset import MLMDataset
 from gene_whisperer.models.mlm_model import DNAMLMModel, MLMConfig
 from gene_whisperer.models.transformer import TransformerConfig
-from gene_whisperer.tokenization.bpe import BPETokenizer
 from gene_whisperer.training.pretrain_config import (
     PretrainConfig,
     load_pretrain_config,
-    sample_tokenizer_corpus,
+)
+from gene_whisperer.training.pretrain_optim import (
+    build_grad_scaler,
+    build_warmup_cosine_scheduler,
+    is_amp_enabled,
+)
+from gene_whisperer.training.pretrain_runtime import (
+    build_checkpoint,
+    maybe_train_tokenizer,
+    print_device_info,
 )
 from gene_whisperer.training.train_utils import TrainingConfig, build_optimizer, set_seed
 
@@ -28,70 +35,10 @@ def _is_improvement(current_loss: float, best_loss: float, min_delta: float) -> 
     return current_loss < (best_loss - min_delta)
 
 
-def _build_checkpoint(
-    model: DNAMLMModel,
-    config: PretrainConfig,
-    epoch: int,
-    loss: float,
-    global_step: int,
-    best_loss: float,
-    best_epoch: int,
-) -> dict:
-    return {
-        "model_state": model.state_dict(),
-        "epoch": epoch,
-        "loss": loss,
-        "global_step": global_step,
-        "best_loss": best_loss,
-        "best_epoch": best_epoch,
-        "config": config.__dict__,
-    }
-
-
-def _maybe_train_tokenizer(config: PretrainConfig, sequences: List[str]) -> BPETokenizer:
-    if config.tokenizer_path.exists():
-        print(f"Loading tokenizer: {config.tokenizer_path}", flush=True)
-        return BPETokenizer.load(config.tokenizer_path)
-
-    tokenizer_sequences = sample_tokenizer_corpus(
-        sequences=sequences,
-        seed=config.seed,
-        max_bases=config.tokenizer_max_bases,
-        max_sequences=config.tokenizer_max_sequences,
-        window_size=config.tokenizer_window_size,
-    )
-    if not tokenizer_sequences:
-        raise ValueError("Tokenizer corpus sampling produced zero sequences.")
-
-    tokenizer_bases = sum(len(seq) for seq in tokenizer_sequences)
-    print(
-        "Training tokenizer with "
-        f"vocab_size={config.vocab_size} "
-        f"on {len(tokenizer_sequences)} sampled sequences ({tokenizer_bases:,} bases)",
-        flush=True,
-    )
-    tokenizer = BPETokenizer.train(
-        tokenizer_sequences,
-        vocab_size=config.vocab_size,
-        verbose=True,
-        log_interval=100,
-    )
-    tokenizer.save(config.tokenizer_path)
-    print(f"Saved tokenizer: {config.tokenizer_path}", flush=True)
-    return tokenizer
-
-
-def _print_device_info(device: torch.device) -> None:
-    print(f"Using device: {device}", flush=True)
-    if device.type == "cuda":
-        gpu_name = torch.cuda.get_device_name(0)
-        print(f"GPU: {gpu_name}", flush=True)
-
-
 def train(config: PretrainConfig) -> None:
     set_seed(config.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _print_device_info(device)
+    print_device_info(device)
 
     print("Loading genome sequences...", flush=True)
     load_start = time.time()
@@ -110,7 +57,7 @@ def train(config: PretrainConfig) -> None:
         flush=True,
     )
 
-    tokenizer = _maybe_train_tokenizer(config, sequences)
+    tokenizer = maybe_train_tokenizer(config, sequences)
 
     dataset = MLMDataset(
         sequences=sequences,
@@ -120,6 +67,7 @@ def train(config: PretrainConfig) -> None:
         mask_prob=config.mask_prob,
         num_samples=config.samples_per_epoch,
         seed=config.seed,
+        sample_by_length=config.sample_by_length,
     )
 
     pin_memory = device.type == "cuda"
@@ -142,12 +90,24 @@ def train(config: PretrainConfig) -> None:
         dropout=config.dropout,
         pad_token_id=tokenizer.pad_token_id,
     )
-    model = DNAMLMModel(MLMConfig(transformer=transformer_cfg)).to(device)
+    model = DNAMLMModel(
+        MLMConfig(transformer=transformer_cfg, head_dropout=config.dropout)
+    ).to(device)
 
     optimizer = build_optimizer(
         model,
         TrainingConfig(lr=config.lr, weight_decay=config.weight_decay),
     )
+    steps_per_epoch = math.ceil(len(loader) / config.grad_accum_steps)
+    total_steps = max(1, steps_per_epoch * config.epochs)
+    scheduler = build_warmup_cosine_scheduler(
+        optimizer=optimizer,
+        total_steps=total_steps,
+        warmup_ratio=config.warmup_ratio,
+        min_lr_ratio=config.min_lr_ratio,
+    )
+    amp_enabled = is_amp_enabled(config.use_amp, device)
+    scaler = build_grad_scaler(use_amp=config.use_amp, device=device)
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -158,6 +118,8 @@ def train(config: PretrainConfig) -> None:
         "Training setup: "
         f"max_epochs={config.epochs} batches_per_epoch={batches_per_epoch} "
         f"batch_size={config.batch_size} grad_accum={config.grad_accum_steps} "
+        f"lr={config.lr:.2e} warmup_ratio={config.warmup_ratio:.3f} "
+        f"min_lr_ratio={config.min_lr_ratio:.3f} amp={amp_enabled} "
         f"min_epochs={config.min_epochs} "
         f"patience={config.early_stopping_patience} "
         f"min_delta={config.early_stopping_min_delta}",
@@ -180,28 +142,50 @@ def train(config: PretrainConfig) -> None:
             attention_mask = batch["attention_mask"].to(device, non_blocking=pin_memory)
             labels = batch["labels"].to(device, non_blocking=pin_memory)
 
-            logits = model(input_ids, attention_mask)
-            loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
+            with torch.autocast(
+                device_type=device.type,
+                dtype=torch.float16,
+                enabled=amp_enabled,
+            ):
+                logits = model(input_ids, attention_mask)
+                loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
             scaled_loss = loss / config.grad_accum_steps
-            scaled_loss.backward()
+            scaler.scale(scaled_loss).backward()
             total_loss += loss.item()
 
             if batch_idx % config.grad_accum_steps == 0:
-                optimizer.step()
+                if config.max_grad_norm > 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(),
+                        config.max_grad_norm,
+                    )
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad()
+                scheduler.step()
                 global_step += 1
 
             if batch_idx % config.log_interval == 0 or batch_idx == batches_per_epoch:
+                current_lr = optimizer.param_groups[0]["lr"]
                 print(
                     f"Epoch {epoch}/{config.epochs} "
                     f"batch {batch_idx}/{batches_per_epoch} "
-                    f"loss={loss.item():.4f}",
+                    f"loss={loss.item():.4f} lr={current_lr:.2e}",
                     flush=True,
                 )
 
         if batches_per_epoch % config.grad_accum_steps != 0:
-            optimizer.step()
+            if config.max_grad_norm > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    config.max_grad_norm,
+                )
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
+            scheduler.step()
             global_step += 1
 
         avg_loss = total_loss / max(1, batches_per_epoch)
@@ -216,7 +200,7 @@ def train(config: PretrainConfig) -> None:
             best_loss = avg_loss
             best_epoch = epoch
             no_improve_epochs = 0
-            checkpoint = _build_checkpoint(
+            checkpoint = build_checkpoint(
                 model=model,
                 config=config,
                 epoch=epoch,
@@ -239,7 +223,7 @@ def train(config: PretrainConfig) -> None:
             )
 
         if not config.save_best_only:
-            checkpoint = _build_checkpoint(
+            checkpoint = build_checkpoint(
                 model=model,
                 config=config,
                 epoch=epoch,

@@ -58,10 +58,15 @@ def test_load_config_defaults_and_relative_paths(tmp_path: Path) -> None:
     assert config.tokenizer_max_bases is None
     assert config.tokenizer_max_sequences is None
     assert config.tokenizer_window_size == 2048
+    assert config.sample_by_length is True
     assert config.min_epochs == 1
     assert config.early_stopping_patience == 10
     assert config.early_stopping_min_delta == 0.0
     assert config.save_best_only is True
+    assert config.warmup_ratio == 0.03
+    assert config.min_lr_ratio == 0.05
+    assert config.max_grad_norm == 1.0
+    assert config.use_amp is True
 
 
 def test_load_config_with_optional_fields(tmp_path: Path) -> None:
@@ -78,6 +83,7 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
             "tokenizer_max_bases": 2048,
             "tokenizer_max_sequences": 100,
             "tokenizer_window_size": 512,
+            "sample_by_length": False,
         },
         "model": {
             "embedding_dim": 64,
@@ -96,6 +102,10 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
             "samples_per_epoch": 500,
             "log_interval": 10,
             "num_workers": 2,
+            "warmup_ratio": 0.2,
+            "min_lr_ratio": 0.2,
+            "max_grad_norm": 0.5,
+            "use_amp": False,
             "lr": 2e-4,
             "weight_decay": 0.01,
             "grad_accum_steps": 2,
@@ -115,10 +125,15 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
     assert config.tokenizer_max_bases == 2048
     assert config.tokenizer_max_sequences == 100
     assert config.tokenizer_window_size == 512
+    assert config.sample_by_length is False
     assert config.min_epochs == 2
     assert config.early_stopping_patience == 4
     assert config.early_stopping_min_delta == 0.05
     assert config.save_best_only is False
+    assert config.warmup_ratio == 0.2
+    assert config.min_lr_ratio == 0.2
+    assert config.max_grad_norm == 0.5
+    assert config.use_amp is False
 
 
 def test_sample_tokenizer_corpus_respects_limits() -> None:
