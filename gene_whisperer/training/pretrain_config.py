@@ -22,6 +22,8 @@ class PretrainConfig:
     tokenizer_max_sequences: int | None
     tokenizer_window_size: int
     sample_by_length: bool
+    mask_ambiguous_tokens: bool
+    min_masked_tokens: int
     batch_size: int
     epochs: int
     min_epochs: int
@@ -81,6 +83,8 @@ def load_pretrain_config(path: Path) -> PretrainConfig:
         tokenizer_max_sequences=_optional_int(mlm.get("tokenizer_max_sequences")),
         tokenizer_window_size=max(64, int(mlm.get("tokenizer_window_size", 2048))),
         sample_by_length=bool(mlm.get("sample_by_length", True)),
+        mask_ambiguous_tokens=bool(mlm.get("mask_ambiguous_tokens", False)),
+        min_masked_tokens=max(1, int(mlm.get("min_masked_tokens", 1))),
         batch_size=int(training["batch_size"]),
         epochs=max(1, int(training["epochs"])),
         min_epochs=max(1, int(training.get("min_epochs", 1))),

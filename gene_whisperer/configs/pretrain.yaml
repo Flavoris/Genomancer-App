@@ -16,29 +16,31 @@ mlm:
   tokenizer_max_sequences: 5000
   tokenizer_window_size: 2048
   sample_by_length: true
+  mask_ambiguous_tokens: false
+  min_masked_tokens: 2
 
 model:
   embedding_dim: 320
   num_layers: 8
   num_heads: 8
   ff_dim: 1280
-  dropout: 0.08
+  dropout: 0.05
 
 training:
   batch_size: 64
-  epochs: 240
-  min_epochs: 60
-  early_stopping_patience: 30
-  early_stopping_min_delta: 0.0005
+  epochs: 320
+  min_epochs: 80
+  early_stopping_patience: 50
+  early_stopping_min_delta: 0.0002
   save_best_only: true
-  samples_per_epoch: 60000
+  samples_per_epoch: 90000
   log_interval: 20
   num_workers: 2
-  lr: 0.0003
+  lr: 0.0002
   weight_decay: 0.01
-  grad_accum_steps: 2
-  warmup_ratio: 0.06
-  min_lr_ratio: 0.02
+  grad_accum_steps: 3
+  warmup_ratio: 0.08
+  min_lr_ratio: 0.005
   max_grad_norm: 1.0
   use_amp: true
   seed: 1337

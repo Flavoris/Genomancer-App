@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from gene_whisperer.datasets.mlm_dataset import (
     MLMDataset,
+    _build_maskable_token_ids,
     _build_replacement_token_ids,
     _mask_tokens,
 )
@@ -35,7 +36,12 @@ def test_mask_tokens_forces_at_least_one_prediction() -> None:
         tokenizer=tokenizer,
         mask_prob=0.0,
         rng=rng,
-        replacement_token_ids=_build_replacement_token_ids(tokenizer),
+        replacement_token_ids=_build_replacement_token_ids(
+            tokenizer,
+            _build_maskable_token_ids(tokenizer, mask_ambiguous_tokens=True),
+        ),
+        maskable_token_ids=_build_maskable_token_ids(tokenizer, mask_ambiguous_tokens=True),
+        min_masked_tokens=1,
     )
 
     assert any(label != -100 for label in labels)
@@ -45,10 +51,32 @@ def test_mask_tokens_forces_at_least_one_prediction() -> None:
 
 def test_replacement_ids_exclude_reserved_tokens() -> None:
     tokenizer = _build_tokenizer()
-    replacement_ids = _build_replacement_token_ids(tokenizer)
+    maskable_ids = _build_maskable_token_ids(tokenizer, mask_ambiguous_tokens=True)
+    replacement_ids = _build_replacement_token_ids(tokenizer, maskable_ids)
     reserved_ids = {tokenizer.vocab[token] for token in tokenizer.reserved_tokens}
     assert replacement_ids
     assert not any(token_id in reserved_ids for token_id in replacement_ids)
+
+
+def test_maskable_ids_exclude_ambiguous_tokens_when_disabled() -> None:
+    tokenizer = _build_tokenizer()
+    maskable_ids = _build_maskable_token_ids(tokenizer, mask_ambiguous_tokens=False)
+    assert tokenizer.vocab["N"] not in maskable_ids
+
+
+def test_mask_tokens_skips_ambiguous_token_targets() -> None:
+    tokenizer = _build_tokenizer()
+    token_ids, _ = tokenizer.encode("NNNN", add_special_tokens=True, max_length=16, pad_to_max=False)
+    labels = _mask_tokens(
+        token_ids=token_ids,
+        tokenizer=tokenizer,
+        mask_prob=1.0,
+        rng=random.Random(1),
+        replacement_token_ids=[tokenizer.vocab["A"]],
+        maskable_token_ids=_build_maskable_token_ids(tokenizer, mask_ambiguous_tokens=False),
+        min_masked_tokens=1,
+    )
+    assert all(label == -100 for label in labels)
 
 
 def test_length_weighted_sampling_prefers_longer_sequences() -> None:
@@ -70,3 +98,20 @@ def test_length_weighted_sampling_prefers_longer_sequences() -> None:
     long_count = np.sum([len(seq) == len(long) for seq in picks])
 
     assert long_count > (short_count * 10)
+
+
+def test_min_masked_tokens_enforces_multiple_targets() -> None:
+    tokenizer = _build_tokenizer()
+    dataset = MLMDataset(
+        sequences=["ACGT" * 32],
+        tokenizer=tokenizer,
+        window_size=64,
+        max_length=64,
+        mask_prob=0.0,
+        num_samples=1,
+        seed=11,
+        min_masked_tokens=2,
+    )
+    sample = dataset[0]
+    labels = sample["labels"].numpy()
+    assert int(np.sum(labels != -100)) >= 2

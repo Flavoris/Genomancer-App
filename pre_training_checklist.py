@@ -34,7 +34,7 @@ CHECKS: Sequence[ConfigCheck] = (
     ConfigCheck(
         label="mlm_lr",
         keys=("lr",),
-        expected=0.0003,
+        expected=0.0002,
         operator="==",
         sections=("training",),
     ),
@@ -48,7 +48,7 @@ CHECKS: Sequence[ConfigCheck] = (
     ConfigCheck(
         label="grad_accum_steps",
         keys=("grad_accum_steps",),
-        expected=2,
+        expected=3,
         operator="==",
         sections=("training",),
     ),

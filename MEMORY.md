@@ -45,6 +45,18 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
 - MLM head upgraded to BERT-style transform (`Linear -> GELU -> LayerNorm -> Dropout -> vocab projection + bias`) with tied token embeddings.
 - Default pretrain config moved to a stronger recipe (larger encoder + longer schedule + lower LR + larger effective batch) to push loss lower before early stopping.
 
+### MLM Plateau Mitigation (2026-02-13)
+- Added ambiguity-aware masking controls in pretraining config:
+  - `mlm.mask_ambiguous_tokens`
+  - `mlm.min_masked_tokens`
+- MLM dataset now supports excluding tokens containing `N` from mask targets (default off for noisy ambiguous regions) and enforcing a minimum masked-target count per sample.
+- Default pretrain schedule tuned for deeper convergence:
+  - lower LR (`2e-4`)
+  - longer horizon (`epochs: 320`, `min_epochs: 80`, `patience: 50`, `min_delta: 2e-4`)
+  - larger sample budget (`samples_per_epoch: 90000`)
+  - stronger accumulation (`grad_accum_steps: 3`)
+  - reduced dropout (`0.05`) for better fit in MLM stage.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)

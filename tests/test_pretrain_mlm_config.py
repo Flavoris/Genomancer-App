@@ -59,6 +59,8 @@ def test_load_config_defaults_and_relative_paths(tmp_path: Path) -> None:
     assert config.tokenizer_max_sequences is None
     assert config.tokenizer_window_size == 2048
     assert config.sample_by_length is True
+    assert config.mask_ambiguous_tokens is False
+    assert config.min_masked_tokens == 1
     assert config.min_epochs == 1
     assert config.early_stopping_patience == 10
     assert config.early_stopping_min_delta == 0.0
@@ -84,6 +86,8 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
             "tokenizer_max_sequences": 100,
             "tokenizer_window_size": 512,
             "sample_by_length": False,
+            "mask_ambiguous_tokens": True,
+            "min_masked_tokens": 3,
         },
         "model": {
             "embedding_dim": 64,
@@ -126,6 +130,8 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
     assert config.tokenizer_max_sequences == 100
     assert config.tokenizer_window_size == 512
     assert config.sample_by_length is False
+    assert config.mask_ambiguous_tokens is True
+    assert config.min_masked_tokens == 3
     assert config.min_epochs == 2
     assert config.early_stopping_patience == 4
     assert config.early_stopping_min_delta == 0.05

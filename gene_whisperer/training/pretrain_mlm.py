@@ -68,6 +68,8 @@ def train(config: PretrainConfig) -> None:
         num_samples=config.samples_per_epoch,
         seed=config.seed,
         sample_by_length=config.sample_by_length,
+        mask_ambiguous_tokens=config.mask_ambiguous_tokens,
+        min_masked_tokens=config.min_masked_tokens,
     )
 
     pin_memory = device.type == "cuda"
@@ -120,6 +122,8 @@ def train(config: PretrainConfig) -> None:
         f"batch_size={config.batch_size} grad_accum={config.grad_accum_steps} "
         f"lr={config.lr:.2e} warmup_ratio={config.warmup_ratio:.3f} "
         f"min_lr_ratio={config.min_lr_ratio:.3f} amp={amp_enabled} "
+        f"mask_ambiguous={config.mask_ambiguous_tokens} "
+        f"min_masked_tokens={config.min_masked_tokens} "
         f"min_epochs={config.min_epochs} "
         f"patience={config.early_stopping_patience} "
         f"min_delta={config.early_stopping_min_delta}",

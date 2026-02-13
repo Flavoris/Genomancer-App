@@ -1,9 +1,9 @@
 """Dataset for masked language modeling on genome sequences."""
 from __future__ import annotations
 
-from bisect import bisect_right
 import random
-from typing import Dict, List, Sequence
+from bisect import bisect_right
+from typing import Dict, List, Sequence, Set
 
 import numpy as np
 import torch
@@ -26,15 +26,19 @@ def _mask_tokens(
     mask_prob: float,
     rng: random.Random,
     replacement_token_ids: Sequence[int],
+    maskable_token_ids: Set[int],
+    min_masked_tokens: int,
 ) -> List[int]:
     labels = np.full(len(token_ids), -100, dtype=np.int64)
     candidate_indices: List[int] = []
+    masked_count = 0
     for idx, token_id in enumerate(token_ids):
-        if token_id in (tokenizer.pad_token_id, tokenizer.cls_token_id, tokenizer.sep_token_id):
+        if token_id not in maskable_token_ids:
             continue
         candidate_indices.append(idx)
         if rng.random() < mask_prob:
             labels[idx] = token_id
+            masked_count += 1
             roll = rng.random()
             if roll < 0.8:
                 token_ids[idx] = tokenizer.mask_token_id
@@ -43,18 +47,38 @@ def _mask_tokens(
             else:
                 token_ids[idx] = token_id
 
-    if candidate_indices and np.all(labels == -100):
-        forced_idx = rng.choice(candidate_indices)
-        labels[forced_idx] = token_ids[forced_idx]
-        token_ids[forced_idx] = tokenizer.mask_token_id
+    if candidate_indices and masked_count < min_masked_tokens:
+        unmasked_indices = [idx for idx in candidate_indices if labels[idx] == -100]
+        rng.shuffle(unmasked_indices)
+        required = min(min_masked_tokens - masked_count, len(unmasked_indices))
+        for forced_idx in unmasked_indices[:required]:
+            labels[forced_idx] = token_ids[forced_idx]
+            token_ids[forced_idx] = tokenizer.mask_token_id
     return labels.tolist()
 
 
-def _build_replacement_token_ids(tokenizer: BPETokenizer) -> List[int]:
+def _build_maskable_token_ids(
+    tokenizer: BPETokenizer,
+    mask_ambiguous_tokens: bool,
+) -> Set[int]:
+    maskable_ids: Set[int] = set()
+    for token, token_id in tokenizer.vocab.items():
+        if token in tokenizer.reserved_tokens:
+            continue
+        if not mask_ambiguous_tokens and "N" in token:
+            continue
+        maskable_ids.add(token_id)
+    return maskable_ids
+
+
+def _build_replacement_token_ids(
+    tokenizer: BPETokenizer,
+    maskable_token_ids: Set[int],
+) -> List[int]:
     replacement_ids = [
         token_id
         for token, token_id in tokenizer.vocab.items()
-        if token not in tokenizer.reserved_tokens
+        if token_id in maskable_token_ids
     ]
     if replacement_ids:
         return replacement_ids
@@ -74,6 +98,8 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
         num_samples: int | None = None,
         seed: int = 1337,
         sample_by_length: bool = True,
+        mask_ambiguous_tokens: bool = False,
+        min_masked_tokens: int = 1,
     ) -> None:
         cleaned_sequences = [seq for seq in sequences if seq]
         if not cleaned_sequences:
@@ -89,7 +115,15 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
         self.num_samples = num_samples or len(self.sequences)
         self.seed = seed
         self.sample_by_length = sample_by_length
-        self.replacement_token_ids = _build_replacement_token_ids(tokenizer)
+        self.min_masked_tokens = max(1, min_masked_tokens)
+        self.maskable_token_ids = _build_maskable_token_ids(
+            tokenizer=tokenizer,
+            mask_ambiguous_tokens=mask_ambiguous_tokens,
+        )
+        self.replacement_token_ids = _build_replacement_token_ids(
+            tokenizer=tokenizer,
+            maskable_token_ids=self.maskable_token_ids,
+        )
         self._rng: random.Random | None = None
         self._rng_worker_id: int | None = None
 
@@ -124,6 +158,8 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
             mask_prob=self.mask_prob,
             rng=rng,
             replacement_token_ids=self.replacement_token_ids,
+            maskable_token_ids=self.maskable_token_ids,
+            min_masked_tokens=self.min_masked_tokens,
         )
         return {
             "input_ids": torch.tensor(token_ids, dtype=torch.long),
