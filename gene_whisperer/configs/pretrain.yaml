@@ -18,6 +18,8 @@ mlm:
   sample_by_length: true
   mask_ambiguous_tokens: false
   min_masked_tokens: 2
+  min_maskable_tokens: 6
+  resample_attempts: 8
 
 model:
   embedding_dim: 320

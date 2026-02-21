@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from gene_whisperer.datasets.mlm_dataset import (
     MLMDataset,
+    _count_maskable_tokens,
     _build_maskable_token_ids,
     _build_replacement_token_ids,
     _mask_tokens,
@@ -47,6 +48,25 @@ def test_mask_tokens_forces_at_least_one_prediction() -> None:
     assert any(label != -100 for label in labels)
     assert token_ids != original
     assert tokenizer.mask_token_id in token_ids
+
+
+def test_mask_tokens_keeps_at_least_one_context_token() -> None:
+    tokenizer = _build_tokenizer()
+    token_ids, _ = tokenizer.encode("ACGT", add_special_tokens=True, max_length=16, pad_to_max=False)
+    original_token_ids = list(token_ids)
+    maskable_ids = _build_maskable_token_ids(tokenizer, mask_ambiguous_tokens=True)
+    labels = _mask_tokens(
+        token_ids=token_ids,
+        tokenizer=tokenizer,
+        mask_prob=1.0,
+        rng=random.Random(3),
+        replacement_token_ids=_build_replacement_token_ids(tokenizer, maskable_ids),
+        maskable_token_ids=maskable_ids,
+        min_masked_tokens=3,
+    )
+    masked_count = int(np.sum(np.array(labels) != -100))
+    candidate_count = _count_maskable_tokens(original_token_ids, maskable_ids)
+    assert masked_count <= max(1, candidate_count - 1)
 
 
 def test_replacement_ids_exclude_reserved_tokens() -> None:
@@ -111,6 +131,27 @@ def test_min_masked_tokens_enforces_multiple_targets() -> None:
         num_samples=1,
         seed=11,
         min_masked_tokens=2,
+    )
+    sample = dataset[0]
+    labels = sample["labels"].numpy()
+    assert int(np.sum(labels != -100)) >= 2
+
+
+def test_dataset_resamples_when_window_has_too_few_maskable_tokens() -> None:
+    tokenizer = _build_tokenizer()
+    dataset = MLMDataset(
+        sequences=["N" * 512, "ACGT" * 128],
+        tokenizer=tokenizer,
+        window_size=128,
+        max_length=64,
+        mask_prob=0.15,
+        num_samples=1,
+        seed=5,
+        sample_by_length=False,
+        mask_ambiguous_tokens=False,
+        min_masked_tokens=2,
+        min_maskable_tokens=4,
+        resample_attempts=4,
     )
     sample = dataset[0]
     labels = sample["labels"].numpy()

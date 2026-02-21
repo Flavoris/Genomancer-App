@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import random
 from bisect import bisect_right
-from typing import Dict, List, Sequence, Set
+from typing import Dict, List, Sequence, Set, Tuple
 
 import numpy as np
 import torch
@@ -30,30 +30,40 @@ def _mask_tokens(
     min_masked_tokens: int,
 ) -> List[int]:
     labels = np.full(len(token_ids), -100, dtype=np.int64)
-    candidate_indices: List[int] = []
-    masked_count = 0
-    for idx, token_id in enumerate(token_ids):
-        if token_id not in maskable_token_ids:
-            continue
-        candidate_indices.append(idx)
-        if rng.random() < mask_prob:
-            labels[idx] = token_id
-            masked_count += 1
-            roll = rng.random()
-            if roll < 0.8:
-                token_ids[idx] = tokenizer.mask_token_id
-            elif roll < 0.9:
-                token_ids[idx] = rng.choice(replacement_token_ids)
-            else:
-                token_ids[idx] = token_id
+    candidate_indices = [
+        idx
+        for idx, token_id in enumerate(token_ids)
+        if token_id in maskable_token_ids
+    ]
+    if not candidate_indices:
+        return labels.tolist()
 
-    if candidate_indices and masked_count < min_masked_tokens:
-        unmasked_indices = [idx for idx in candidate_indices if labels[idx] == -100]
-        rng.shuffle(unmasked_indices)
-        required = min(min_masked_tokens - masked_count, len(unmasked_indices))
-        for forced_idx in unmasked_indices[:required]:
-            labels[forced_idx] = token_ids[forced_idx]
-            token_ids[forced_idx] = tokenizer.mask_token_id
+    selected_indices = [idx for idx in candidate_indices if rng.random() < mask_prob]
+    if len(candidate_indices) > 1:
+        max_masked_count = len(candidate_indices) - 1
+    else:
+        max_masked_count = 1
+    target_masked_count = max(min_masked_tokens, len(selected_indices))
+    target_masked_count = min(target_masked_count, max_masked_count)
+
+    if len(selected_indices) < target_masked_count:
+        selected_set = set(selected_indices)
+        unselected = [idx for idx in candidate_indices if idx not in selected_set]
+        rng.shuffle(unselected)
+        selected_indices.extend(unselected[: target_masked_count - len(selected_indices)])
+    elif len(selected_indices) > target_masked_count:
+        rng.shuffle(selected_indices)
+        selected_indices = selected_indices[:target_masked_count]
+
+    for idx in selected_indices:
+        labels[idx] = token_ids[idx]
+        roll = rng.random()
+        if roll < 0.8:
+            token_ids[idx] = tokenizer.mask_token_id
+        elif roll < 0.9:
+            token_ids[idx] = rng.choice(replacement_token_ids)
+        else:
+            continue
     return labels.tolist()
 
 
@@ -85,6 +95,10 @@ def _build_replacement_token_ids(
     return [tokenizer.unk_token_id]
 
 
+def _count_maskable_tokens(token_ids: Sequence[int], maskable_token_ids: Set[int]) -> int:
+    return sum(1 for token_id in token_ids if token_id in maskable_token_ids)
+
+
 class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
     """Random window sampling over genome sequences for MLM."""
 
@@ -100,6 +114,8 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
         sample_by_length: bool = True,
         mask_ambiguous_tokens: bool = False,
         min_masked_tokens: int = 1,
+        min_maskable_tokens: int | None = None,
+        resample_attempts: int = 8,
     ) -> None:
         cleaned_sequences = [seq for seq in sequences if seq]
         if not cleaned_sequences:
@@ -116,6 +132,8 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
         self.seed = seed
         self.sample_by_length = sample_by_length
         self.min_masked_tokens = max(1, min_masked_tokens)
+        self.min_maskable_tokens = max(1, min_maskable_tokens or self.min_masked_tokens)
+        self.resample_attempts = max(1, resample_attempts)
         self.maskable_token_ids = _build_maskable_token_ids(
             tokenizer=tokenizer,
             mask_ambiguous_tokens=mask_ambiguous_tokens,
@@ -145,13 +163,39 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
         seq_idx = bisect_right(self.cumulative_lengths, target)
         return self.sequences[min(seq_idx, len(self.sequences) - 1)]
 
+    def _sample_encoded_window(
+        self,
+        idx: int,
+        rng: random.Random,
+    ) -> Tuple[List[int], List[int]]:
+        best_token_ids: List[int] | None = None
+        best_attention_mask: List[int] | None = None
+        best_maskable_count = -1
+
+        for attempt in range(self.resample_attempts):
+            seq = self._sample_sequence(rng=rng, idx=idx + attempt)
+            window = _select_window(seq, self.window_size, rng)
+            token_ids, attention_mask = self.tokenizer.encode(
+                window,
+                add_special_tokens=True,
+                max_length=self.max_length,
+                pad_to_max=True,
+            )
+            maskable_count = _count_maskable_tokens(token_ids, self.maskable_token_ids)
+            if maskable_count >= self.min_maskable_tokens:
+                return token_ids, attention_mask
+            if maskable_count > best_maskable_count:
+                best_maskable_count = maskable_count
+                best_token_ids = token_ids
+                best_attention_mask = attention_mask
+
+        if best_token_ids is None or best_attention_mask is None:
+            raise RuntimeError("Failed to sample MLM window with tokenization output.")
+        return best_token_ids, best_attention_mask
+
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         rng = self._get_rng()
-        seq = self._sample_sequence(rng=rng, idx=idx)
-        window = _select_window(seq, self.window_size, rng)
-        token_ids, attention_mask = self.tokenizer.encode(
-            window, add_special_tokens=True, max_length=self.max_length, pad_to_max=True
-        )
+        token_ids, attention_mask = self._sample_encoded_window(idx=idx, rng=rng)
         labels = _mask_tokens(
             token_ids=token_ids,
             tokenizer=self.tokenizer,

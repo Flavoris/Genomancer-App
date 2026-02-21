@@ -61,6 +61,8 @@ def test_load_config_defaults_and_relative_paths(tmp_path: Path) -> None:
     assert config.sample_by_length is True
     assert config.mask_ambiguous_tokens is False
     assert config.min_masked_tokens == 1
+    assert config.min_maskable_tokens == 1
+    assert config.resample_attempts == 8
     assert config.min_epochs == 1
     assert config.early_stopping_patience == 10
     assert config.early_stopping_min_delta == 0.0
@@ -88,6 +90,8 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
             "sample_by_length": False,
             "mask_ambiguous_tokens": True,
             "min_masked_tokens": 3,
+            "min_maskable_tokens": 5,
+            "resample_attempts": 12,
         },
         "model": {
             "embedding_dim": 64,
@@ -132,6 +136,8 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
     assert config.sample_by_length is False
     assert config.mask_ambiguous_tokens is True
     assert config.min_masked_tokens == 3
+    assert config.min_maskable_tokens == 5
+    assert config.resample_attempts == 12
     assert config.min_epochs == 2
     assert config.early_stopping_patience == 4
     assert config.early_stopping_min_delta == 0.05

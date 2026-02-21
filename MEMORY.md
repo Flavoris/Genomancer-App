@@ -63,6 +63,17 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
 - Not a correctness bug; it indicates nested-tensor optimization is incompatible with pre-norm encoder layers.
 - Kept pre-norm (`norm_first=True`) for stability and explicitly disabled nested tensor in transformer construction to remove noisy warnings.
 
+### MLM Plateau Around Loss ~6 (2026-02-21)
+- Added low-signal window handling in MLM dataset:
+  - `mlm.min_maskable_tokens`
+  - `mlm.resample_attempts`
+- Dataset now resamples windows when too few maskable targets are present (common in ambiguous `N`-heavy regions), reducing wasted updates.
+- Masking logic now prevents masking all targetable tokens in a sample, keeping at least one context token when possible.
+- Pretraining loop now:
+  - skips no-target batches safely
+  - tracks `trained_batches`, `skipped_batches`, and `supervised_tokens` per epoch
+  - raises a clear error if an epoch has zero supervised targets.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)

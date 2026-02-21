@@ -70,6 +70,8 @@ def train(config: PretrainConfig) -> None:
         sample_by_length=config.sample_by_length,
         mask_ambiguous_tokens=config.mask_ambiguous_tokens,
         min_masked_tokens=config.min_masked_tokens,
+        min_maskable_tokens=config.min_maskable_tokens,
+        resample_attempts=config.resample_attempts,
     )
 
     pin_memory = device.type == "cuda"
@@ -124,6 +126,8 @@ def train(config: PretrainConfig) -> None:
         f"min_lr_ratio={config.min_lr_ratio:.3f} amp={amp_enabled} "
         f"mask_ambiguous={config.mask_ambiguous_tokens} "
         f"min_masked_tokens={config.min_masked_tokens} "
+        f"min_maskable_tokens={config.min_maskable_tokens} "
+        f"resample_attempts={config.resample_attempts} "
         f"min_epochs={config.min_epochs} "
         f"patience={config.early_stopping_patience} "
         f"min_delta={config.early_stopping_min_delta}",
@@ -139,12 +143,20 @@ def train(config: PretrainConfig) -> None:
         epoch_start = time.time()
         model.train()
         total_loss = 0.0
+        trained_batches = 0
+        skipped_batches = 0
+        supervised_tokens = 0
+        accum_batches = 0
         optimizer.zero_grad()
 
         for batch_idx, batch in enumerate(loader, start=1):
             input_ids = batch["input_ids"].to(device, non_blocking=pin_memory)
             attention_mask = batch["attention_mask"].to(device, non_blocking=pin_memory)
             labels = batch["labels"].to(device, non_blocking=pin_memory)
+            valid_targets = int((labels != -100).sum().item())
+            if valid_targets == 0:
+                skipped_batches += 1
+                continue
 
             with torch.autocast(
                 device_type=device.type,
@@ -156,8 +168,11 @@ def train(config: PretrainConfig) -> None:
             scaled_loss = loss / config.grad_accum_steps
             scaler.scale(scaled_loss).backward()
             total_loss += loss.item()
+            trained_batches += 1
+            supervised_tokens += valid_targets
+            accum_batches += 1
 
-            if batch_idx % config.grad_accum_steps == 0:
+            if accum_batches >= config.grad_accum_steps:
                 if config.max_grad_norm > 0:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(
@@ -169,17 +184,18 @@ def train(config: PretrainConfig) -> None:
                 optimizer.zero_grad()
                 scheduler.step()
                 global_step += 1
+                accum_batches = 0
 
             if batch_idx % config.log_interval == 0 or batch_idx == batches_per_epoch:
                 current_lr = optimizer.param_groups[0]["lr"]
                 print(
                     f"Epoch {epoch}/{config.epochs} "
                     f"batch {batch_idx}/{batches_per_epoch} "
-                    f"loss={loss.item():.4f} lr={current_lr:.2e}",
+                    f"loss={loss.item():.4f} targets={valid_targets} lr={current_lr:.2e}",
                     flush=True,
                 )
 
-        if batches_per_epoch % config.grad_accum_steps != 0:
+        if accum_batches > 0:
             if config.max_grad_norm > 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
@@ -192,11 +208,18 @@ def train(config: PretrainConfig) -> None:
             scheduler.step()
             global_step += 1
 
-        avg_loss = total_loss / max(1, batches_per_epoch)
+        if trained_batches == 0:
+            raise RuntimeError(
+                "No supervised MLM targets were found in this epoch. "
+                "Lower min_maskable_tokens or enable mask_ambiguous_tokens."
+            )
+        avg_loss = total_loss / trained_batches
         elapsed = time.time() - epoch_start
         print(
             f"Epoch {epoch}/{config.epochs} complete "
-            f"avg_loss={avg_loss:.4f} epoch_time={elapsed:.1f}s global_step={global_step}",
+            f"avg_loss={avg_loss:.4f} epoch_time={elapsed:.1f}s "
+            f"global_step={global_step} trained_batches={trained_batches} "
+            f"skipped_batches={skipped_batches} supervised_tokens={supervised_tokens}",
             flush=True,
         )
 
