@@ -57,6 +57,12 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
   - stronger accumulation (`grad_accum_steps: 3`)
   - reduced dropout (`0.05`) for better fit in MLM stage.
 
+### Transformer Warning Handling (2026-02-21)
+- PyTorch warning observed in Colab:
+  - `enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True`
+- Not a correctness bug; it indicates nested-tensor optimization is incompatible with pre-norm encoder layers.
+- Kept pre-norm (`norm_first=True`) for stability and explicitly disabled nested tensor in transformer construction to remove noisy warnings.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)

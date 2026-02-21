@@ -40,7 +40,10 @@ class TransformerEncoder(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.num_layers)
+        self.encoder = _build_transformer_encoder(
+            encoder_layer=encoder_layer,
+            num_layers=config.num_layers,
+        )
         self.final_norm = nn.LayerNorm(config.embedding_dim)
 
     def forward(
@@ -71,3 +74,20 @@ class TransformerEncoder(nn.Module):
         summed = (hidden * mask).sum(dim=1)
         denom = mask.sum(dim=1).clamp(min=1.0)
         return summed / denom
+
+
+def _build_transformer_encoder(
+    encoder_layer: nn.TransformerEncoderLayer,
+    num_layers: int,
+) -> nn.TransformerEncoder:
+    # We intentionally use pre-norm (`norm_first=True`) for training stability.
+    # Disable nested tensor optimization so PyTorch doesn't emit the warning
+    # that nested tensors are unavailable with pre-norm encoder layers.
+    try:
+        return nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_layers,
+            enable_nested_tensor=False,
+        )
+    except TypeError:
+        return nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
