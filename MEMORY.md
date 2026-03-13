@@ -74,6 +74,18 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
   - tracks `trained_batches`, `skipped_batches`, and `supervised_tokens` per epoch
   - raises a clear error if an epoch has zero supervised targets.
 
+### Tokenizer Reuse + Tail-Control Fix (2026-03-13)
+- Existing tokenizer files were previously reused blindly, which meant new tokenizer settings in Colab had no effect if `bpe_tokenizer.json` already existed on Drive.
+- Tokenizer files now carry metadata and are retrained automatically when config-critical settings do not match:
+  - `mlm.vocab_size`
+  - `mlm.tokenizer_min_freq`
+  - `mlm.tokenizer_max_token_length`
+- Added tokenizer controls to reduce ultra-rare long BPE tokens that can keep MLM loss artificially high:
+  - `mlm.tokenizer_min_freq`
+  - `mlm.tokenizer_max_token_length`
+  - `mlm.tokenizer_retrain_if_mismatch`
+- Default tokenizer sampling budget increased (`tokenizer_max_bases`, `tokenizer_max_sequences`) to build a more stable vocabulary across organisms.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)

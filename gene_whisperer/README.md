@@ -30,6 +30,8 @@ python gene_whisperer/training/finetune_promoter.py --config gene_whisperer/conf
 - `mlm.min_masked_tokens` enforces a minimum number of supervised mask positions per sample.
 - `mlm.min_maskable_tokens` and `mlm.resample_attempts` resample windows to avoid low-signal batches with too few maskable targets.
 - Tokenizer training uses sampled windows (`mlm.tokenizer_max_bases`, `mlm.tokenizer_max_sequences`, `mlm.tokenizer_window_size`) to avoid multi-hour startup on full genomes.
+- Tokenizer quality is controlled with `mlm.tokenizer_min_freq` and `mlm.tokenizer_max_token_length` to avoid a long tail of ultra-rare BPE tokens.
+- Existing tokenizer files are automatically retrained when tokenizer metadata does not match the requested config (`mlm.tokenizer_retrain_if_mismatch`).
 - MLM pretraining uses early stopping (`training.min_epochs`, `training.early_stopping_patience`, `training.early_stopping_min_delta`) and saves `mlm_best.pt` as the best checkpoint.
 - MLM optimization uses warmup+cosine LR (`training.warmup_ratio`, `training.min_lr_ratio`), AMP (`training.use_amp`), and gradient clipping (`training.max_grad_norm`).
 - The tokenizer is saved to `gene_whisperer/artifacts/bpe_tokenizer.json`.

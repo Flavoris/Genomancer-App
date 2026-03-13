@@ -26,3 +26,21 @@ def test_bpe_train_encode_decode_roundtrip(tmp_path: Path) -> None:
     tokenizer.save(save_path)
     loaded = BPETokenizer.load(save_path)
     assert loaded.vocab == tokenizer.vocab
+    assert loaded.metadata == tokenizer.metadata
+
+
+def test_bpe_train_respects_max_token_length() -> None:
+    sequences = ["ACGTACGTACGT"] * 8
+    tokenizer = BPETokenizer.train(
+        sequences,
+        vocab_size=32,
+        min_freq=2,
+        max_token_length=4,
+    )
+
+    merged_tokens = [
+        token
+        for token in tokenizer.vocab
+        if token not in tokenizer.reserved_tokens
+    ]
+    assert max(len(token) for token in merged_tokens) <= 4

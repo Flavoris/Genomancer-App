@@ -58,6 +58,9 @@ def test_load_config_defaults_and_relative_paths(tmp_path: Path) -> None:
     assert config.tokenizer_max_bases is None
     assert config.tokenizer_max_sequences is None
     assert config.tokenizer_window_size == 2048
+    assert config.tokenizer_min_freq == 8
+    assert config.tokenizer_max_token_length == 16
+    assert config.tokenizer_retrain_if_mismatch is True
     assert config.sample_by_length is True
     assert config.mask_ambiguous_tokens is False
     assert config.min_masked_tokens == 1
@@ -87,6 +90,9 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
             "tokenizer_max_bases": 2048,
             "tokenizer_max_sequences": 100,
             "tokenizer_window_size": 512,
+            "tokenizer_min_freq": 12,
+            "tokenizer_max_token_length": 20,
+            "tokenizer_retrain_if_mismatch": False,
             "sample_by_length": False,
             "mask_ambiguous_tokens": True,
             "min_masked_tokens": 3,
@@ -133,6 +139,9 @@ def test_load_config_with_optional_fields(tmp_path: Path) -> None:
     assert config.tokenizer_max_bases == 2048
     assert config.tokenizer_max_sequences == 100
     assert config.tokenizer_window_size == 512
+    assert config.tokenizer_min_freq == 12
+    assert config.tokenizer_max_token_length == 20
+    assert config.tokenizer_retrain_if_mismatch is False
     assert config.sample_by_length is False
     assert config.mask_ambiguous_tokens is True
     assert config.min_masked_tokens == 3

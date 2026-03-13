@@ -21,6 +21,9 @@ class PretrainConfig:
     tokenizer_max_bases: int | None
     tokenizer_max_sequences: int | None
     tokenizer_window_size: int
+    tokenizer_min_freq: int
+    tokenizer_max_token_length: int
+    tokenizer_retrain_if_mismatch: bool
     sample_by_length: bool
     mask_ambiguous_tokens: bool
     min_masked_tokens: int
@@ -84,6 +87,9 @@ def load_pretrain_config(path: Path) -> PretrainConfig:
         tokenizer_max_bases=_optional_int(mlm.get("tokenizer_max_bases")),
         tokenizer_max_sequences=_optional_int(mlm.get("tokenizer_max_sequences")),
         tokenizer_window_size=max(64, int(mlm.get("tokenizer_window_size", 2048))),
+        tokenizer_min_freq=max(2, int(mlm.get("tokenizer_min_freq", 8))),
+        tokenizer_max_token_length=max(2, int(mlm.get("tokenizer_max_token_length", 16))),
+        tokenizer_retrain_if_mismatch=bool(mlm.get("tokenizer_retrain_if_mismatch", True)),
         sample_by_length=bool(mlm.get("sample_by_length", True)),
         mask_ambiguous_tokens=bool(mlm.get("mask_ambiguous_tokens", False)),
         min_masked_tokens=max(1, int(mlm.get("min_masked_tokens", 1))),

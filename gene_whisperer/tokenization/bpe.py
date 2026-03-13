@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 DNA_ALPHABET = set("ACGTN")
 DEFAULT_RESERVED_TOKENS = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
@@ -46,6 +46,29 @@ def _get_pair_counts(seqs: Sequence[List[str]]) -> Dict[Tuple[str, str], int]:
     return counts
 
 
+def _select_best_pair(
+    pair_counts: Dict[Tuple[str, str], int],
+    vocab: Dict[str, int],
+    min_freq: int,
+    max_token_length: int | None,
+) -> Tuple[Tuple[str, str], int] | None:
+    ranked_pairs = sorted(
+        pair_counts.items(),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    for pair, count in ranked_pairs:
+        if count < min_freq:
+            return None
+        merged_token = "".join(pair)
+        if merged_token in vocab:
+            continue
+        if max_token_length is not None and len(merged_token) > max_token_length:
+            continue
+        return pair, count
+    return None
+
+
 class BPETokenizer:
     """Simple BPE tokenizer for DNA sequences."""
 
@@ -54,6 +77,7 @@ class BPETokenizer:
         vocab: Dict[str, int],
         merges: Sequence[Tuple[str, str]],
         reserved_tokens: Sequence[str] = DEFAULT_RESERVED_TOKENS,
+        metadata: Dict[str, Any] | None = None,
     ) -> None:
         self.vocab = dict(vocab)
         self.id_to_token = {idx: tok for tok, idx in self.vocab.items()}
@@ -66,6 +90,7 @@ class BPETokenizer:
         self.sep_token_id = self.vocab[self.reserved_tokens[3]]
         self.mask_token_id = self.vocab[self.reserved_tokens[4]]
         self._cache: Dict[str, List[str]] = {}
+        self.metadata = dict(metadata or {})
 
     @classmethod
     def train(
@@ -73,6 +98,7 @@ class BPETokenizer:
         sequences: Iterable[str],
         vocab_size: int = 4096,
         min_freq: int = 2,
+        max_token_length: int | None = None,
         reserved_tokens: Sequence[str] = DEFAULT_RESERVED_TOKENS,
         verbose: bool = False,
         log_interval: int = 100,
@@ -103,13 +129,17 @@ class BPETokenizer:
             pair_counts = _get_pair_counts(token_seqs)
             if not pair_counts:
                 break
-            best_pair, best_count = max(pair_counts.items(), key=lambda item: item[1])
-            if best_count < min_freq:
+            selected = _select_best_pair(
+                pair_counts=pair_counts,
+                vocab=vocab,
+                min_freq=min_freq,
+                max_token_length=max_token_length,
+            )
+            if selected is None:
                 break
+            best_pair, best_count = selected
 
             merged_token = "".join(best_pair)
-            if merged_token in vocab:
-                break
 
             token_seqs = [_merge_pair(tokens, best_pair) for tokens in token_seqs]
             vocab[merged_token] = len(vocab)
@@ -126,7 +156,17 @@ class BPETokenizer:
                     flush=True,
                 )
 
-        return cls(vocab=vocab, merges=merges, reserved_tokens=reserved_tokens)
+        metadata = {
+            "vocab_size": vocab_size,
+            "min_freq": min_freq,
+            "max_token_length": max_token_length,
+        }
+        return cls(
+            vocab=vocab,
+            merges=merges,
+            reserved_tokens=reserved_tokens,
+            metadata=metadata,
+        )
 
     def _apply_bpe(self, tokens: List[str]) -> List[str]:
         if not tokens:
@@ -202,6 +242,7 @@ class BPETokenizer:
             "vocab": self.vocab,
             "merges": [list(pair) for pair in self.merges],
             "reserved_tokens": self.reserved_tokens,
+            "metadata": self.metadata,
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
@@ -216,4 +257,5 @@ class BPETokenizer:
             vocab={str(k): int(v) for k, v in data["vocab"].items()},
             merges=merges,
             reserved_tokens=data.get("reserved_tokens", DEFAULT_RESERVED_TOKENS),
+            metadata=data.get("metadata"),
         )
