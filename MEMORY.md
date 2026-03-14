@@ -86,6 +86,12 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
   - `mlm.tokenizer_retrain_if_mismatch`
 - Default tokenizer sampling budget increased (`tokenizer_max_bases`, `tokenizer_max_sequences`) to build a more stable vocabulary across organisms.
 
+### Pretraining Window Utilization Fix (2026-03-13)
+- MLM pretraining had been using a short `234 bp` window inherited from promoter-task sequence length, which underused the BPE token budget during whole-genome pretraining.
+- Pretraining config now uses a larger MLM window (`mlm.window_size: 1024`) and a minimum tokenized-length guard (`mlm.min_tokenized_tokens`).
+- MLM dataset now resamples windows if BPE tokenization yields too few non-padding tokens, not just too few maskable targets.
+- Epoch loss reporting now uses token-weighted averaging instead of averaging per-batch means, preventing variable-target batches from skewing the reported loss and early-stopping signal.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)

@@ -28,6 +28,7 @@ class PretrainConfig:
     mask_ambiguous_tokens: bool
     min_masked_tokens: int
     min_maskable_tokens: int
+    min_tokenized_tokens: int
     resample_attempts: int
     batch_size: int
     epochs: int
@@ -94,6 +95,7 @@ def load_pretrain_config(path: Path) -> PretrainConfig:
         mask_ambiguous_tokens=bool(mlm.get("mask_ambiguous_tokens", False)),
         min_masked_tokens=max(1, int(mlm.get("min_masked_tokens", 1))),
         min_maskable_tokens=max(1, int(mlm.get("min_maskable_tokens", mlm.get("min_masked_tokens", 1)))),
+        min_tokenized_tokens=max(1, int(mlm.get("min_tokenized_tokens", mlm.get("min_maskable_tokens", mlm.get("min_masked_tokens", 1))))),
         resample_attempts=max(1, int(mlm.get("resample_attempts", 8))),
         batch_size=int(training["batch_size"]),
         epochs=max(1, int(training["epochs"])),

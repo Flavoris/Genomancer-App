@@ -29,6 +29,8 @@ python gene_whisperer/training/finetune_promoter.py --config gene_whisperer/conf
 - `mlm.mask_ambiguous_tokens` controls whether tokens containing `N` are mask targets (default `false` to reduce ambiguous-noise loss).
 - `mlm.min_masked_tokens` enforces a minimum number of supervised mask positions per sample.
 - `mlm.min_maskable_tokens` and `mlm.resample_attempts` resample windows to avoid low-signal batches with too few maskable targets.
+- `mlm.min_tokenized_tokens` keeps BPE-pretrained windows dense enough to use the MLM token budget instead of training mostly on short tokenized spans.
+- Pretraining `mlm.window_size` should be much larger than promoter sequence length; the MLM stage benefits from longer whole-genome context.
 - Tokenizer training uses sampled windows (`mlm.tokenizer_max_bases`, `mlm.tokenizer_max_sequences`, `mlm.tokenizer_window_size`) to avoid multi-hour startup on full genomes.
 - Tokenizer quality is controlled with `mlm.tokenizer_min_freq` and `mlm.tokenizer_max_token_length` to avoid a long tail of ultra-rare BPE tokens.
 - Existing tokenizer files are automatically retrained when tokenizer metadata does not match the requested config (`mlm.tokenizer_retrain_if_mismatch`).

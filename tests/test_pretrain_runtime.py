@@ -30,6 +30,7 @@ def _build_config(tokenizer_path: Path) -> PretrainConfig:
         mask_ambiguous_tokens=False,
         min_masked_tokens=2,
         min_maskable_tokens=4,
+        min_tokenized_tokens=8,
         resample_attempts=4,
         batch_size=8,
         epochs=2,

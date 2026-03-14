@@ -99,6 +99,10 @@ def _count_maskable_tokens(token_ids: Sequence[int], maskable_token_ids: Set[int
     return sum(1 for token_id in token_ids if token_id in maskable_token_ids)
 
 
+def _count_non_padding_tokens(attention_mask: Sequence[int]) -> int:
+    return sum(int(value) for value in attention_mask)
+
+
 class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
     """Random window sampling over genome sequences for MLM."""
 
@@ -115,6 +119,7 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
         mask_ambiguous_tokens: bool = False,
         min_masked_tokens: int = 1,
         min_maskable_tokens: int | None = None,
+        min_tokenized_tokens: int | None = None,
         resample_attempts: int = 8,
     ) -> None:
         cleaned_sequences = [seq for seq in sequences if seq]
@@ -133,6 +138,7 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
         self.sample_by_length = sample_by_length
         self.min_masked_tokens = max(1, min_masked_tokens)
         self.min_maskable_tokens = max(1, min_maskable_tokens or self.min_masked_tokens)
+        self.min_tokenized_tokens = max(1, min_tokenized_tokens or self.min_maskable_tokens)
         self.resample_attempts = max(1, resample_attempts)
         self.maskable_token_ids = _build_maskable_token_ids(
             tokenizer=tokenizer,
@@ -170,7 +176,7 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
     ) -> Tuple[List[int], List[int]]:
         best_token_ids: List[int] | None = None
         best_attention_mask: List[int] | None = None
-        best_maskable_count = -1
+        best_score = (-1, -1)
 
         for attempt in range(self.resample_attempts):
             seq = self._sample_sequence(rng=rng, idx=idx + attempt)
@@ -182,10 +188,15 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
                 pad_to_max=True,
             )
             maskable_count = _count_maskable_tokens(token_ids, self.maskable_token_ids)
-            if maskable_count >= self.min_maskable_tokens:
+            tokenized_count = _count_non_padding_tokens(attention_mask)
+            if (
+                maskable_count >= self.min_maskable_tokens
+                and tokenized_count >= self.min_tokenized_tokens
+            ):
                 return token_ids, attention_mask
-            if maskable_count > best_maskable_count:
-                best_maskable_count = maskable_count
+            score = (tokenized_count, maskable_count)
+            if score > best_score:
+                best_score = score
                 best_token_ids = token_ids
                 best_attention_mask = attention_mask
 

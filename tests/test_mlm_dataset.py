@@ -26,6 +26,14 @@ def _build_tokenizer() -> BPETokenizer:
     )
 
 
+def _build_near_character_tokenizer() -> BPETokenizer:
+    return BPETokenizer.train(
+        sequences=["ACGTACGT", "TGCATGCA"],
+        vocab_size=8,
+        min_freq=100,
+    )
+
+
 def test_mask_tokens_forces_at_least_one_prediction() -> None:
     tokenizer = _build_tokenizer()
     token_ids, _ = tokenizer.encode("ACGTACGT", add_special_tokens=True, max_length=32, pad_to_max=False)
@@ -156,3 +164,24 @@ def test_dataset_resamples_when_window_has_too_few_maskable_tokens() -> None:
     sample = dataset[0]
     labels = sample["labels"].numpy()
     assert int(np.sum(labels != -100)) >= 2
+
+
+def test_dataset_resamples_when_tokenized_window_is_too_short() -> None:
+    tokenizer = _build_near_character_tokenizer()
+    dataset = MLMDataset(
+        sequences=["A" * 16, "ACGT" * 64],
+        tokenizer=tokenizer,
+        window_size=128,
+        max_length=64,
+        mask_prob=0.15,
+        num_samples=1,
+        seed=9,
+        sample_by_length=False,
+        min_masked_tokens=2,
+        min_maskable_tokens=6,
+        min_tokenized_tokens=32,
+        resample_attempts=4,
+    )
+    sample = dataset[0]
+    attention_mask = sample["attention_mask"].numpy()
+    assert int(np.sum(attention_mask)) >= 32

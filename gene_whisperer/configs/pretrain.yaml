@@ -9,7 +9,7 @@ mlm:
   tokenizer_path: gene_whisperer/artifacts/bpe_tokenizer.json
   vocab_size: 4096
   max_length: 256
-  window_size: 234
+  window_size: 1024
   mask_prob: 0.15
   max_bases_per_file: null
   tokenizer_max_bases: 25000000
@@ -22,6 +22,7 @@ mlm:
   mask_ambiguous_tokens: false
   min_masked_tokens: 2
   min_maskable_tokens: 6
+  min_tokenized_tokens: 96
   resample_attempts: 8
 
 model:

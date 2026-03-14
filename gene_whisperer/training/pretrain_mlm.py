@@ -71,6 +71,7 @@ def train(config: PretrainConfig) -> None:
         mask_ambiguous_tokens=config.mask_ambiguous_tokens,
         min_masked_tokens=config.min_masked_tokens,
         min_maskable_tokens=config.min_maskable_tokens,
+        min_tokenized_tokens=config.min_tokenized_tokens,
         resample_attempts=config.resample_attempts,
     )
 
@@ -127,6 +128,7 @@ def train(config: PretrainConfig) -> None:
         f"mask_ambiguous={config.mask_ambiguous_tokens} "
         f"min_masked_tokens={config.min_masked_tokens} "
         f"min_maskable_tokens={config.min_maskable_tokens} "
+        f"min_tokenized_tokens={config.min_tokenized_tokens} "
         f"resample_attempts={config.resample_attempts} "
         f"min_epochs={config.min_epochs} "
         f"patience={config.early_stopping_patience} "
@@ -167,7 +169,7 @@ def train(config: PretrainConfig) -> None:
                 loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
             scaled_loss = loss / config.grad_accum_steps
             scaler.scale(scaled_loss).backward()
-            total_loss += loss.item()
+            total_loss += loss.item() * valid_targets
             trained_batches += 1
             supervised_tokens += valid_targets
             accum_batches += 1
@@ -211,9 +213,10 @@ def train(config: PretrainConfig) -> None:
         if trained_batches == 0:
             raise RuntimeError(
                 "No supervised MLM targets were found in this epoch. "
-                "Lower min_maskable_tokens or enable mask_ambiguous_tokens."
+                "Lower min_maskable_tokens, lower min_tokenized_tokens, "
+                "or enable mask_ambiguous_tokens."
             )
-        avg_loss = total_loss / trained_batches
+        avg_loss = total_loss / supervised_tokens
         elapsed = time.time() - epoch_start
         print(
             f"Epoch {epoch}/{config.epochs} complete "
