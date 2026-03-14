@@ -173,9 +173,10 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
         self,
         idx: int,
         rng: random.Random,
-    ) -> Tuple[List[int], List[int]]:
+    ) -> Tuple[List[int], List[int], int]:
         best_token_ids: List[int] | None = None
         best_attention_mask: List[int] | None = None
+        best_maskable_count = 0
         best_score = (-1, -1)
 
         for attempt in range(self.resample_attempts):
@@ -193,20 +194,21 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
                 maskable_count >= self.min_maskable_tokens
                 and tokenized_count >= self.min_tokenized_tokens
             ):
-                return token_ids, attention_mask
+                return token_ids, attention_mask, maskable_count
             score = (tokenized_count, maskable_count)
             if score > best_score:
                 best_score = score
                 best_token_ids = token_ids
                 best_attention_mask = attention_mask
+                best_maskable_count = maskable_count
 
         if best_token_ids is None or best_attention_mask is None:
             raise RuntimeError("Failed to sample MLM window with tokenization output.")
-        return best_token_ids, best_attention_mask
+        return best_token_ids, best_attention_mask, best_maskable_count
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         rng = self._get_rng()
-        token_ids, attention_mask = self._sample_encoded_window(idx=idx, rng=rng)
+        token_ids, attention_mask, maskable_count = self._sample_encoded_window(idx=idx, rng=rng)
         labels = _mask_tokens(
             token_ids=token_ids,
             tokenizer=self.tokenizer,
@@ -216,8 +218,13 @@ class MLMDataset(Dataset[Dict[str, torch.Tensor]]):
             maskable_token_ids=self.maskable_token_ids,
             min_masked_tokens=self.min_masked_tokens,
         )
+        tokenized_count = _count_non_padding_tokens(attention_mask)
+        masked_count = sum(int(label != -100) for label in labels)
         return {
             "input_ids": torch.tensor(token_ids, dtype=torch.long),
             "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
             "labels": torch.tensor(labels, dtype=torch.long),
+            "maskable_count": torch.tensor(maskable_count, dtype=torch.long),
+            "tokenized_count": torch.tensor(tokenized_count, dtype=torch.long),
+            "masked_count": torch.tensor(masked_count, dtype=torch.long),
         }

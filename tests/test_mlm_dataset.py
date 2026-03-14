@@ -143,6 +143,9 @@ def test_min_masked_tokens_enforces_multiple_targets() -> None:
     sample = dataset[0]
     labels = sample["labels"].numpy()
     assert int(np.sum(labels != -100)) >= 2
+    assert int(sample["masked_count"].item()) >= 2
+    assert int(sample["maskable_count"].item()) >= 2
+    assert int(sample["tokenized_count"].item()) >= 2
 
 
 def test_dataset_resamples_when_window_has_too_few_maskable_tokens() -> None:

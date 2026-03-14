@@ -10,7 +10,6 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from gene_whisperer.datasets.fasta import load_fasta_sequences
 from gene_whisperer.datasets.mlm_dataset import MLMDataset
 from gene_whisperer.models.mlm_model import DNAMLMModel, MLMConfig
 from gene_whisperer.models.transformer import TransformerConfig
@@ -18,10 +17,20 @@ from gene_whisperer.training.pretrain_config import (
     PretrainConfig,
     load_pretrain_config,
 )
+from gene_whisperer.training.pretrain_metrics import (
+    EpochMetricsWriter,
+    build_epoch_metrics,
+    build_run_manifest,
+)
 from gene_whisperer.training.pretrain_optim import (
     build_grad_scaler,
     build_warmup_cosine_scheduler,
     is_amp_enabled,
+)
+from gene_whisperer.training.pretrain_profiler import (
+    build_preflight_profile,
+    load_sequences_with_sources,
+    write_json_report,
 )
 from gene_whisperer.training.pretrain_runtime import (
     build_checkpoint,
@@ -42,8 +51,8 @@ def train(config: PretrainConfig) -> None:
 
     print("Loading genome sequences...", flush=True)
     load_start = time.time()
-    sequences = load_fasta_sequences(
-        config.fasta_paths,
+    sequences, sequence_sources, source_summary = load_sequences_with_sources(
+        paths=config.fasta_paths,
         max_bases_per_file=config.max_bases_per_file,
         verbose=True,
     )
@@ -57,6 +66,7 @@ def train(config: PretrainConfig) -> None:
         flush=True,
     )
 
+    config.output_dir.mkdir(parents=True, exist_ok=True)
     tokenizer = maybe_train_tokenizer(config, sequences)
 
     dataset = MLMDataset(
@@ -84,6 +94,7 @@ def train(config: PretrainConfig) -> None:
         pin_memory=pin_memory,
         persistent_workers=config.num_workers > 0,
     )
+    batches_per_epoch = len(loader)
 
     transformer_cfg = TransformerConfig(
         vocab_size=len(tokenizer.vocab),
@@ -115,10 +126,30 @@ def train(config: PretrainConfig) -> None:
     scaler = build_grad_scaler(use_amp=config.use_amp, device=device)
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
 
-    config.output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_writer = EpochMetricsWriter(config.output_dir)
+    metrics_writer.write_run_manifest(
+        build_run_manifest(
+            config=config,
+            tokenizer_vocab_size=len(tokenizer.vocab),
+            tokenizer_metadata=tokenizer.metadata,
+            sequence_count=len(sequences),
+            total_bases=total_bases,
+            batches_per_epoch=batches_per_epoch,
+            source_summary=source_summary,
+        )
+    )
+    preflight_report = build_preflight_profile(
+        config=config,
+        sequences=sequences,
+        tokenizer=tokenizer,
+        sequence_sources=sequence_sources,
+        source_summary=source_summary,
+    )
+    preflight_profile_path = config.output_dir / "preflight_profile.json"
+    write_json_report(preflight_profile_path, preflight_report)
+    print(f"Saved preflight profile: {preflight_profile_path}", flush=True)
     best_checkpoint_path = config.output_dir / "mlm_best.pt"
 
-    batches_per_epoch = len(loader)
     print(
         "Training setup: "
         f"max_epochs={config.epochs} batches_per_epoch={batches_per_epoch} "
@@ -132,7 +163,8 @@ def train(config: PretrainConfig) -> None:
         f"resample_attempts={config.resample_attempts} "
         f"min_epochs={config.min_epochs} "
         f"patience={config.early_stopping_patience} "
-        f"min_delta={config.early_stopping_min_delta}",
+        f"min_delta={config.early_stopping_min_delta} "
+        f"metrics={metrics_writer.metrics_jsonl_path.name}",
         flush=True,
     )
 
@@ -149,15 +181,25 @@ def train(config: PretrainConfig) -> None:
         skipped_batches = 0
         supervised_tokens = 0
         accum_batches = 0
+        tokenized_lengths: list[int] = []
+        maskable_counts: list[int] = []
+        masked_counts: list[int] = []
+        batch_times: list[float] = []
+        grad_norms: list[float] = []
         optimizer.zero_grad()
 
         for batch_idx, batch in enumerate(loader, start=1):
+            batch_start = time.perf_counter()
             input_ids = batch["input_ids"].to(device, non_blocking=pin_memory)
             attention_mask = batch["attention_mask"].to(device, non_blocking=pin_memory)
             labels = batch["labels"].to(device, non_blocking=pin_memory)
+            tokenized_lengths.extend(batch["tokenized_count"].tolist())
+            maskable_counts.extend(batch["maskable_count"].tolist())
+            masked_counts.extend(batch["masked_count"].tolist())
             valid_targets = int((labels != -100).sum().item())
             if valid_targets == 0:
                 skipped_batches += 1
+                batch_times.append(time.perf_counter() - batch_start)
                 continue
 
             with torch.autocast(
@@ -175,18 +217,21 @@ def train(config: PretrainConfig) -> None:
             accum_batches += 1
 
             if accum_batches >= config.grad_accum_steps:
+                grad_norm = 0.0
                 if config.max_grad_norm > 0:
                     scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(
+                    grad_norm = float(torch.nn.utils.clip_grad_norm_(
                         model.parameters(),
                         config.max_grad_norm,
-                    )
+                    ))
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
                 scheduler.step()
                 global_step += 1
                 accum_batches = 0
+                if grad_norm > 0:
+                    grad_norms.append(grad_norm)
 
             if batch_idx % config.log_interval == 0 or batch_idx == batches_per_epoch:
                 current_lr = optimizer.param_groups[0]["lr"]
@@ -196,19 +241,23 @@ def train(config: PretrainConfig) -> None:
                     f"loss={loss.item():.4f} targets={valid_targets} lr={current_lr:.2e}",
                     flush=True,
                 )
+            batch_times.append(time.perf_counter() - batch_start)
 
         if accum_batches > 0:
+            grad_norm = 0.0
             if config.max_grad_norm > 0:
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(
+                grad_norm = float(torch.nn.utils.clip_grad_norm_(
                     model.parameters(),
                     config.max_grad_norm,
-                )
+                ))
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
             scheduler.step()
             global_step += 1
+            if grad_norm > 0:
+                grad_norms.append(grad_norm)
 
         if trained_batches == 0:
             raise RuntimeError(
@@ -266,6 +315,26 @@ def train(config: PretrainConfig) -> None:
             torch.save(checkpoint, epoch_checkpoint)
             print(f"Saved epoch checkpoint: {epoch_checkpoint}", flush=True)
 
+        metrics_writer.append_epoch(
+            build_epoch_metrics(
+                epoch=epoch,
+                global_step=global_step,
+                avg_loss=avg_loss,
+                best_loss=best_loss,
+                best_epoch=best_epoch,
+                learning_rate=optimizer.param_groups[0]["lr"],
+                elapsed_seconds=elapsed,
+                trained_batches=trained_batches,
+                skipped_batches=skipped_batches,
+                supervised_tokens=supervised_tokens,
+                tokenized_lengths=tokenized_lengths,
+                maskable_counts=maskable_counts,
+                masked_counts=masked_counts,
+                batch_times=batch_times,
+                grad_norms=grad_norms,
+            )
+        )
+
         if (
             epoch >= config.min_epochs
             and no_improve_epochs >= config.early_stopping_patience
@@ -279,7 +348,7 @@ def train(config: PretrainConfig) -> None:
 
     print(
         f"Training complete. Best epoch={best_epoch} best_loss={best_loss:.4f} "
-        f"checkpoint={best_checkpoint_path}",
+        f"checkpoint={best_checkpoint_path} metrics={metrics_writer.epoch_csv_path}",
         flush=True,
     )
 

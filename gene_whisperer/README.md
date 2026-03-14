@@ -13,6 +13,9 @@ This folder houses the new Gene Whisperer model pipeline:
 # Pretrain MLM
 python gene_whisperer/training/pretrain_mlm.py --config gene_whisperer/configs/pretrain.yaml
 
+# Profile MLM inputs before training
+python -m gene_whisperer.training.profile_mlm_corpus --config gene_whisperer/configs/pretrain.yaml
+
 # Fine-tune stage1 (promoter vs non)
 python gene_whisperer/training/finetune_promoter.py --config gene_whisperer/configs/finetune.yaml --task stage1
 
@@ -37,6 +40,11 @@ python gene_whisperer/training/finetune_promoter.py --config gene_whisperer/conf
 - Existing tokenizer files are automatically retrained when tokenizer metadata does not match the requested config (`mlm.tokenizer_retrain_if_mismatch`).
 - MLM pretraining uses early stopping (`training.min_epochs`, `training.early_stopping_patience`, `training.early_stopping_min_delta`) and saves `mlm_best.pt` as the best checkpoint.
 - MLM optimization uses warmup+cosine LR (`training.warmup_ratio`, `training.min_lr_ratio`), AMP (`training.use_amp`), and gradient clipping (`training.max_grad_norm`).
+- Pretraining now writes first-class diagnostics into `training.output_dir`:
+  - `run_manifest.json`
+  - `preflight_profile.json`
+  - `metrics.jsonl`
+  - `epoch_metrics.csv`
 - The tokenizer is saved to `gene_whisperer/artifacts/bpe_tokenizer.json`.
 - PSTNP matrices are saved to `gene_whisperer/artifacts/finetune/pstnp_stage*.json`.
 - Keep configs small for iPhone deployment; the defaults target a lightweight encoder.

@@ -107,6 +107,23 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
 - Switched transformer/MLM parameter initialization to BERT-style small-std normal initialization (`std=0.02`) with zeroed biases and zeroed padding embedding row.
 - This makes MLM optimization more stable than relying on raw PyTorch defaults.
 
+### Pretraining Diagnostics Upgrade (2026-03-14)
+- MLM pretraining now writes structured run artifacts into `training.output_dir`:
+  - `run_manifest.json`
+  - `preflight_profile.json`
+  - `metrics.jsonl`
+  - `epoch_metrics.csv`
+- Epoch metrics are now first-class artifacts instead of only console logs. They include:
+  - token-weighted loss
+  - skipped-batch rate
+  - supervised-token totals
+  - tokenized-length distribution
+  - maskable-token rate
+  - masked-token rate
+  - batch-time and grad-norm summaries
+- Added a preflight corpus profiler (`python -m gene_whisperer.training.profile_mlm_corpus`) to inspect MLM windows and tokenizer corpus coverage before GPU training.
+- `MLMDataset` now returns per-sample diagnostics (`maskable_count`, `tokenized_count`, `masked_count`) so training and profiling can report signal quality directly instead of inferring it later.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)
