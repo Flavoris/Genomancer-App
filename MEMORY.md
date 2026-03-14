@@ -92,6 +92,21 @@ Genomancer (Gene Whisperer) is a DNA sequence analysis tool that uses transforme
 - MLM dataset now resamples windows if BPE tokenization yields too few non-padding tokens, not just too few maskable targets.
 - Epoch loss reporting now uses token-weighted averaging instead of averaging per-batch means, preventing variable-target batches from skewing the reported loss and early-stopping signal.
 
+### Tokenizer Corpus Sampling Fix (2026-03-14)
+- A real tokenizer bug was keeping MLM quality down: `sample_tokenizer_corpus()` only sampled one window per FASTA record, so large genomes contributed a single slice to BPE training.
+- Tokenizer corpus sampling now draws repeated random windows with replacement, weighted by sequence length, until `mlm.tokenizer_max_bases` / `mlm.tokenizer_max_sequences` budgets are met.
+- Tokenizer metadata now also tracks corpus sampling settings:
+  - `mlm.tokenizer_window_size`
+  - `mlm.tokenizer_max_bases`
+  - `mlm.tokenizer_max_sequences`
+- Existing tokenizer files are now retrained automatically when those corpus settings change, not just when vocab/min_freq/max_token_length change.
+- Default tokenizer corpus budgets were reduced to sane values because the current pure-Python BPE trainer is simple and does not scale to tens of millions of bases.
+
+### Transformer Initialization Upgrade (2026-03-14)
+- Added embedding `LayerNorm` before transformer dropout so token + position embeddings are normalized before entering the encoder stack.
+- Switched transformer/MLM parameter initialization to BERT-style small-std normal initialization (`std=0.02`) with zeroed biases and zeroed padding embedding row.
+- This makes MLM optimization more stable than relying on raw PyTorch defaults.
+
 ### Why 18% MLM Accuracy is Hard to Improve
 1. **DNA is fundamentally harder than text for MLM**
    - Random baseline: 0.02% (1/4091 tokens)

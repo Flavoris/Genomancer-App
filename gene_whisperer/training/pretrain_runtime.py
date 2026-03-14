@@ -13,6 +13,14 @@ from gene_whisperer.training.pretrain_config import (
 )
 
 
+def _optional_int_matches(actual: object, expected: int | None) -> bool:
+    if actual is None or actual == "":
+        return expected is None
+    if expected is None:
+        return False
+    return int(actual) == expected
+
+
 def _tokenizer_matches_config(
     tokenizer: BPETokenizer,
     config: PretrainConfig,
@@ -27,11 +35,21 @@ def _tokenizer_matches_config(
     actual_min_freq = int(metadata.get("min_freq", -1))
     expected_max_token_length = int(config.tokenizer_max_token_length)
     actual_max_token_length = int(metadata.get("max_token_length", -1))
+    expected_corpus_window_size = int(config.tokenizer_window_size)
+    actual_corpus_window_size = int(metadata.get("corpus_window_size", -1))
+    actual_corpus_max_bases = metadata.get("corpus_max_bases")
+    actual_corpus_max_sequences = metadata.get("corpus_max_sequences")
 
     return (
         actual_vocab_size == expected_vocab_size
         and actual_min_freq == expected_min_freq
         and actual_max_token_length == expected_max_token_length
+        and actual_corpus_window_size == expected_corpus_window_size
+        and _optional_int_matches(actual_corpus_max_bases, config.tokenizer_max_bases)
+        and _optional_int_matches(
+            actual_corpus_max_sequences,
+            config.tokenizer_max_sequences,
+        )
     )
 
 
@@ -40,11 +58,17 @@ def _describe_tokenizer(tokenizer: BPETokenizer) -> str:
     vocab_size = metadata.get("vocab_size", len(tokenizer.vocab))
     min_freq = metadata.get("min_freq", "unknown")
     max_token_length = metadata.get("max_token_length", "unknown")
+    corpus_window_size = metadata.get("corpus_window_size", "unknown")
+    corpus_max_bases = metadata.get("corpus_max_bases", "unknown")
+    corpus_max_sequences = metadata.get("corpus_max_sequences", "unknown")
     return (
         f"vocab_size={vocab_size} "
         f"actual_vocab={len(tokenizer.vocab)} "
         f"min_freq={min_freq} "
-        f"max_token_length={max_token_length}"
+        f"max_token_length={max_token_length} "
+        f"corpus_window_size={corpus_window_size} "
+        f"corpus_max_bases={corpus_max_bases} "
+        f"corpus_max_sequences={corpus_max_sequences}"
     )
 
 
@@ -85,7 +109,10 @@ def maybe_train_tokenizer(config: PretrainConfig, sequences: List[str]) -> BPETo
         print(
             "Tokenizer metadata is missing or mismatched; retraining tokenizer "
             f"with vocab_size={config.vocab_size} min_freq={config.tokenizer_min_freq} "
-            f"max_token_length={config.tokenizer_max_token_length}",
+            f"max_token_length={config.tokenizer_max_token_length} "
+            f"corpus_window_size={config.tokenizer_window_size} "
+            f"corpus_max_bases={config.tokenizer_max_bases} "
+            f"corpus_max_sequences={config.tokenizer_max_sequences}",
             flush=True,
         )
 
@@ -115,6 +142,18 @@ def maybe_train_tokenizer(config: PretrainConfig, sequences: List[str]) -> BPETo
         max_token_length=config.tokenizer_max_token_length,
         verbose=True,
         log_interval=100,
+    )
+    tokenizer.metadata.update(
+        {
+            "vocab_size": config.vocab_size,
+            "min_freq": config.tokenizer_min_freq,
+            "max_token_length": config.tokenizer_max_token_length,
+            "corpus_window_size": config.tokenizer_window_size,
+            "corpus_max_bases": config.tokenizer_max_bases,
+            "corpus_max_sequences": config.tokenizer_max_sequences,
+            "sampled_corpus_bases": tokenizer_bases,
+            "sampled_corpus_sequences": len(tokenizer_sequences),
+        }
     )
     tokenizer.save(config.tokenizer_path)
     print(f"Saved tokenizer: {config.tokenizer_path}", flush=True)

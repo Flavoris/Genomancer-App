@@ -31,7 +31,8 @@ python gene_whisperer/training/finetune_promoter.py --config gene_whisperer/conf
 - `mlm.min_maskable_tokens` and `mlm.resample_attempts` resample windows to avoid low-signal batches with too few maskable targets.
 - `mlm.min_tokenized_tokens` keeps BPE-pretrained windows dense enough to use the MLM token budget instead of training mostly on short tokenized spans.
 - Pretraining `mlm.window_size` should be much larger than promoter sequence length; the MLM stage benefits from longer whole-genome context.
-- Tokenizer training uses sampled windows (`mlm.tokenizer_max_bases`, `mlm.tokenizer_max_sequences`, `mlm.tokenizer_window_size`) to avoid multi-hour startup on full genomes.
+- Tokenizer training now samples multiple random windows across long genomes instead of taking only one window per FASTA record, which produces a more representative BPE vocabulary.
+- Keep tokenizer corpus budgets modest (`mlm.tokenizer_max_bases`, `mlm.tokenizer_max_sequences`, `mlm.tokenizer_window_size`) because the current pure-Python BPE trainer is intentionally simple and scales with sampled corpus size.
 - Tokenizer quality is controlled with `mlm.tokenizer_min_freq` and `mlm.tokenizer_max_token_length` to avoid a long tail of ultra-rare BPE tokens.
 - Existing tokenizer files are automatically retrained when tokenizer metadata does not match the requested config (`mlm.tokenizer_retrain_if_mismatch`).
 - MLM pretraining uses early stopping (`training.min_epochs`, `training.early_stopping_patience`, `training.early_stopping_min_delta`) and saves `mlm_best.pt` as the best checkpoint.

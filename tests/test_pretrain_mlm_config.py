@@ -173,3 +173,17 @@ def test_sample_tokenizer_corpus_respects_limits() -> None:
     assert len(sampled) <= 3
     assert sum(len(item) for item in sampled) <= 5000
     assert all(1 <= len(item) <= 2048 for item in sampled)
+
+
+def test_sample_tokenizer_corpus_draws_multiple_windows_from_single_sequence() -> None:
+    sampled = sample_tokenizer_corpus(
+        sequences=["ACGT" * 1000],
+        seed=7,
+        max_bases=2048,
+        max_sequences=4,
+        window_size=512,
+    )
+
+    assert len(sampled) == 4
+    assert sum(len(item) for item in sampled) == 2048
+    assert all(len(item) == 512 for item in sampled)

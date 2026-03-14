@@ -87,6 +87,13 @@ def test_maybe_train_tokenizer_reuses_matching_metadata(tmp_path: Path) -> None:
         min_freq=config.tokenizer_min_freq,
         max_token_length=config.tokenizer_max_token_length,
     )
+    tokenizer.metadata.update(
+        {
+            "corpus_window_size": config.tokenizer_window_size,
+            "corpus_max_bases": config.tokenizer_max_bases,
+            "corpus_max_sequences": config.tokenizer_max_sequences,
+        }
+    )
     tokenizer.save(tokenizer_path)
 
     loaded = maybe_train_tokenizer(
@@ -96,3 +103,29 @@ def test_maybe_train_tokenizer_reuses_matching_metadata(tmp_path: Path) -> None:
 
     assert loaded.metadata == tokenizer.metadata
     assert loaded.vocab == tokenizer.vocab
+
+
+def test_maybe_train_tokenizer_retrains_on_corpus_sampling_mismatch(tmp_path: Path) -> None:
+    tokenizer_path = tmp_path / "tokenizer.json"
+    config = _build_config(tokenizer_path)
+    tokenizer = BPETokenizer.train(
+        ["ACGTACGTACGT"] * 8,
+        vocab_size=config.vocab_size,
+        min_freq=config.tokenizer_min_freq,
+        max_token_length=config.tokenizer_max_token_length,
+    )
+    tokenizer.metadata.update(
+        {
+            "corpus_window_size": config.tokenizer_window_size,
+            "corpus_max_bases": 999,
+            "corpus_max_sequences": config.tokenizer_max_sequences,
+        }
+    )
+    tokenizer.save(tokenizer_path)
+
+    loaded = maybe_train_tokenizer(
+        config=config,
+        sequences=["TTTTCCCCAAAA"] * 8,
+    )
+
+    assert loaded.metadata["corpus_max_bases"] == config.tokenizer_max_bases

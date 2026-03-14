@@ -27,6 +27,8 @@ def test_transformer_encoder_avoids_nested_tensor_norm_first_warning() -> None:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         model = TransformerEncoder(config)
+        assert hasattr(model, "embed_norm")
+        assert torch.count_nonzero(model.token_embed.weight[config.pad_token_id]) == 0
         input_ids = torch.randint(0, 127, (2, 16))
         attention_mask = torch.ones((2, 16), dtype=torch.long)
         _ = model(input_ids, attention_mask=attention_mask)

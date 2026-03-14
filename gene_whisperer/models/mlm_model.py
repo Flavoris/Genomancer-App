@@ -35,8 +35,18 @@ class DNAMLMModel(nn.Module):
             config.transformer.embedding_dim, config.transformer.vocab_size, bias=False
         )
         self.lm_bias = nn.Parameter(torch.zeros(config.transformer.vocab_size))
+        self._reset_parameters()
         if config.tie_weights:
             self.lm_head.weight = self.encoder.token_embed.weight
+        else:
+            nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
+
+    def _reset_parameters(self) -> None:
+        nn.init.normal_(self.mlm_dense.weight, mean=0.0, std=0.02)
+        nn.init.zeros_(self.mlm_dense.bias)
+        nn.init.ones_(self.mlm_norm.weight)
+        nn.init.zeros_(self.mlm_norm.bias)
+        nn.init.zeros_(self.lm_bias)
 
     def forward(
         self,

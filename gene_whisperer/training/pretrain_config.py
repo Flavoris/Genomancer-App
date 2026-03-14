@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
@@ -133,43 +134,46 @@ def sample_tokenizer_corpus(
     if max_bases is None and max_sequences is None:
         return sequences
 
-    if not sequences:
+    cleaned_sequences = [seq for seq in sequences if seq]
+    if not cleaned_sequences:
         return []
 
     rng = random.Random(seed)
-    indices = list(range(len(sequences)))
-    rng.shuffle(indices)
+    cumulative_lengths: List[int] = []
+    total_bases = 0
+    for seq in cleaned_sequences:
+        total_bases += len(seq)
+        cumulative_lengths.append(total_bases)
 
     sampled: List[str] = []
     consumed_bases = 0
     sampled_sequences = 0
 
-    for idx in indices:
+    while True:
         if max_sequences is not None and sampled_sequences >= max_sequences:
             break
         if max_bases is not None and consumed_bases >= max_bases:
             break
 
-        seq = sequences[idx]
-        if not seq:
-            continue
+        seq_target = rng.randrange(total_bases)
+        seq_idx = bisect_right(cumulative_lengths, seq_target)
+        seq = cleaned_sequences[min(seq_idx, len(cleaned_sequences) - 1)]
+
+        remaining_bases = None if max_bases is None else max_bases - consumed_bases
+        if remaining_bases is not None and remaining_bases <= 0:
+            break
 
         span = min(window_size, len(seq))
+        if remaining_bases is not None:
+            span = min(span, remaining_bases)
         if span <= 0:
-            continue
+            break
 
         if len(seq) == span:
             window = seq
         else:
             start = rng.randint(0, len(seq) - span)
             window = seq[start : start + span]
-
-        if max_bases is not None:
-            remaining = max_bases - consumed_bases
-            if remaining <= 0:
-                break
-            if len(window) > remaining:
-                window = window[:remaining]
 
         if not window:
             continue

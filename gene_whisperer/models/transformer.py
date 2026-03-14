@@ -30,6 +30,7 @@ class TransformerEncoder(nn.Module):
             config.vocab_size, config.embedding_dim, padding_idx=config.pad_token_id
         )
         self.pos_embed = nn.Embedding(config.max_seq_len, config.embedding_dim)
+        self.embed_norm = nn.LayerNorm(config.embedding_dim)
         self.embed_dropout = nn.Dropout(config.dropout)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.embedding_dim,
@@ -45,6 +46,7 @@ class TransformerEncoder(nn.Module):
             num_layers=config.num_layers,
         )
         self.final_norm = nn.LayerNorm(config.embedding_dim)
+        self.apply(_init_transformer_weights)
 
     def forward(
         self,
@@ -56,6 +58,7 @@ class TransformerEncoder(nn.Module):
         positions = positions.expand(batch_size, seq_len)
 
         hidden = self.token_embed(input_ids) + self.pos_embed(positions)
+        hidden = self.embed_norm(hidden)
         hidden = self.embed_dropout(hidden)
 
         if attention_mask is None:
@@ -91,3 +94,29 @@ def _build_transformer_encoder(
         )
     except TypeError:
         return nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+
+def _init_transformer_weights(module: nn.Module) -> None:
+    if isinstance(module, nn.Embedding):
+        nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        if module.padding_idx is not None:
+            module.weight.data[module.padding_idx].zero_()
+        return
+
+    if isinstance(module, nn.Linear):
+        nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+        return
+
+    if isinstance(module, nn.LayerNorm):
+        nn.init.ones_(module.weight)
+        nn.init.zeros_(module.bias)
+        return
+
+    if isinstance(module, nn.MultiheadAttention):
+        for name, parameter in module.named_parameters(recurse=False):
+            if "weight" in name:
+                nn.init.normal_(parameter, mean=0.0, std=0.02)
+            elif "bias" in name:
+                nn.init.zeros_(parameter)
